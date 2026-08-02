@@ -161,7 +161,7 @@
             '<div class="gh-wordmark">' +
                 '<p class="gh-title"><span class="gh-part1">Ghe</span><span class="gh-part2">loo</span></p>' +
                 '<p class="gh-sub">LEET.CITY</p>' +
-                '<p class="gh-version">v2.1</p>' +
+                '<p class="gh-version">v2.2.2</p>' +
             '</div>' +
             '<div class="gh-bar-row">' +
                 '<div class="gh-marker" id="gh-own-marker">G</div>' +

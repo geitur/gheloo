@@ -67,14 +67,39 @@
     // Player's box: one tile per color plus a center resting spot, measured the same way.
     const GH_BOX       = { Red: [22, 42], Blue: [23, 41], Green: [24, 42], Yellow: [23, 43] };
     const GH_CENTER    = [23, 42];
+    // Every tile the player can legally stand on while a round is live — walking off all
+    // five of these means the game ended (or was never joined) and kicked you back out.
+    const GH_VALID_POS = new Set([...Object.values(GH_BOX), GH_CENTER].map(([x, y]) => x + ',' + y));
     const GH_FALLBACK_MS = 6000; // spawn-to-line is ~5s; safety net if a signal is ever missed
+    const GH_START_DELAY_MS = 1000; // wait this long before walking to the very first tile of a fresh round
 
-    let _ghEnabled       = false;
+    let _ghEnabled       = false; // master on/off (the Start/Stop button)
+    let _ghInGame        = false; // true from the moment we walk onto the center tile until we leave the box
+    let _ghFirstTile     = false; // true only for the first tile of a fresh round — that one gets the start delay
+    let _ghSelfIdx       = null;  // our own Room.users index, for reading our live x/y
     let _ghLastY         = {}; // id -> last seen y, used to detect a fresh spawn cycle
     let _ghQueue         = []; // [{ id, color }] in spawn order, not yet visited
     let _ghActive        = null; // { id, color } — the tile whose box we're currently standing on
     let _ghFallbackTimer = null;
     let _ghAdvanceTimer  = null; // short hold after y hits the line so the tile's slide animation finishes
+
+    function _ghFindSelf() {
+      if (!window._selfName || !window.Room || !window.Room.users) return;
+      const u = Object.values(window.Room.users).find(u => u.name === window._selfName);
+      if (u) _ghSelfIdx = u.index;
+    }
+
+    function _ghStopSession() {
+      _ghInGame = false;
+      _ghFirstTile = false;
+      _ghLastY = {};
+      _ghQueue = [];
+      _ghActive = null;
+      _ghUpdateQueue();
+      _ghSetLabel(null);
+      if (_ghFallbackTimer) { clearTimeout(_ghFallbackTimer); _ghFallbackTimer = null; }
+      if (_ghAdvanceTimer) { clearTimeout(_ghAdvanceTimer); _ghAdvanceTimer = null; }
+    }
 
     function _ghSetLabel(color) {
       const card = gh.querySelector('#__gh_color_card');
@@ -98,15 +123,17 @@
       });
     }
 
-    function _ghDispatch(entry) {
+    function _ghDispatch(entry, delayMs) {
+      delayMs = delayMs || 0;
       _ghActive = entry;
-      window.Game.walkTo(GH_BOX[entry.color][0], GH_BOX[entry.color][1]);
       _ghSetLabel(entry.color);
       if (_ghFallbackTimer) clearTimeout(_ghFallbackTimer);
       if (_ghAdvanceTimer) { clearTimeout(_ghAdvanceTimer); _ghAdvanceTimer = null; }
+      if (delayMs > 0) setTimeout(function() { window.Game.walkTo(GH_BOX[entry.color][0], GH_BOX[entry.color][1]); }, delayMs);
+      else window.Game.walkTo(GH_BOX[entry.color][0], GH_BOX[entry.color][1]);
       // Safety net: if we never see this tile's y hit the line or an ObjectRemove for it
       // (missed/reordered packet), advance anyway instead of getting stuck on it forever.
-      _ghFallbackTimer = setTimeout(function() { _ghAdvance(entry.id); }, GH_FALLBACK_MS);
+      _ghFallbackTimer = setTimeout(function() { _ghAdvance(entry.id); }, GH_FALLBACK_MS + delayMs);
     }
 
     // Called once the currently-active tile is done (hit the line, got removed, or timed
@@ -136,7 +163,11 @@
       if (known && known.furniName && known.furniName.toLowerCase() !== 'kleurtegel (bronze)') return;
       const entry = { id, color };
       if (_ghActive) { _ghQueue.push(entry); _ghUpdateQueue(); }
-      else _ghDispatch(entry);
+      else {
+        const delay = _ghFirstTile ? GH_START_DELAY_MS : 0;
+        _ghFirstTile = false;
+        _ghDispatch(entry, delay);
+      }
     }
 
     // Ids get reused: the same tile id reappears at y=25 (storage) for its next fall cycle
@@ -146,7 +177,7 @@
     // rest idle at once. A spawn is only real once an untracked id is actually seen moving,
     // at y=26 or 27.
     window.onPacket('SlideObjectBundle', p => {
-      if (!_ghEnabled || !p.parsed) return;
+      if (!_ghEnabled || !_ghInGame || !p.parsed) return;
       p.parsed.items.forEach(({ id, x, y }) => {
         const last = _ghLastY[id];
         _ghLastY[id] = y;
@@ -180,33 +211,47 @@
     });
 
     window.onPacket('ObjectRemove', p => {
-      if (!p.parsed) return;
+      if (!_ghInGame || !p.parsed) return;
       if (_ghActive && _ghActive.id === p.parsed.id) _ghAdvance(p.parsed.id);
     });
 
+    // Self position tracking (same pattern as ui-colorparty.js's _cpFindSelf/_cpSelfIdx).
+    window.onPacket('Objects',    () => { setTimeout(_ghFindSelf, 50); });
+    window.onPacket('Users',      () => { setTimeout(_ghFindSelf, 50); });
+    window.onPacket('UserObject', () => { _ghFindSelf(); });
+
+    // UserUpdate reports where we've actually arrived — not where we asked to walk to
+    // (that's MoveAvatar, which fires the instant the command is sent, well before the
+    // avatar physically gets there). Using arrival for both edges: reaching center while
+    // not already in a round arms tracking; leaving the whole box while in one stops it.
+    window.onPacket('UserUpdate', p => {
+      if (_ghSelfIdx === null || !p.parsed || p.parsed.index !== _ghSelfIdx) return;
+      const key = p.parsed.x + ',' + p.parsed.y;
+      if (!_ghInGame) {
+        if (_ghEnabled && p.parsed.x === GH_CENTER[0] && p.parsed.y === GH_CENTER[1]) {
+          _ghInGame    = true;
+          _ghFirstTile = true;
+        }
+        return;
+      }
+      if (!GH_VALID_POS.has(key)) _ghStopSession(); // walked out of the box — round's over
+    });
+
     window.onPacket('RoomReady', () => {
-      _ghLastY = {};
-      _ghQueue = [];
-      _ghActive = null;
-      _ghUpdateQueue();
-      _ghSetLabel(null);
-      if (_ghFallbackTimer) { clearTimeout(_ghFallbackTimer); _ghFallbackTimer = null; }
+      _ghSelfIdx = null;
+      _ghStopSession();
     });
 
     gh.querySelector('#__gh_startstop').addEventListener('click', function() {
       _ghEnabled = !_ghEnabled;
       this.textContent = _ghEnabled ? 'Stop' : 'Start';
       this.className   = _ghEnabled ? '__gh_btn __gh_btn_danger' : '__gh_btn __gh_btn_success';
-      _ghLastY = {};
-      _ghQueue = [];
-      _ghActive = null;
-      _ghUpdateQueue();
-      if (_ghFallbackTimer) { clearTimeout(_ghFallbackTimer); _ghFallbackTimer = null; }
+      _ghStopSession();
       if (_ghEnabled) {
+        _ghFindSelf();
+        // Walks to center; tracking itself only arms once UserUpdate confirms we've
+        // actually arrived (see above) — not the instant this command is sent.
         window.Game.walkTo(GH_CENTER[0], GH_CENTER[1]);
-        _ghSetLabel(null);
-      } else {
-        _ghSetLabel(null);
       }
     });
   }

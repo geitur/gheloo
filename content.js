@@ -915,22 +915,35 @@
       if (_savedRoomHistoryIcon.on === false) _roomHistoryIconOn = false;
     } catch(_) {}
 
+    function _updateRoomHistoryIconSubtitle(on) {
+      const row = rowEls['roomhistoryicon'];
+      if (row) row.row.querySelector('.ghl-row-subtitle').textContent = on ? 'Turn Room History off' : 'Turn Room History on';
+    }
     function toggleRoomHistoryIcon() {
       _roomHistoryIconOn = !_roomHistoryIconOn;
       window.Gheloo.setActive('roomhistoryicon', _roomHistoryIconOn);
+      _updateRoomHistoryIconSubtitle(_roomHistoryIconOn);
       try { localStorage.setItem(ROOMHISTORYICON_STORAGE_KEY, JSON.stringify({ on: _roomHistoryIconOn })); } catch(_) {}
       if (window.__rh_setIconEnabled) window.__rh_setIconEnabled(_roomHistoryIconOn);
     }
     window.Gheloo.setActive('roomhistoryicon', _roomHistoryIconOn);
+    _updateRoomHistoryIconSubtitle(_roomHistoryIconOn);
 
     // Marktplaats Alerts owns its own on/off state (extensions/marktplaats-alerts.js) —
     // this row just mirrors and drives it, no separate storage key here.
+    function _updateMarktplaatsAlertsSubtitle(on) {
+      const row = rowEls['marktplaatsalertstoggle'];
+      if (row) row.row.querySelector('.ghl-row-subtitle').textContent = on ? 'Turn Marktplaats alerts off' : 'Turn Marktplaats alerts on';
+    }
     function toggleMarktplaatsAlerts() {
       const next = !(window.__mpa_isEnabled && window.__mpa_isEnabled());
       if (window.__mpa_setEnabled) window.__mpa_setEnabled(next);
       window.Gheloo.setActive('marktplaatsalertstoggle', next);
+      _updateMarktplaatsAlertsSubtitle(next);
     }
-    window.Gheloo.setActive('marktplaatsalertstoggle', !!(window.__mpa_isEnabled && window.__mpa_isEnabled()));
+    const _mpaInitialOn = !!(window.__mpa_isEnabled && window.__mpa_isEnabled());
+    window.Gheloo.setActive('marktplaatsalertstoggle', _mpaInitialOn);
+    _updateMarktplaatsAlertsSubtitle(_mpaInitialOn);
 
     function toggleStealCommand() {
       _stealOn = !_stealOn;

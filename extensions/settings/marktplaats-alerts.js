@@ -181,8 +181,21 @@
     _lastIds = curIds;
   });
 
+  // Pause polling while the player has the native Marktplaats shop screen open
+  // ("Mijn advertenties" or "Aanbod") — no point spamming requests for a screen
+  // that's already fetching/showing this data itself.
+  function _isMarktplaatsShopOpen() {
+    const titles = document.querySelectorAll('p.ctlg-title');
+    for (const el of titles) {
+      const t = (el.textContent || '').trim();
+      if (t === 'Mijn advertenties' || t === 'Aanbod') return true;
+    }
+    return false;
+  }
+
   function _poll() {
     if (!_on) return;
+    if (_isMarktplaatsShopOpen()) { if (_statusEl) _statusEl.textContent = 'Gepauzeerd (Marktplaats open)'; return; }
     const id = _outId('GetMarketplaceOffers');
     if (id === null) { if (_statusEl) _statusEl.textContent = 'GetMarketplaceOffers niet gevonden'; return; }
     window.sendPacket('OUT', id, '{i:-1}{i:-1}{i:0}{u:7}');
