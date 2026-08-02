@@ -1,7 +1,4 @@
 chrome.runtime.onMessage.addListener(function(msg) {
-  if (msg && msg.type === 'open_users') {
-    chrome.tabs.create({ url: chrome.runtime.getURL('users.html') });
-  }
   if (msg && msg.type === 'apply_figure_to_tab') {
     chrome.tabs.sendMessage(msg.tabId, { type: 'apply_figure', figure: msg.figure, gender: msg.gender });
   }
@@ -44,7 +41,7 @@ async function checkForUpdate() {
 
 chrome.action.onClicked.addListener(function() {
   chrome.storage.local.get('updateAvailable', function(r) {
-    chrome.tabs.create({ url: r.updateAvailable ? RELEASES_URL : chrome.runtime.getURL('users.html') });
+    if (r.updateAvailable) chrome.tabs.create({ url: RELEASES_URL });
   });
 });
 
