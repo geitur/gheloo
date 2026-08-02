@@ -1,0 +1,527 @@
+(function() {
+  let TAB_ID;
+  try {
+    if (!window.top.__nitro_tab_id) window.top.__nitro_tab_id = Math.random().toString(36).slice(2, 8);
+    TAB_ID = window.top.__nitro_tab_id;
+  } catch(e) { TAB_ID = Math.random().toString(36).slice(2, 8); }
+
+  const BC = new BroadcastChannel('nitro_tabs');
+  const _mbPeers = {};
+
+  BC.addEventListener('message', ev => {
+    const msg = ev.data;
+    if (!msg) return;
+    if (msg.type === 'hello' && msg.tabId !== TAB_ID) {
+      const _prev = _mbPeers[msg.tabId];
+      _mbPeers[msg.tabId] = { user: msg.user || (_prev && _prev.user) || '', page: msg.page || (_prev && _prev.page) || '', lastSeen: Date.now() };
+      _onPeersChanged();
+    } else if (msg.type === 'bye') {
+      delete _mbPeers[msg.tabId];
+      _onPeersChanged();
+    } else if (msg.type === 'mb_send_at' && msg.targetId === TAB_ID) {
+      if (!window._ws && !window._worker) return;
+      setTimeout(() => _executePkt(msg.str), Math.max(0, msg.at - Date.now()));
+    } else if (msg.type === 'mb_buyer_list_cancel' && msg.targetId === TAB_ID) {
+      _buyerListCancel();
+    }
+  });
+
+  function _getPktId(dir, name) {
+    if (!window.PKT || !window.PKT[dir]) return null;
+    for (const [id, n] of Object.entries(window.PKT[dir])) {
+      if (window.shortName(n, dir) === name) return parseInt(id);
+    }
+    return null;
+  }
+
+  function _executePkt(str) {
+    const m = (str || '').match(/^\{(out|in):([^}]+)\}([\s\S]*)/i);
+    if (!m) return;
+    const dir = m[1].toUpperCase(), name = m[2].trim(), payload = m[3].trim();
+    const id = _getPktId(dir, name);
+    if (id !== null) window.sendPacket(dir, id, payload);
+  }
+
+  function _buyerListCancel() {
+    const makeId   = _getPktId('OUT', 'MakeOffer');
+    const getOwnId = _getPktId('OUT', 'GetMarketplaceOwnOffers');
+    if (!makeId || !getOwnId) return;
+
+    function _doList() {
+      const inv = window.Inventory && window.Inventory.items;
+      if (!inv) return;
+      const items = Object.values(inv).filter(item => {
+        const name = item.furniName || '';
+        const cls  = item.classname || '';
+        return name.indexOf('(Rare)') !== -1 || name.indexOf('(SS)') !== -1 || name.indexOf('(LTD)') !== -1 || /^pokeweebzd/i.test(cls);
+      });
+      if (!items.length) return;
+      const rndPrice = Math.floor(Math.random() * 9001) + 1000;
+      // Snapshot existing offers first so we cancel only the newly listed one
+      window._buyerPendingMakeId   = makeId;
+      window._buyerPendingGetOwnId = getOwnId;
+      window._buyerPendingItemId   = items[0].id;
+      window._buyerPendingPrice    = rndPrice;
+      window._buyerSnapshotPhase   = true;
+      window.sendPacket('OUT', getOwnId, '');
+    }
+
+    if (window.Inventory && window.Inventory.loaded) {
+      _doList();
+    } else {
+      const reqId = _getPktId('OUT', 'RequestFurniInventory');
+      if (reqId) window.sendPacket('OUT', reqId, '');
+      let _t = setInterval(() => {
+        if (window.Inventory && window.Inventory.loaded) { clearInterval(_t); _doList(); }
+      }, 200);
+      setTimeout(() => clearInterval(_t), 5000);
+    }
+  }
+
+  let _onPeersChanged = () => {};
+
+  function buildMarktplaatsPanel() {
+    const style = document.createElement('style');
+    style.textContent = [
+      '#__mb{position:fixed;top:16px;right:16px;width:340px;z-index:1000;user-select:none;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:12px}',
+      '#__mb *{box-sizing:border-box}',
+      '.__mb_card_wrap{display:flex;flex-direction:column;background:#12131A;border-radius:14px;box-shadow:0 12px 34px rgba(0,0,0,.55);overflow:hidden;color:#eceefb}',
+      '.__mb_hdr{display:flex;align-items:center;gap:8px;padding:12px 14px;background:#0A0B10;cursor:move}',
+      '.__mb_eyebrow{font:700 9px/1 monospace;letter-spacing:1.5px;color:#6C7CFF;text-transform:uppercase}',
+      '.__mb_title{font:600 13px system-ui;color:#eceefb;flex:1}',
+      '.__mb_close{cursor:pointer;color:#5c5e6b;font-size:16px;line-height:1;padding:2px 6px}',
+      '.__mb_close:hover{color:#eceefb}',
+      '#__mb_body{max-height:min(560px,calc(100vh - 90px));overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}',
+      '#__mb_status{font-size:10px;color:#82849a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}',
+      '.__mb_row{display:flex;align-items:center;gap:6px;flex-shrink:0}',
+      '.__mb_lbl{color:#82849a;font-size:11px;flex-shrink:0}',
+      '.__mb_sep{border-top:1px solid #23252f;flex-shrink:0}',
+      '#__mb_dd_wrap{position:relative;min-width:0;flex:1}',
+      '#__mb_dd_sel{display:flex;align-items:center;padding:6px 10px;border:1px solid #23252f;border-radius:6px;background:#0A0B10;cursor:pointer;font-size:11px;font-family:monospace;color:#eceefb;user-select:none;box-sizing:border-box}',
+      '#__mb_dd_sel:hover{background:rgba(255,255,255,0.04)}',
+      '#__mb_dd_list{position:absolute;top:calc(100% + 2px);left:0;right:0;background:#12131A;border:1px solid #23252f;border-radius:6px;max-height:160px;overflow-y:auto;z-index:99;display:none;box-shadow:0 8px 20px rgba(0,0,0,0.5)}',
+      '#__mb_dd_list.open{display:block}',
+      '.__mb_dd_item{padding:6px 10px;font-size:11px;font-family:monospace;color:#eceefb;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.__mb_dd_item:hover{background:rgba(255,255,255,0.06)}',
+      '.__mb_dd_item.active{background:rgba(108,124,255,0.16);color:#A6B0FF;font-weight:700}',
+      '#__mb_acct_sel{width:100%;font-size:11px;font-family:monospace;padding:5px 7px;border:1px solid #23252f;border-radius:6px;background:#0A0B10;color:#eceefb;outline:none;box-sizing:border-box}',
+      '#__mb_acct_sel:focus{border-color:#6C7CFF}',
+      '#__mb_acct_sel option{background:#0A0B10;color:#eceefb}',
+      '.__mb_input{font-size:11px;padding:5px 7px;border:1px solid #23252f;border-radius:6px;background:#0A0B10;color:#eceefb;outline:none;box-sizing:border-box}',
+      '.__mb_input:focus{border-color:#6C7CFF}',
+      '.__mb_btn{font-size:11px;font-weight:600;padding:7px 10px;border-radius:8px;border:none;cursor:pointer;color:#eceefb;background:#23252f}',
+      '.__mb_btn:hover{filter:brightness(1.15)}',
+      '.__mb_btn.primary{background:#A6B0FF;color:#0A0B10}',
+      '.__mb_btn:disabled{opacity:0.45;cursor:not-allowed;filter:none}',
+      '#__mb_log{flex:1;min-height:80px;overflow-y:auto;border:1px solid #23252f;border-radius:6px;background:#0A0B10;padding:5px 7px;font-size:10px;font-family:monospace;color:#c7c9db}',
+      '.__mb_log_row{padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.05);display:flex;gap:6px}',
+      '.__mb_log_row:last-child{border-bottom:none}',
+      '.__mb_log_ts{color:#5c5e6b;flex-shrink:0}',
+    ].join('');
+    document.head.appendChild(style);
+
+    const mb = document.createElement('div');
+    mb.id = '__mb';
+    mb.innerHTML =
+      '<div class="__mb_card_wrap">' +
+        '<div class="__mb_hdr" id="__mb_hdr">' +
+          '<span class="__mb_eyebrow">Gheloo</span>' +
+          '<span class="__mb_title">Marktplaats</span>' +
+          '<span class="__mb_close" id="__mb_close">&times;</span>' +
+        '</div>' +
+        '<div id="__mb_body">' +
+
+          '<span id="__mb_status">Klik Laden om inventory op te halen</span>' +
+
+          '<div class="__mb_row">' +
+            '<div id="__mb_dd_wrap">' +
+              '<div id="__mb_dd_sel"><span id="__mb_dd_label" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">— Nog niet geladen —</span><span style="font-size:8px;color:#5c5e6b;margin-left:6px;flex-shrink:0">▼</span></div>' +
+              '<div id="__mb_dd_list"></div>' +
+            '</div>' +
+            '<button id="__mb_load" class="__mb_btn" style="flex-shrink:0">Laden</button>' +
+          '</div>' +
+
+          '<div class="__mb_sep"></div>' +
+
+          '<div class="__mb_row">' +
+            '<span class="__mb_lbl">Koper:</span>' +
+            '<div id="__mb_acct_wrap" style="flex:1;min-width:0"></div>' +
+            '<span class="__mb_lbl">Prijs:</span>' +
+            '<input id="__mb_price" type="number" min="1" class="__mb_input" value="1" style="width:64px;flex-shrink:0">' +
+          '</div>' +
+
+          '<div class="__mb_row">' +
+            '<span class="__mb_lbl">Herplaats prijs:</span>' +
+            '<input id="__mb_relist_price" type="number" min="1" class="__mb_input" value="1" style="width:80px;flex-shrink:0">' +
+          '</div>' +
+
+          '<div id="__mb_log"></div>' +
+
+          '<button id="__mb_execute" class="__mb_btn primary" style="width:100%" disabled>&#9654; Execute</button>' +
+
+        '</div>' +
+      '</div>';
+    document.body.appendChild(mb);
+    mb.style.display = 'none';
+
+    window.__ghk_makeDraggable(mb, mb.querySelector('#__mb_hdr'), '__ghk_mb_pos', e => e.target.id === '__mb_close');
+    mb.querySelector('#__mb_close').addEventListener('click', ()=>{ mb.style.display='none'; });
+
+    const statusEl   = mb.querySelector('#__mb_status');
+    const loadBtn    = mb.querySelector('#__mb_load');
+    const ddSel      = mb.querySelector('#__mb_dd_sel');
+    const ddLabel    = mb.querySelector('#__mb_dd_label');
+    const ddList     = mb.querySelector('#__mb_dd_list');
+    const priceEl       = mb.querySelector('#__mb_price');
+    const relistPriceEl = mb.querySelector('#__mb_relist_price');
+    const acctWrap      = mb.querySelector('#__mb_acct_wrap');
+    const executeBtn = mb.querySelector('#__mb_execute');
+    const logEl      = mb.querySelector('#__mb_log');
+
+    function _ts() {
+      const d = new Date();
+      return d.toTimeString().slice(0,8);
+    }
+    function _addLog(msg) {
+      const row = document.createElement('div');
+      row.className = '__mb_log_row';
+      row.innerHTML = '<span class="__mb_log_ts">' + _ts() + '</span><span>' + msg + '</span>';
+      logEl.appendChild(row);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    let _items = [];
+    let _selectedItem = null;
+    let _executing = false;
+    let _snapshotPhase = false;
+    let _execCtx = {};
+    let _open = false;
+
+    // Item dropdown
+    function _closeDD() { _open=false; ddList.classList.remove('open'); }
+    function _openDD()  { _open=true;  ddList.classList.add('open'); }
+    ddSel.addEventListener('click', e => { e.stopPropagation(); if (!_items.length) return; _open ? _closeDD() : _openDD(); });
+    document.addEventListener('click', ()=>_closeDD());
+    ddList.addEventListener('click', e=>e.stopPropagation());
+
+    function _select(idx) {
+      _selectedItem = _items[idx];
+      ddLabel.textContent = _selectedItem.furniName || _selectedItem.classname || ('id #' + _selectedItem.id);
+      ddList.querySelectorAll('.__mb_dd_item').forEach((el,i)=>el.classList.toggle('active', i===idx));
+      _closeDD();
+      _updateExecuteBtn();
+    }
+
+    // Account selector
+    function _isClientPeer(peer) {
+      const p = peer.page || '';
+      return p.startsWith('/hotel');
+    }
+
+    function _getSelectedPeerId() {
+      const sel = acctWrap.querySelector('#__mb_acct_sel');
+      if (sel) return sel.value || null;
+      const ids = Object.keys(_mbPeers).filter(id => _mbPeers[id].user && _isClientPeer(_mbPeers[id]));
+      return ids.length === 1 ? ids[0] : null;
+    }
+
+    _onPeersChanged = function() {
+      const ids = Object.keys(_mbPeers).filter(id => _mbPeers[id].user && _isClientPeer(_mbPeers[id]));
+      const prevSel = _getSelectedPeerId();
+      acctWrap.innerHTML = '';
+
+      if (ids.length) {
+        const sel = document.createElement('select');
+        sel.id = '__mb_acct_sel';
+        ids.forEach(id => {
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = _mbPeers[id].user;
+          sel.appendChild(opt);
+        });
+        if (prevSel && ids.includes(prevSel)) sel.value = prevSel;
+        sel.addEventListener('change', _updateExecuteBtn);
+        acctWrap.appendChild(sel);
+      }
+      _updateExecuteBtn();
+    };
+
+    function _updateExecuteBtn() {
+      const hasPeer = Object.keys(_mbPeers).filter(id => _mbPeers[id].user && _isClientPeer(_mbPeers[id])).length >= 1;
+      const hasItem = !!_selectedItem;
+      executeBtn.disabled = !hasPeer || !hasItem || _executing || _snapshotPhase;
+    }
+
+    // Inventory
+    function _isWanted(item) {
+      const name = item.furniName || '';
+      const cls  = item.classname || '';
+      return name.indexOf('(Rare)') !== -1 || name.indexOf('(SS)') !== -1 || name.indexOf('(LTD)') !== -1 || /^pokeweebzd/i.test(cls);
+    }
+
+    function _populateDD() {
+      const all = Object.values(window.Inventory.items || {});
+      function _group(item) {
+        const name = item.furniName || '';
+        const cls  = item.classname || '';
+        if (name.indexOf('(SS)') !== -1) return 0;
+        if (/^pokeweebzd/i.test(cls)) return 1;
+        return 2;
+      }
+      _items = all.filter(_isWanted).sort((a,b) => {
+        const gd = _group(a) - _group(b);
+        if (gd !== 0) return gd;
+        return (a.furniName||'').localeCompare(b.furniName||'');
+      });
+      _selectedItem = null;
+      ddList.innerHTML = '';
+
+      if (!_items.length) {
+        ddLabel.textContent = '— Geen items gevonden —';
+        statusEl.textContent = 'Geen Rares, SS of Poke gevonden';
+        _updateExecuteBtn();
+        return;
+      }
+      _items.forEach((item,i) => {
+        const div = document.createElement('div');
+        div.className = '__mb_dd_item';
+        div.textContent = item.furniName || item.classname || ('id #' + item.id);
+        div.addEventListener('click', ()=>_select(i));
+        ddList.appendChild(div);
+      });
+      _select(0);
+      statusEl.textContent = _items.length + ' items gevonden';
+    }
+
+    let _waitTimer = null;
+    function _waitForInventory() {
+      if (window.Inventory && window.Inventory.loaded) { _populateDD(); return; }
+      statusEl.textContent = 'Laden...';
+      if (_waitTimer) clearInterval(_waitTimer);
+      _waitTimer = setInterval(()=>{
+        if (window.Inventory && window.Inventory.loaded) {
+          clearInterval(_waitTimer); _waitTimer=null; _populateDD();
+        }
+      }, 300);
+    }
+
+    loadBtn.addEventListener('click', ()=>{
+      const pktId = _getPktId('OUT', 'RequestFurniInventory');
+      if (pktId === null) { statusEl.textContent = 'RequestFurniInventory niet gevonden'; return; }
+      window.Inventory.loaded = false;
+      window.Inventory.items  = {};
+      ddLabel.textContent = 'Laden...';
+      ddList.innerHTML = '';
+      _items = [];
+      _selectedItem = null;
+      _updateExecuteBtn();
+      statusEl.textContent = 'Inventory opvragen...';
+      window.sendPacket('OUT', pktId, '');
+      _waitForInventory();
+    });
+
+    // Returns the offer ID of the newly listed item by comparing raw response bytes.
+    // Offer data starts at byte 14 (6 WS header + 4 H_total + 4 count).
+    // Two cases: server prepends new offer (sorted to front) or appends (sorted to back).
+    function _newOfferIdFromRaw(snapshotRaw, execRaw) {
+      if (!snapshotRaw || !execRaw || execRaw.byteLength <= 14) return null;
+      try {
+        const execView = new DataView(execRaw);
+        const execFirstId = execView.getInt32(14);
+        if (snapshotRaw.byteLength > 14) {
+          // Snapshot has at least one offer — check if new offer was prepended
+          const snapFirstId = new DataView(snapshotRaw).getInt32(14);
+          if (execFirstId !== snapFirstId) {
+            return execFirstId; // new offer sorted to front
+          }
+        }
+        // New offer appended at end
+        if (execRaw.byteLength > snapshotRaw.byteLength) {
+          return execView.getInt32(snapshotRaw.byteLength);
+        }
+      } catch(e) {}
+      return null;
+    }
+
+    // MarketPlaceOwnOffers — handles snapshot phase and execution phase
+    window.onPacket('MarketPlaceOwnOffers', p => {
+      if (!p.raw) return;
+
+      if (_snapshotPhase) {
+        _snapshotPhase = false;
+        _execCtx.snapshotRaw = p.raw;
+        const makeId   = _execCtx.makeId;
+        const getOwnId = _getPktId('OUT', 'GetMarketplaceOwnOffers');
+        _executing = true;
+        _updateExecuteBtn();
+        window.sendPacket('OUT', makeId, '{i:' + _execCtx.price + '}{i:1}{i:' + _execCtx.itemId + '}');
+        setTimeout(() => {
+          if (getOwnId !== null) {
+            window.sendPacket('OUT', getOwnId, '');
+          } else {
+            _addLog('GetMarketplaceOwnOffers niet gevonden');
+            _executing = false;
+            _updateExecuteBtn();
+          }
+        }, 400);
+        return;
+      }
+
+      if (!_executing) return;
+      try {
+        const r = window.makeReader(p.raw);
+        if (!r) return;
+        r.int();
+        const count = r.int();
+        if (count < 1) {
+          _addLog('Geen actieve offer gevonden');
+          _executing = false;
+          _updateExecuteBtn();
+          return;
+        }
+
+        // New offer data appended at end — starts at snapshotRaw.byteLength in execRaw
+        let offerId = _newOfferIdFromRaw(_execCtx.snapshotRaw, p.raw);
+        if (offerId === null) {
+          // Fallback: first offer (original behavior, works when no pre-existing listings)
+          const rf = window.makeReader(p.raw);
+          rf.int(); rf.int();
+          offerId = rf.int();
+        }
+
+        _addLog('Offer ID: ' + offerId);
+
+        const peerId = _getSelectedPeerId();
+        if (!peerId) {
+          _addLog('Fout: geen 2e account');
+          _executing = false;
+          _updateExecuteBtn();
+          return;
+        }
+
+        const itemName   = _execCtx.itemName || '?';
+        const itemPrice  = _execCtx.price || '?';
+        const sellerUser = window._selfName || '?';
+        const buyerUser  = (_mbPeers[peerId] && _mbPeers[peerId].user) || '?';
+
+        const cancelStr = '{out:CancelMarketplaceOffer}{i:' + offerId + '}';
+        const buyStr    = '{out:BuyMarketplaceOffer}{i:'    + offerId + '}';
+
+        // Cancel fires at T, buy fires 1ms after T
+        const T = Date.now() + 30;
+        BC.postMessage({ type: 'mb_send_at', targetId: peerId, str: buyStr, at: T + 1 });
+        setTimeout(()=>_executePkt(cancelStr), T - Date.now());
+
+        _addLog(itemName + ' #' + offerId + ' geannuleerd door ' + sellerUser);
+        _addLog(itemName + ' #' + offerId + ' (' + itemPrice + ' BC) gekocht door ' + buyerUser);
+
+        setTimeout(() => {
+          window.sendPacket('OUT', _execCtx.makeId, '{i:' + _execCtx.relistPrice + '}{i:1}{i:' + _execCtx.itemId + '}');
+          _addLog(itemName + ' herplaatst @ ' + _execCtx.relistPrice + ' BC');
+          fetch('https://qwcfsqsrtegyvvwkzcgb.supabase.co/rest/v1/pending_trades', {
+            method: 'POST',
+            headers: {
+              'apikey': 'sb_publishable_mi9rS5i9a-xrAWC0lG0TNA_vg903xRL',
+              'Authorization': 'Bearer sb_publishable_mi9rS5i9a-xrAWC0lG0TNA_vg903xRL',
+              'Content-Type': 'application/json',
+              'Prefer': 'return=minimal',
+            },
+            body: JSON.stringify({
+              offer_id:  offerId,
+              item_name: itemName,
+              seller:    sellerUser,
+              price:     _execCtx.relistPrice,
+            }),
+          }).then(function(r) {
+            if (r.ok) {
+              _addLog('[DB] Trade opgeslagen');
+            } else {
+              r.text().then(function(t) { _addLog('[DB] Fout ' + r.status + ': ' + t.slice(0, 120)); });
+            }
+          }).catch(function(e) { _addLog('[DB] Fetch mislukt: ' + e.message, 'db'); });
+        }, 500);
+
+        setTimeout(() => {
+          BC.postMessage({ type: 'mb_buyer_list_cancel', targetId: peerId });
+        }, 1000);
+
+        _executing = false;
+        _updateExecuteBtn();
+      } catch(e) {
+        _addLog('Fout bij parsen offer ID');
+        _executing = false;
+        _updateExecuteBtn();
+      }
+    });
+
+    window.onPacket('MarketPlaceOwnOffers', p => {
+      if (!p.raw) return;
+
+      if (window._buyerSnapshotPhase) {
+        window._buyerSnapshotPhase = false;
+        window._buyerSnapshotRaw = p.raw;
+        window._buyerCycling = true;
+        window.sendPacket('OUT', window._buyerPendingMakeId, '{i:' + window._buyerPendingPrice + '}{i:1}{i:' + window._buyerPendingItemId + '}');
+        setTimeout(() => window.sendPacket('OUT', window._buyerPendingGetOwnId, ''), 300);
+        return;
+      }
+
+      if (!window._buyerCycling) return;
+      window._buyerCycling = false;
+      try {
+        const r = window.makeReader(p.raw);
+        if (!r) return;
+        r.int();
+        const count = r.int();
+        if (count < 1) return;
+
+        let offerId = _newOfferIdFromRaw(window._buyerSnapshotRaw, p.raw);
+        if (offerId === null) {
+          const rf = window.makeReader(p.raw);
+          rf.int(); rf.int();
+          offerId = rf.int();
+        }
+
+        const cancelId = _getPktId('OUT', 'CancelMarketplaceOffer');
+        if (cancelId !== null) window.sendPacket('OUT', cancelId, '{i:' + offerId + '}');
+      } catch(e) {}
+    });
+
+    executeBtn.addEventListener('click', ()=>{
+      if (!_selectedItem || _executing || _snapshotPhase) return;
+      const peerId = _getSelectedPeerId();
+      if (!peerId) { _addLog('Geen 2e account verbonden'); return; }
+
+      const makeId   = _getPktId('OUT', 'MakeOffer');
+      const getOwnId = _getPktId('OUT', 'GetMarketplaceOwnOffers');
+      if (makeId === null) { _addLog('MakeOffer packet niet gevonden'); return; }
+
+      const price       = parseInt(priceEl.value) || 1;
+      const itemName    = _selectedItem.furniName || _selectedItem.classname || ('id #' + _selectedItem.id);
+      const relistPrice = parseInt(relistPriceEl.value) || 1;
+      _execCtx = { itemName, price, relistPrice, itemId: _selectedItem.id, makeId };
+      logEl.innerHTML = '';
+      _addLog('Item geplaatst: ' + itemName + ', ' + price + ' BC');
+
+      if (getOwnId !== null) {
+        // Phase 1: snapshot existing offers so we can identify the new one later
+        _snapshotPhase = true;
+        _updateExecuteBtn();
+        window.sendPacket('OUT', getOwnId, '');
+      } else {
+        // No snapshot possible — list immediately (original behavior)
+        _executing = true;
+        _updateExecuteBtn();
+        window.sendPacket('OUT', makeId, '{i:' + price + '}{i:1}{i:' + _selectedItem.id + '}');
+        _addLog('GetMarketplaceOwnOffers niet gevonden, geen snapshot');
+      }
+    });
+
+    // Init account display
+    _onPeersChanged();
+
+    window.__mb_panel = mb;
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { window.__ghk_ready(buildMarktplaatsPanel); }); else window.__ghk_ready(buildMarktplaatsPanel);
+})();

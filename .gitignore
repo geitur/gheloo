@@ -1,0 +1,7 @@
+.superpowers/
+.worktrees/
+.claude/
+TestSite/
+extensions/room-viewer/node_modules/
+extensions/room-viewer/spike.bundle.js
+extensions/wall-catalog/node_modules/

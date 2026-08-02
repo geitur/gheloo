@@ -1,0 +1,882 @@
+(function() {
+  if (document.getElementById('__photolib')) return;
+
+  const PHOTOS_KEY = '__ghk_pl_photos';
+  const TEMPLATES_KEY = '__ghk_pl_templates';
+  const PHOTO_BASE_URL = 'https://images.leet.city/leet-camera/photos/';
+
+  let _photos = [];
+  let _templates = [];
+
+  function _loadPhotos() { try { _photos = JSON.parse(localStorage.getItem(PHOTOS_KEY) || '[]'); } catch(_) { _photos = []; } }
+  function _savePhotos() { try { localStorage.setItem(PHOTOS_KEY, JSON.stringify(_photos)); } catch(_) {} }
+  function _loadTemplates() { try { _templates = JSON.parse(localStorage.getItem(TEMPLATES_KEY) || '[]'); } catch(_) { _templates = []; } }
+  function _saveTemplates() { try { localStorage.setItem(TEMPLATES_KEY, JSON.stringify(_templates)); } catch(_) {} }
+  function _nextPhotoId() { return _photos.reduce(function(m, p) { return Math.max(m, p.id || 0); }, 0) + 1; }
+  function _nextTemplateId() { return _templates.reduce(function(m, t) { return Math.max(m, t.id || 0); }, 0) + 1; }
+  function _esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function _log(msg) { console.log('[PhotoLibrary]', msg); }
+
+  // ── Capture ──────────────────────────────────────────────────────────────
+  // A real photo only exists once the shutter is clicked (RenderRoom OUT) — just
+  // posing/moving with the camera open also fires CameraStorageUrlMessageEvent (it's a
+  // live-preview filename slot, confirmed via a real capture showing it arrive before
+  // any photo was taken), so capture is gated: RenderRoom arms capture, consumed by the
+  // very next CameraStorageUrlMessageEvent. RenderRoom's contents are never read — its
+  // mere presence is the "a real photo was just taken" signal, nothing is decoded or sent.
+  let _captureArmed = false;
+  // Set true around a re-render of a photo that's already in the library (Buy All) so
+  // the resulting CameraStorageUrl doesn't get added as a second, duplicate entry.
+  let _suppressLibraryCapture = false;
+  window.onPacket('RenderRoom', function(p) {
+    if (p.direction !== 'OUT') return;
+    _captureArmed = true;
+  });
+  window.onPacket('CameraStorageUrl', function(p) {
+    if (!_captureArmed) return;
+    _captureArmed = false;
+    if (_suppressLibraryCapture) return;
+    if (!p.parsed || !p.parsed.filename) return;
+    const photo = {
+      id: _nextPhotoId(),
+      filename: p.parsed.filename,
+      url: PHOTO_BASE_URL + p.parsed.filename,
+      capturedAt: Date.now(),
+      roomId: (window.Room && window.Room.id) || null,
+      roomName: (window.Room && window.Room.name) || null
+    };
+    _photos.push(photo);
+    _savePhotos();
+    _log('Captured photo: ' + photo.url);
+    _renderLibraryTab();
+  });
+
+  // ── Upload (spoofed RenderRoom) ─────────────────────────────────────────────
+  // Sends a user-picked image through the same RenderRoom -> CameraStorageUrl path a
+  // real shutter click uses, then PurchasePhoto to keep it. RenderRoom body: Int32
+  // (charLength) + ROT13'd base64 PNG — confirmed against real captures (their decoded
+  // base64 doesn't parse as a PNG until ROT13'd back to "iVBORw0KGgoA...", the real PNG
+  // base64 signature). The capture listener above already picks up the resulting
+  // CameraStorageUrl and adds it to the Library tab automatically — this code only needs
+  // to send the packets, not duplicate the library-add logic.
+  const UPLOAD_MAX_DIM = 800;
+
+  function _outId(name) {
+    if (!window.PKT || !window.PKT.OUT) return null;
+    for (const id in window.PKT.OUT) {
+      if (window.shortName(window.PKT.OUT[id], 'OUT') === name) return parseInt(id);
+    }
+    return null;
+  }
+
+  function _rot13(s) {
+    return s.replace(/[a-zA-Z]/g, function(c) {
+      const base = c <= 'Z' ? 65 : 97;
+      return String.fromCharCode((c.charCodeAt(0) - base + 13) % 26 + base);
+    });
+  }
+
+  function _bytesToIntTokens(bytes) {
+    const padded = new Uint8Array(Math.ceil(bytes.length / 4) * 4);
+    padded.set(bytes);
+    const view = new DataView(padded.buffer);
+    let out = '';
+    for (let i = 0; i < padded.length; i += 4) out += '{i:' + view.getInt32(i) + '}';
+    return out;
+  }
+
+  let _pendingUploadResolve = null;
+  window.onPacket('CameraStorageUrl', function(p) {
+    if (_pendingUploadResolve) { const r = _pendingUploadResolve; _pendingUploadResolve = null; r(p); }
+  });
+  function _waitForCameraStorage(timeoutMs) {
+    return new Promise(function(resolve) {
+      _pendingUploadResolve = resolve;
+      setTimeout(function() {
+        if (_pendingUploadResolve === resolve) { _pendingUploadResolve = null; resolve(null); }
+      }, timeoutMs);
+    });
+  }
+
+  // Shared core: render a canvas as a fake camera photo, then buy it. Used by both the
+  // single-image Upload tab and Buy All (which loads each template photo's existing URL
+  // back into a canvas so it can be re-rendered — PurchasePhoto has no photo id, it only
+  // ever buys "whatever was most recently rendered", so buying an older library photo
+  // means resending it first).
+  async function _renderAndPurchase(canvas, logFn, suppressCapture) {
+    const renderId = _outId('RenderRoom');
+    const purchaseId = _outId('PurchasePhoto');
+    if (renderId === null || purchaseId === null) {
+      logFn('RenderRoom/PurchasePhoto not found in PKT — is the game connected?');
+      return false;
+    }
+
+    const b64 = _rot13(canvas.toDataURL('image/png').split(',')[1]);
+    const bytes = new TextEncoder().encode(b64);
+    const expr = '{i:' + b64.length + '}' + _bytesToIntTokens(bytes);
+
+    // Arm the listener BEFORE sending — on a fast/local server the reply can land before
+    // the next line runs, and a waiter set up after the fact would miss it.
+    if (suppressCapture) _suppressLibraryCapture = true;
+    const cameraWait = _waitForCameraStorage(8000);
+    window.sendPacket('OUT', renderId, expr);
+    logFn('Sent ' + Math.round(bytes.length / 1024) + ' KB — waiting for server...');
+
+    const rendered = await cameraWait;
+    if (suppressCapture) _suppressLibraryCapture = false;
+    if (!rendered) { logFn('Timed out waiting for CameraStorageUrl.'); return false; }
+
+    window.sendPacket('OUT', purchaseId, '');
+    logFn('Bought.');
+    return true;
+  }
+
+  let _uploadCanvas = null;
+  let _uploadRunning = false;
+
+  // Renders without buying — the capture listener at the top of this file still adds it
+  // to the Library on its own once CameraStorageUrl arrives, since that only depends on
+  // a RenderRoom OUT having just happened, not on a purchase following it.
+  async function _renderOnlyToLibrary(canvas, logFn) {
+    const renderId = _outId('RenderRoom');
+    if (renderId === null) { logFn('RenderRoom not found in PKT — is the game connected?'); return false; }
+    const b64 = _rot13(canvas.toDataURL('image/png').split(',')[1]);
+    const bytes = new TextEncoder().encode(b64);
+    const expr = '{i:' + b64.length + '}' + _bytesToIntTokens(bytes);
+    const cameraWait = _waitForCameraStorage(8000);
+    window.sendPacket('OUT', renderId, expr);
+    logFn('Sent ' + Math.round(bytes.length / 1024) + ' KB — waiting for server...');
+    const rendered = await cameraWait;
+    if (!rendered) { logFn('Timed out waiting for CameraStorageUrl.'); return false; }
+    logFn('Added to library.');
+    return true;
+  }
+
+  async function _uploadToLibrary(statusEl) {
+    if (_uploadRunning) { statusEl.textContent = 'Already running.'; return; }
+    if (!_uploadCanvas) { statusEl.textContent = 'Pick an image first.'; return; }
+    _uploadRunning = true;
+    await _renderOnlyToLibrary(_uploadCanvas, function(msg) { statusEl.textContent = msg; });
+    _uploadRunning = false;
+  }
+
+  async function _uploadAndBuy(statusEl) {
+    if (_uploadRunning) { statusEl.textContent = 'Already running.'; return; }
+    if (!_uploadCanvas) { statusEl.textContent = 'Pick an image first.'; return; }
+    _uploadRunning = true;
+    const ok = await _renderAndPurchase(_uploadCanvas, function(msg) { statusEl.textContent = msg; });
+    if (ok) statusEl.textContent = 'Bought — check the Library tab.';
+    _uploadRunning = false;
+  }
+
+  // ── Buy All (template) ──────────────────────────────────────────────────────
+  function _sleep(ms) { return new Promise(function(resolve) { setTimeout(resolve, ms); }); }
+  async function _sleepAbortable(ms, isAborted) {
+    const step = 500;
+    for (let waited = 0; waited < ms; waited += step) {
+      if (isAborted()) return;
+      await _sleep(Math.min(step, ms - waited));
+    }
+  }
+
+  function _loadImageAsCanvas(url) {
+    return fetch(url)
+      .then(function(res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.blob(); })
+      .then(function(blob) { return createImageBitmap(blob); })
+      .then(function(bitmap) {
+        const canvas = document.createElement('canvas');
+        canvas.width = bitmap.width; canvas.height = bitmap.height;
+        canvas.getContext('2d').drawImage(bitmap, 0, 0);
+        return canvas;
+      });
+  }
+
+  // Wall-step spacing, derived once from three real captured positions on a "photo"
+  // furni (top-left, one tile right, one tile below): moving right shifts
+  // {w1:0,w2:-1,l1:3,l2:-2}, moving down shifts {w1:0,w2:0,l1:0,l2:24}. Fixed per furni
+  // type/hotel, so only the top-left position needs capturing per mural — every other
+  // tile's position is computed from these instead of re-capturing each one.
+  const WALL_STEP_RIGHT = { w1: 0, w2: -1, l1: 3, l2: -2 };
+  const WALL_STEP_DOWN  = { w1: 0, w2: 0, l1: 0, l2: 23 };
+  const WALL_RE = /:w=(-?\d+),(-?\d+)\s+l=(-?\d+),(-?\d+)\s+([lr])/;
+
+  function _tileWall(origin, col, row) {
+    return {
+      w1: origin.w1 + WALL_STEP_RIGHT.w1 * col + WALL_STEP_DOWN.w1 * row,
+      w2: origin.w2 + WALL_STEP_RIGHT.w2 * col + WALL_STEP_DOWN.w2 * row,
+      l1: origin.l1 + WALL_STEP_RIGHT.l1 * col + WALL_STEP_DOWN.l1 * row,
+      l2: origin.l2 + WALL_STEP_RIGHT.l2 * col + WALL_STEP_DOWN.l2 * row,
+      dir: origin.dir
+    };
+  }
+  function _formatWall(p) { return ':w=' + p.w1 + ',' + p.w2 + ' l=' + p.l1 + ',' + p.l2 + ' ' + p.dir; }
+
+  // Doesn't assume which field holds the location string or how many fields precede it —
+  // reuses the same heuristic decoder ws.js's own ':steal' command uses for packets with
+  // no registered parser, and scans every string token for the wall-coord pattern.
+  function _extractWallFromPacket(p) {
+    if (!p.raw || !window.__hbl_decode) return null;
+    const tokens = window.__hbl_decode(p.raw);
+    for (let i = 0; i < tokens.length; i++) {
+      if (tokens[i].t !== 's') continue;
+      const m = WALL_RE.exec(tokens[i].v);
+      if (m) return { w1: +m[1], w2: +m[2], l1: +m[3], l2: +m[4], dir: m[5] };
+    }
+    return null;
+  }
+
+  let _wallCalibrating = false;
+  let _wallOrigin = null;
+  function _handleWallCapture(p) {
+    if (!_wallCalibrating) return;
+    const w = _extractWallFromPacket(p);
+    const logEl = panel && panel.querySelector('#__pl_calib_log');
+    if (!w) {
+      if (logEl) {
+        logEl.textContent = 'Got a ' + p.name + ' packet but found no ":w=..l=.." string in it — check console.';
+        if (p.raw && window.__hbl_decode) window.__hbl_decode(p.raw).forEach(function(t) { console.log('[PhotoLibrary]', t); });
+      }
+      return;
+    }
+    _wallOrigin = w;
+    _wallCalibrating = false;
+    if (logEl) logEl.textContent = 'Captured top-left: ' + _formatWall(w);
+    _renderCalibStatus();
+  }
+  window.onPacket('PlaceObject', _handleWallCapture);
+  window.onPacket('MoveWallItem', _handleWallCapture); // may not exist on every hotel — harmless if it never fires
+
+  function _renderCalibStatus() {
+    if (!panel) return;
+    const el = panel.querySelector('#__pl_calib_status');
+    if (!el) return;
+    el.textContent = 'top-left: ' + (_wallOrigin ? _formatWall(_wallOrigin) : '—');
+  }
+
+  function _waitForInventoryLoaded(timeoutMs) {
+    return new Promise(function(resolve) {
+      const deadline = Date.now() + timeoutMs;
+      (function poll() {
+        if (window.Inventory && window.Inventory.loaded) { resolve(true); return; }
+        if (Date.now() > deadline) { resolve(false); return; }
+        setTimeout(poll, 300);
+      })();
+    });
+  }
+
+  function _waitForNewInventoryItem(beforeKeys, timeoutMs) {
+    return new Promise(function(resolve) {
+      const deadline = Date.now() + timeoutMs;
+      (function poll() {
+        const items = (window.Inventory && window.Inventory.items) || {};
+        const newKey = Object.keys(items).find(function(k) { return !beforeKeys.has(k); });
+        if (newKey) { resolve(items[newKey]); return; }
+        if (Date.now() > deadline) { resolve(null); return; }
+        setTimeout(poll, 300);
+      })();
+    });
+  }
+
+  // Buys a canvas as a fake camera photo AND finds the resulting inventory item —
+  // PurchasePhoto never returns a photo/item id, so the only way to know which
+  // placementId a purchase produced is to snapshot inventory right before and diff it
+  // after (same pattern room-clone.js's buy-then-place flow already uses).
+  async function _renderPurchaseAndGetItem(canvas, logFn) {
+    const requestInvId = _outId('RequestFurniInventory');
+    if (requestInvId === null) { logFn('RequestFurniInventory not found in PKT.'); return null; }
+    if (!window.Inventory || !window.Inventory.loaded) { logFn('Inventory not loaded — open your Inventory panel in-game once.'); return null; }
+    const beforeKeys = new Set(Object.keys(window.Inventory.items || {}));
+    const ok = await _renderAndPurchase(canvas, logFn, true);
+    if (!ok) return null;
+    window.sendPacket('OUT', requestInvId, '');
+    logFn('Waiting for the purchased item to appear in inventory...');
+    return await _waitForNewInventoryItem(beforeKeys, 8000);
+  }
+
+  let _buyAllRunning = false;
+  let _buyAllAbort = false;
+
+  // Progress bar — total time is dominated by the (count-1) 30s rate-limit gaps between
+  // purchases (placing itself isn't rate-limited, so it adds no extra wait), so that's
+  // used as the estimate; per-photo render/purchase time is small and just makes the bar
+  // creep a little past 100% near the very end, which is fine.
+  let _buyAllProgress = null; // { done, total, startedAt, totalMs, timer }
+
+  function _startBuyAllProgress(total, totalMs) {
+    if (_buyAllProgress && _buyAllProgress.timer) clearInterval(_buyAllProgress.timer);
+    _buyAllProgress = { done: 0, total: total, startedAt: Date.now(), totalMs: totalMs, timer: 0 };
+    _buyAllProgress.timer = setInterval(_renderBuyAllProgress, 250);
+    _renderBuyAllProgress();
+  }
+  function _tickBuyAllProgress() {
+    if (_buyAllProgress) _buyAllProgress.done += 1;
+  }
+  function _finishBuyAllProgress() {
+    if (!_buyAllProgress) return;
+    clearInterval(_buyAllProgress.timer);
+    _buyAllProgress = null;
+    _renderBuyAllProgress();
+  }
+  function _renderBuyAllProgress() {
+    if (!panel) return;
+    const bar = panel.querySelector('#__pl_buyall_bar');
+    const fill = panel.querySelector('#__pl_buyall_fill');
+    const text = panel.querySelector('#__pl_buyall_progtext');
+    if (!bar || !fill || !text) return;
+    if (!_buyAllProgress) { bar.style.display = 'none'; text.textContent = ''; return; }
+    bar.style.display = 'block';
+    const elapsedMs = Date.now() - _buyAllProgress.startedAt;
+    const pct = Math.min(100, Math.round((elapsedMs / _buyAllProgress.totalMs) * 100));
+    const remainS = Math.max(0, Math.ceil((_buyAllProgress.totalMs - elapsedMs) / 1000));
+    fill.style.width = pct + '%';
+    text.textContent = _buyAllProgress.done + '/' + _buyAllProgress.total + ' bought · ~' + _fmtDuration(remainS) + ' left';
+  }
+
+  function _fmtDuration(totalSeconds) {
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return m > 0 ? (m + 'm ' + s + 's') : (s + 's');
+  }
+
+  // Buys every photo in the template; if the wall's top-left has been captured, each one
+  // is placed immediately after being bought (no extra delay for placing — only buying
+  // is rate-limited).
+  async function _buyAllInTemplate(template, logEl) {
+    if (_buyAllRunning) return;
+    const filled = [];
+    template.slots.forEach(function(pid, idx) {
+      const photo = pid !== null ? _photos.find(function(p) { return p.id === pid; }) : null;
+      if (photo) filled.push({ col: idx % template.cols, row: Math.floor(idx / template.cols), photo: photo });
+    });
+    if (!filled.length) { logEl.textContent = 'No photos in this template.'; return; }
+
+    const placeId = _wallOrigin ? _outId('PlaceObject') : null;
+    const willPlace = !!(_wallOrigin && placeId !== null);
+
+    _buyAllRunning = true;
+    _buyAllAbort = false;
+    _startBuyAllProgress(filled.length, Math.max(1, filled.length - 1) * 30000);
+    const stopBtn = panel && panel.querySelector('#__pl_buyall_stop');
+    if (stopBtn) stopBtn.style.display = 'inline-block';
+
+    // Placing needs to know which inventory item each purchase produced, which means
+    // Inventory has to actually be loaded — request it up front instead of just checking
+    // a flag and giving up (that was the earlier bug: nothing was ever asked for, so
+    // .loaded stayed false and every buy bailed immediately).
+    if (willPlace) {
+      const requestInvId = _outId('RequestFurniInventory');
+      if (requestInvId !== null) {
+        window.sendPacket('OUT', requestInvId, '');
+        logEl.textContent = 'Requesting inventory...';
+        await _waitForInventoryLoaded(6000);
+      }
+    }
+
+    for (let i = 0; i < filled.length; i++) {
+      if (_buyAllAbort) { logEl.textContent = 'Stopped (' + i + '/' + filled.length + ' bought).'; break; }
+      const tile = filled[i];
+      const tag = '(' + (i + 1) + '/' + filled.length + ') ';
+      logEl.textContent = tag + 'loading ' + tile.photo.filename + '...';
+      let canvas;
+      try {
+        canvas = await _loadImageAsCanvas(tile.photo.url);
+      } catch (e) {
+        logEl.textContent = tag + 'failed to load image (CORS or network?) — skipping.';
+        continue;
+      }
+      if (willPlace) {
+        const item = await _renderPurchaseAndGetItem(canvas, function(msg) { logEl.textContent = tag + msg; });
+        if (!item) {
+          logEl.textContent = tag + 'buy failed — skipping.';
+        } else {
+          const pos = _tileWall(_wallOrigin, tile.col, tile.row);
+          window.sendPacket('OUT', placeId, '{s:"' + item.placementId + ' ' + _formatWall(pos) + '"}');
+          logEl.textContent = tag + 'bought & placed at col ' + tile.col + ', row ' + tile.row + '.';
+        }
+      } else {
+        const ok = await _renderAndPurchase(canvas, function(msg) { logEl.textContent = tag + msg; }, true);
+        if (!ok) logEl.textContent = tag + 'purchase failed — skipping.';
+      }
+      _tickBuyAllProgress();
+      if (i < filled.length - 1 && !_buyAllAbort) {
+        await _sleepAbortable(30000, function() { return _buyAllAbort; });
+      }
+    }
+    _finishBuyAllProgress();
+    if (!_buyAllAbort) logEl.textContent = 'Done — ' + (willPlace ? 'bought & placed ' : 'bought ') + filled.length + ' photo(s).';
+    _buyAllRunning = false;
+    if (stopBtn) stopBtn.style.display = 'none';
+  }
+
+  // ── UI ───────────────────────────────────────────────────────────────────
+  let panel = null;
+  let _activeTab = 'upload';
+  let _selectedTemplateId = null;
+  let _pickerSlot = null; // { templateId, slotIndex } while the photo picker overlay is open
+
+  function injectStyle() {
+    const style = document.createElement('style');
+    style.textContent = [
+      '#__photolib{position:fixed;top:8px;right:16px;width:520px;z-index:1000;user-select:none;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:12px}',
+      '#__photolib *{box-sizing:border-box}',
+      '.__pl_card{display:flex;flex-direction:column;background:#12131A;border-radius:14px;box-shadow:0 12px 34px rgba(0,0,0,.55);overflow:hidden;color:#eceefb}',
+      '.__pl_hdr{display:flex;align-items:center;gap:8px;padding:12px 14px;background:#0A0B10;cursor:move}',
+      '.__pl_eyebrow{font:700 9px/1 monospace;letter-spacing:1.5px;color:#6C7CFF;text-transform:uppercase}',
+      '.__pl_title{font:600 13px system-ui;color:#eceefb;flex:1}',
+      '.__pl_close{cursor:pointer;color:#5c5e6b;font-size:16px;line-height:1;padding:2px 6px}',
+      '.__pl_close:hover{color:#eceefb}',
+      '.__pl_tabs{display:flex;border-bottom:1px solid #23252f}',
+      '.__pl_tab{flex:1;text-align:center;padding:10px;font:700 10px/1 monospace;letter-spacing:.5px;text-transform:uppercase;color:#82849a;cursor:pointer;border-bottom:2px solid transparent}',
+      '.__pl_tab.active{color:#A6B0FF;border-bottom-color:#6C7CFF}',
+      '.__pl_tab:hover:not(.active){color:#eceefb}',
+      '#__pl_body{max-height:min(650px,calc(100vh - 90px));overflow-y:auto;padding:16px 18px}',
+      '.__pl_tabpane{display:none}',
+      '.__pl_tabpane.active{display:block}',
+      '.__pl_empty{padding:24px;text-align:center;color:#5c5e6b;font-size:12px}',
+      '.__pl_section_label{font:700 9px/1 monospace;letter-spacing:1px;color:#5c5e6b;text-transform:uppercase;margin-bottom:10px}',
+      '.__pl_photo_grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}',
+      '.__pl_photo_card{background:#1c1e2a;border-radius:8px;overflow:hidden;border:1px solid #23252f}',
+      '.__pl_photo_card img{width:100%;display:block;aspect-ratio:1;object-fit:cover;background:#0A0B10}',
+      '.__pl_photo_meta{padding:6px 8px;font-size:10px;color:#82849a;line-height:1.4}',
+      '.__pl_photo_meta .room{color:#eceefb;font-weight:600}',
+      '.__pl_photo_meta_row{display:flex;align-items:center;justify-content:space-between;gap:6px}',
+      '.__pl_photo_del{flex:none;width:20px;height:20px;border-radius:5px;background:none;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}',
+      '.__pl_photo_del:hover{background:rgba(229,86,111,.2)}',
+      '.__pl_photo_del img{width:20px;height:20px;object-fit:contain;aspect-ratio:auto;background:none}',
+      '.__pl_btn{border:none;border-radius:8px;font-size:11px;font-weight:600;padding:7px 10px;cursor:pointer}',
+      '.__pl_btn_primary{background:#A6B0FF;color:#0A0B10}',
+      '.__pl_btn_primary:hover{filter:brightness(1.08)}',
+      '.__pl_btn_secondary{background:#1c1e2a;color:#eceefb;border:1px solid #23252f}',
+      '.__pl_btn_secondary:hover{background:rgba(255,255,255,0.06)}',
+      '.__pl_btn_danger{background:transparent;color:#e5566f;border:1px solid #3a232a}',
+      '.__pl_btn_danger:hover{background:rgba(229,86,111,0.1)}',
+      '.__pl_new_template{display:flex;flex-direction:column;gap:8px;padding:14px;background:#1c1e2a;border-radius:10px;border:1px solid #23252f;margin-bottom:16px}',
+      '.__pl_new_template_row{display:flex;gap:8px}',
+      '.__pl_input{flex:1;background:#0A0B10;border:1px solid #23252f;border-radius:6px;color:#eceefb;padding:6px 8px;font-size:12px}',
+      '.__pl_input_small{width:64px;flex:none}',
+      '.__pl_template_list{display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto;padding-right:4px}',
+      '.__pl_template_row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:#1c1e2a;border-radius:8px;border:1px solid #23252f;cursor:pointer}',
+      '.__pl_template_row:hover{background:rgba(255,255,255,0.04)}',
+      '.__pl_template_row .info{flex:1}',
+      '.__pl_template_row .name{font-weight:600;color:#eceefb;font-size:12px}',
+      '.__pl_template_row .meta{color:#82849a;font-size:10px;margin-top:2px}',
+      '.__pl_grid_hdr{display:flex;align-items:center;gap:10px;margin-bottom:14px}',
+      '.__pl_progress_bar{height:6px;border-radius:3px;background:#0A0B10;overflow:hidden;margin-bottom:6px}',
+      '.__pl_progress_fill{height:100%;background:#A6B0FF;transition:width .2s linear}',
+      '.__pl_progress_text{font-size:9px;color:#82849a}',
+      '.__pl_back{cursor:pointer;color:#82849a;font-size:16px;padding:2px 6px}',
+      '.__pl_back:hover{color:#eceefb}',
+      '.__pl_grid_title{flex:1;font-weight:600;font-size:13px}',
+      '.__pl_slot_grid{display:grid;gap:8px}',
+      '.__pl_slot{position:relative;aspect-ratio:1;background:#1c1e2a;border:1px dashed #3a3d4d;border-radius:8px;cursor:pointer;overflow:hidden;display:flex;align-items:center;justify-content:center}',
+      '.__pl_slot.filled{border-style:solid;border-color:#23252f}',
+      '.__pl_slot img{width:100%;height:100%;object-fit:cover}',
+      '.__pl_slot .plus{color:#5c5e6b;font-size:22px}',
+      '.__pl_slot .clear{position:absolute;top:3px;right:3px;background:rgba(10,11,16,.75);color:#eceefb;border-radius:5px;font-size:9px;padding:2px 5px;cursor:pointer}',
+      '#__pl_picker_overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2100;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}',
+      '.__pl_picker_card{background:#12131A;border-radius:14px;box-shadow:0 12px 34px rgba(0,0,0,.55);color:#eceefb;width:420px;max-height:70vh;display:flex;flex-direction:column}',
+      '.__pl_picker_hdr{padding:14px 16px;border-bottom:1px solid #23252f;display:flex;align-items:center}',
+      '.__pl_picker_hdr .title{flex:1;font-weight:600;font-size:13px}',
+      '.__pl_picker_body{overflow-y:auto;padding:14px 16px}',
+    ].join('');
+    document.head.appendChild(style);
+  }
+
+  function _fmtDate(ts) {
+    const d = new Date(ts);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function _renderUploadTab() {
+    if (!panel) return;
+    const pane = panel.querySelector('#__pl_pane_upload');
+    if (!pane) return;
+    pane.innerHTML =
+      '<div class="__pl_section_label">Upload a photo</div>' +
+      '<div style="display:flex;flex-direction:column;gap:8px">' +
+        '<input type="file" id="__pl_upload_file" accept="image/*">' +
+        '<img id="__pl_upload_preview" style="display:none;max-width:100%;border-radius:8px;border:1px solid #23252f">' +
+        '<div style="display:flex;gap:8px">' +
+          '<button class="__pl_btn __pl_btn_secondary" id="__pl_upload_only_btn" style="flex:1">Upload to Library</button>' +
+          '<button class="__pl_btn __pl_btn_primary" id="__pl_upload_buy_btn" style="flex:1">Buy Photo</button>' +
+        '</div>' +
+        '<div id="__pl_upload_status" style="font-size:10px;color:#82849a;word-break:break-all"></div>' +
+      '</div>';
+
+    const fileEl = pane.querySelector('#__pl_upload_file');
+    const previewEl = pane.querySelector('#__pl_upload_preview');
+    const statusEl = pane.querySelector('#__pl_upload_status');
+
+    fileEl.addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const img = new Image();
+      img.onload = function() {
+        let w = img.width, h = img.height;
+        if (w > UPLOAD_MAX_DIM || h > UPLOAD_MAX_DIM) {
+          const s = Math.min(UPLOAD_MAX_DIM / w, UPLOAD_MAX_DIM / h);
+          w = Math.round(w * s); h = Math.round(h * s);
+        }
+        _uploadCanvas = document.createElement('canvas');
+        _uploadCanvas.width = w; _uploadCanvas.height = h;
+        _uploadCanvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        previewEl.src = _uploadCanvas.toDataURL('image/png');
+        previewEl.style.display = 'block';
+        statusEl.textContent = w + 'x' + h + ' ready.';
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    pane.querySelector('#__pl_upload_only_btn').addEventListener('click', function() {
+      _uploadToLibrary(statusEl);
+    });
+    pane.querySelector('#__pl_upload_buy_btn').addEventListener('click', function() {
+      _uploadAndBuy(statusEl);
+    });
+  }
+
+  // Every wall item's "state" field is a JSON blob with a real, already-hosted image URL
+  // (confirmed from a real Items capture: {"t":...,"u":"<uuid>","n":"<name>","w":"https://
+  // .../leet-camera/photos/<uuid>.png"}) — parsers.js already extracts it into
+  // window.Room.wallItems[id].state, no new packet parsing needed. Matches on content (a
+  // parseable JSON with a .w URL), not typeId, so it picks up photos regardless of which
+  // furni type carries them.
+  function _importRoomPhotos() {
+    if (!window.Room || !window.Room.wallItems) return { added: 0, skipped: 0, total: 0 };
+    const existingFilenames = new Set(_photos.map(function(p) { return p.filename; }));
+    let added = 0, skipped = 0, total = 0;
+    Object.values(window.Room.wallItems).forEach(function(item) {
+      if (!item.state) return;
+      let meta;
+      try { meta = JSON.parse(item.state); } catch (e) { return; }
+      if (!meta || typeof meta.w !== 'string' || !meta.w) return;
+      total++;
+      const filename = meta.w.split('/').pop();
+      if (!filename || existingFilenames.has(filename)) { skipped++; return; }
+      existingFilenames.add(filename);
+      _photos.push({
+        id: _nextPhotoId(),
+        filename: filename,
+        url: meta.w,
+        capturedAt: meta.t || Date.now(),
+        roomId: window.Room.id || null,
+        roomName: window.Room.name || null
+      });
+      added++;
+    });
+    if (added) _savePhotos();
+    return { added: added, skipped: skipped, total: total };
+  }
+
+  // ── Clear library ────────────────────────────────────────────────────────────
+  function _clearLibrary(maxAgeMs) {
+    const before = _photos.length;
+    if (maxAgeMs === null) {
+      _photos = [];
+    } else {
+      const cutoff = Date.now() - maxAgeMs;
+      _photos = _photos.filter(function(p) { return p.capturedAt < cutoff; });
+    }
+    _savePhotos();
+    return before - _photos.length;
+  }
+
+  function _renderLibraryTab() {
+    if (!panel) return;
+    const pane = panel.querySelector('#__pl_pane_library');
+    if (!pane) return;
+
+    const importRow =
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">' +
+        '<button class="__pl_btn __pl_btn_secondary" id="__pl_import_room" style="flex:2;font-size:10px;padding:5px 8px">Import Room Photos</button>' +
+        '<button class="__pl_btn __pl_btn_danger" id="__pl_clear_all" style="flex:1;font-size:10px;padding:5px 8px">Clear All</button>' +
+      '</div>' +
+      '<div id="__pl_import_status" style="font-size:10px;color:#82849a;word-break:break-all;margin-bottom:10px"></div>';
+
+    function wireSharedButtons() {
+      pane.querySelector('#__pl_import_room').addEventListener('click', function() {
+        const statusEl = pane.querySelector('#__pl_import_status');
+        const r = _importRoomPhotos();
+        statusEl.textContent = r.total === 0 ? 'No photo furni found in this room.' : 'Imported ' + r.added + ', ' + r.skipped + ' already in library.';
+        if (r.added) _renderLibraryTab();
+      });
+      pane.querySelector('#__pl_clear_all').addEventListener('click', function() {
+        const n = _clearLibrary(null);
+        _log('Cleared all ' + n + ' photo(s).');
+        _renderLibraryTab();
+      });
+    }
+
+    if (!_photos.length) {
+      pane.innerHTML = importRow + '<div class="__pl_empty">No photos captured yet. Take a photo with the real Camera furni, or Import Room Photos to pull in photos already placed here.</div>';
+      wireSharedButtons();
+      return;
+    }
+    const sorted = _photos.slice().sort(function(a, b) { return b.capturedAt - a.capturedAt; });
+    pane.innerHTML =
+      importRow +
+      '<div class="__pl_section_label">' + _photos.length + ' photo(s)</div>' +
+      '<div class="__pl_photo_grid">' +
+      sorted.map(function(p) {
+        return '<div class="__pl_photo_card">' +
+          '<img src="' + _esc(p.url) + '" alt="" loading="lazy">' +
+          '<div class="__pl_photo_meta">' +
+            (p.roomName ? '<div class="room">' + _esc(p.roomName) + '</div>' : '') +
+            '<div class="__pl_photo_meta_row">' +
+              '<span>' + _fmtDate(p.capturedAt) + '</span>' +
+              '<button class="__pl_photo_del" data-action="delete-photo" data-id="' + p.id + '" title="Remove from library">' +
+                '<img src="https://i.imgur.com/7p5X4Ai.png" alt="Remove">' +
+              '</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('') +
+      '</div>';
+
+    pane.querySelectorAll('button[data-action="delete-photo"]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        const id = parseInt(btn.dataset.id, 10);
+        _photos = _photos.filter(function(p) { return p.id !== id; });
+        _savePhotos();
+        _renderLibraryTab();
+      });
+    });
+    wireSharedButtons();
+  }
+
+  function _renderTemplatesTab() {
+    if (!panel) return;
+    const pane = panel.querySelector('#__pl_pane_templates');
+    if (!pane) return;
+    const template = _selectedTemplateId !== null ? _templates.find(function(t) { return t.id === _selectedTemplateId; }) : null;
+    if (template) { _renderTemplateGrid(pane, template); return; }
+
+    pane.innerHTML =
+      '<div class="__pl_new_template">' +
+        '<div class="__pl_new_template_row">' +
+          '<input type="text" class="__pl_input" id="__pl_new_name" placeholder="Template name">' +
+        '</div>' +
+        '<div class="__pl_new_template_row">' +
+          '<input type="number" class="__pl_input __pl_input_small" id="__pl_new_rows" placeholder="Rows" min="1" value="3">' +
+          '<input type="number" class="__pl_input __pl_input_small" id="__pl_new_cols" placeholder="Cols" min="1" value="3">' +
+          '<button class="__pl_btn __pl_btn_primary" id="__pl_new_create">Create Template</button>' +
+        '</div>' +
+      '</div>' +
+      (_templates.length
+        ? '<div class="__pl_section_label">Templates</div><div class="__pl_template_list" id="__pl_template_list">' +
+          _templates.slice().sort(function(a, b) { return b.createdAt - a.createdAt; }).map(function(t) {
+            const filled = t.slots.filter(function(s) { return s !== null; }).length;
+            return '<div class="__pl_template_row" data-id="' + t.id + '">' +
+              '<div class="info"><div class="name">' + _esc(t.name) + '</div>' +
+              '<div class="meta">' + t.rows + '&times;' + t.cols + ' &middot; ' + filled + '/' + t.slots.length + ' filled</div></div>' +
+              '<button class="__pl_btn __pl_btn_danger" data-action="delete-template" data-id="' + t.id + '">Delete</button>' +
+            '</div>';
+          }).join('') + '</div>'
+        : '<div class="__pl_empty">No templates yet.</div>');
+
+    pane.querySelector('#__pl_new_create').addEventListener('click', function() {
+      const nameEl = pane.querySelector('#__pl_new_name');
+      const rowsEl = pane.querySelector('#__pl_new_rows');
+      const colsEl = pane.querySelector('#__pl_new_cols');
+      const name = nameEl.value.trim();
+      const rows = parseInt(rowsEl.value, 10);
+      const cols = parseInt(colsEl.value, 10);
+      if (!name) { _log('Enter a template name.'); return; }
+      if (!(rows > 0) || !(cols > 0)) { _log('Rows and cols must be positive numbers.'); return; }
+      if (rows > 20 || cols > 20) { _log('Rows and cols must be 20 or less.'); return; }
+      const t = { id: _nextTemplateId(), name: name, rows: rows, cols: cols, createdAt: Date.now(), slots: new Array(rows * cols).fill(null) };
+      _templates.push(t);
+      _saveTemplates();
+      _selectedTemplateId = t.id;
+      _renderTemplatesTab();
+    });
+
+    pane.querySelectorAll('.__pl_template_row').forEach(function(row) {
+      row.addEventListener('click', function(e) {
+        if (e.target.closest('button[data-action="delete-template"]')) return;
+        _selectedTemplateId = parseInt(row.dataset.id, 10);
+        _renderTemplatesTab();
+      });
+    });
+    pane.querySelectorAll('button[data-action="delete-template"]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const id = parseInt(btn.dataset.id, 10);
+        _templates = _templates.filter(function(t) { return t.id !== id; });
+        _saveTemplates();
+        _renderTemplatesTab();
+      });
+    });
+  }
+
+  function _renderTemplateGrid(pane, template) {
+    pane.innerHTML =
+      '<div class="__pl_grid_hdr">' +
+        '<span class="__pl_back" id="__pl_grid_back" title="Back to templates">&larr;</span>' +
+        '<span class="__pl_grid_title">' + _esc(template.name) + '</span>' +
+        '<button class="__pl_btn __pl_btn_primary" id="__pl_buyall_btn">Buy All</button>' +
+        '<button class="__pl_btn __pl_btn_danger" id="__pl_buyall_stop" style="display:' + (_buyAllRunning ? 'inline-block' : 'none') + '">Abort</button>' +
+      '</div>' +
+      '<div id="__pl_buyall_bar" class="__pl_progress_bar" style="display:none">' +
+        '<div id="__pl_buyall_fill" class="__pl_progress_fill" style="width:0%"></div>' +
+      '</div>' +
+      '<div id="__pl_buyall_progtext" class="__pl_progress_text"></div>' +
+      '<div id="__pl_buyall_log" style="font-size:10px;color:#82849a;word-break:break-all;margin-bottom:10px"></div>' +
+
+      '<div class="__pl_new_template" style="margin-bottom:10px;padding:8px;gap:5px">' +
+        '<div style="font-size:11px;font-weight:600">Place On Wall</div>' +
+        '<button class="__pl_btn __pl_btn_secondary" id="__pl_cal_origin" style="font-size:9px;padding:3px 6px;align-self:flex-start">Capture Top-Left Start position</button>' +
+        '<div id="__pl_calib_status" style="font-size:9px;color:#5c5e6b;word-break:break-all">top-left: —</div>' +
+        '<div id="__pl_calib_log" style="font-size:9px;color:#82849a;word-break:break-all"></div>' +
+      '</div>' +
+
+      '<div class="__pl_slot_grid" id="__pl_slot_grid" style="grid-template-columns:repeat(' + template.cols + ',minmax(0,140px))">' +
+      template.slots.map(function(photoId, idx) {
+        const photo = photoId !== null ? _photos.find(function(p) { return p.id === photoId; }) : null;
+        if (photo) {
+          return '<div class="__pl_slot filled" data-idx="' + idx + '">' +
+            '<img src="' + _esc(photo.url) + '" alt="">' +
+            '<span class="clear" data-action="clear-slot" data-idx="' + idx + '">&times;</span>' +
+          '</div>';
+        }
+        return '<div class="__pl_slot" data-idx="' + idx + '"><span class="plus">+</span></div>';
+      }).join('') +
+      '</div>';
+
+    pane.querySelector('#__pl_grid_back').addEventListener('click', function() {
+      _selectedTemplateId = null;
+      _renderTemplatesTab();
+    });
+    pane.querySelector('#__pl_buyall_btn').addEventListener('click', function() {
+      _buyAllInTemplate(template, pane.querySelector('#__pl_buyall_log'));
+    });
+    pane.querySelector('#__pl_buyall_stop').addEventListener('click', function() {
+      _buyAllAbort = true;
+    });
+    pane.querySelector('#__pl_cal_origin').addEventListener('click', function() {
+      _wallCalibrating = true;
+      pane.querySelector('#__pl_calib_log').textContent = 'Armed — place the reference item now...';
+    });
+    _renderCalibStatus();
+    pane.querySelectorAll('.__pl_slot').forEach(function(slotEl) {
+      slotEl.addEventListener('click', function(e) {
+        if (e.target.closest('[data-action="clear-slot"]')) return;
+        _openPicker(template.id, parseInt(slotEl.dataset.idx, 10));
+      });
+    });
+    pane.querySelectorAll('[data-action="clear-slot"]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.idx, 10);
+        const t = _templates.find(function(tt) { return tt.id === template.id; });
+        if (!t) return;
+        t.slots[idx] = null;
+        _saveTemplates();
+        _renderTemplatesTab();
+      });
+    });
+  }
+
+  function _openPicker(templateId, slotIndex) {
+    _pickerSlot = { templateId: templateId, slotIndex: slotIndex };
+    const overlay = document.createElement('div');
+    overlay.id = '__pl_picker_overlay';
+    // A photo already sitting in a DIFFERENT slot of this same template is hidden here —
+    // stops the same photo being picked twice in one bundle until it's removed from
+    // wherever it currently is. The slot being edited itself doesn't count as "elsewhere".
+    const t = _templates.find(function(tt) { return tt.id === templateId; });
+    const usedElsewhere = new Set(t ? t.slots.filter(function(v, idx) { return idx !== slotIndex && v !== null; }) : []);
+    const sorted = _photos.filter(function(p) { return !usedElsewhere.has(p.id); }).sort(function(a, b) { return b.capturedAt - a.capturedAt; });
+    overlay.innerHTML =
+      '<div class="__pl_picker_card">' +
+        '<div class="__pl_picker_hdr"><span class="title">Pick a photo</span><span class="__pl_close" id="__pl_picker_close">&times;</span></div>' +
+        '<div class="__pl_picker_body">' +
+          (sorted.length
+            ? '<div class="__pl_photo_grid">' + sorted.map(function(p) {
+                return '<div class="__pl_photo_card" data-id="' + p.id + '" style="cursor:pointer">' +
+                  '<img src="' + _esc(p.url) + '" alt="">' +
+                  '<div class="__pl_photo_meta">' + _fmtDate(p.capturedAt) + '</div>' +
+                '</div>';
+              }).join('') + '</div>'
+            : '<div class="__pl_empty">' + (_photos.length ? 'All your photos are already used in this template.' : 'No photos in your library yet.') + '</div>') +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) _closePicker(); });
+    overlay.querySelector('#__pl_picker_close').addEventListener('click', _closePicker);
+    overlay.querySelectorAll('.__pl_photo_card[data-id]').forEach(function(card) {
+      card.addEventListener('click', function() {
+        const photoId = parseInt(card.dataset.id, 10);
+        const t = _templates.find(function(tt) { return tt.id === _pickerSlot.templateId; });
+        if (t) { t.slots[_pickerSlot.slotIndex] = photoId; _saveTemplates(); }
+        _closePicker();
+        _renderTemplatesTab();
+      });
+    });
+  }
+
+  function _closePicker() {
+    const overlay = document.getElementById('__pl_picker_overlay');
+    if (overlay) overlay.remove();
+    _pickerSlot = null;
+  }
+
+  function _switchTab(tab) {
+    _activeTab = tab;
+    if (!panel) return;
+    panel.querySelectorAll('.__pl_tab').forEach(function(t) { t.classList.toggle('active', t.dataset.tab === tab); });
+    panel.querySelectorAll('.__pl_tabpane').forEach(function(p) { p.classList.toggle('active', p.id === '__pl_pane_' + tab); });
+  }
+
+  function buildPanel() {
+    injectStyle();
+    panel = document.createElement('div');
+    panel.id = '__photolib';
+    panel.innerHTML =
+      '<div class="__pl_card">' +
+        '<div class="__pl_hdr" id="__pl_hdr">' +
+          '<span class="__pl_eyebrow">Gheloo</span>' +
+          '<span class="__pl_title">Photo Library</span>' +
+          '<span class="__pl_close" id="__pl_close">&times;</span>' +
+        '</div>' +
+        '<div class="__pl_tabs">' +
+          '<div class="__pl_tab active" data-tab="upload">Upload</div>' +
+          '<div class="__pl_tab" data-tab="library">Library</div>' +
+          '<div class="__pl_tab" data-tab="templates">Templates</div>' +
+        '</div>' +
+        '<div id="__pl_body">' +
+          '<div class="__pl_tabpane active" id="__pl_pane_upload"></div>' +
+          '<div class="__pl_tabpane" id="__pl_pane_library"></div>' +
+          '<div class="__pl_tabpane" id="__pl_pane_templates"></div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(panel);
+    panel.style.display = 'none';
+
+    panel.querySelectorAll('.__pl_tab').forEach(function(tabEl) {
+      tabEl.addEventListener('click', function() { _switchTab(tabEl.dataset.tab); });
+    });
+
+    window.__ghk_makeDraggable(panel, panel.querySelector('#__pl_hdr'), '__ghk_pl_pos', function(e) {
+      return e.target.id === '__pl_close';
+    });
+
+    panel.querySelector('#__pl_close').addEventListener('click', function() { panel.style.display = 'none'; });
+
+    _renderUploadTab();
+    _renderLibraryTab();
+    _renderTemplatesTab();
+  }
+
+  function init() {
+    _loadPhotos();
+    _loadTemplates();
+    buildPanel();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() { window.__ghk_ready(init); });
+  } else {
+    window.__ghk_ready(init);
+  }
+})();

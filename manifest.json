@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Gheloo",
+  "version": "2.2",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png"
+    }
+  },
+  "description": "Leet+",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["tabs"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.leet.city/hotel"],
+      "js": ["ws-url.js", "ui-loading.js", "pkt.js", "ws.js", "parsers.js", "supabase.js", "ui-logger.js", "ui-sender.js", "ui-macros.js", "ui-colorparty.js", "ui-guitarhero.js", "ui-friendbot.js", "ui-marktplaats.js", "ui-mimic.js", "ui-test.js", "ui-extensions.js", "content.js",
+        "extensions/furni-hider.js",
+        "extensions/room-clone.js",
+        "extensions/photo-library.js",
+        "extensions/room-inspector.js",
+        "extensions/area-mover.js",
+        "extensions/user-database.js",
+        "extensions/room-history.js",
+        "extensions/marktplaats-alerts.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://www.leet.city/hotel"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["users.html", "users.js"],
+      "matches": ["https://www.leet.city/*"]
+    }
+  ],
+  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://ipapi.co/*", "https://flagcdn.com/*"]
+}
