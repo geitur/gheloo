@@ -17,7 +17,7 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["tabs"],
+  "permissions": ["tabs", "alarms", "storage"],
   "content_scripts": [
     {
       "matches": ["https://www.leet.city/hotel"],
@@ -47,5 +47,5 @@
       "matches": ["https://www.leet.city/*"]
     }
   ],
-  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://ipapi.co/*", "https://flagcdn.com/*"]
+  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://ipapi.co/*", "https://flagcdn.com/*", "https://gist.githubusercontent.com/*"]
 }
