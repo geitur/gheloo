@@ -28,7 +28,7 @@ async function checkForUpdate() {
     var current = chrome.runtime.getManifest().version;
     var hasUpdate = !!data.version && compareVersions(data.version, current) > 0;
 
-    await chrome.storage.local.set({ updateAvailable: hasUpdate });
+    await chrome.storage.local.set({ updateAvailable: hasUpdate, latestVersion: data.version });
     if (hasUpdate) {
       chrome.action.setBadgeText({ text: '!' });
       chrome.action.setBadgeBackgroundColor({ color: '#e11d48' });
