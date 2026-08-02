@@ -50,5 +50,5 @@
       "all_frames": true
     }
   ],
-  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://ipapi.co/*", "https://flagcdn.com/*", "https://gist.githubusercontent.com/*"]
+  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://ipapi.co/*", "https://flagcdn.com/*", "https://api.github.com/*"]
 }

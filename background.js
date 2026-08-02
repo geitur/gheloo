@@ -4,7 +4,10 @@ chrome.runtime.onMessage.addListener(function(msg) {
   }
 });
 
-var UPDATE_CHECK_URL = 'https://gist.githubusercontent.com/geitur/f4ef3677067e8529037fcbe37879134f/raw/version.json';
+// gist.githubusercontent.com's raw CDN caches aggressively and ignores cache-busting query
+// strings, so a freshly-edited gist can read stale for several minutes there. The Gists API
+// isn't behind that CDN and reflects edits immediately, so use that instead.
+var UPDATE_CHECK_URL = 'https://api.github.com/gists/f4ef3677067e8529037fcbe37879134f';
 var RELEASES_URL     = 'https://github.com/geitur/gheloo/releases/latest';
 
 function compareVersions(a, b) {
@@ -19,9 +22,12 @@ function compareVersions(a, b) {
 
 async function checkForUpdate() {
   try {
-    var res = await fetch(UPDATE_CHECK_URL + '?_=' + Date.now());
+    var res = await fetch(UPDATE_CHECK_URL);
     if (!res.ok) return;
-    var data = await res.json();
+    var gist = await res.json();
+    var file = gist.files && gist.files['version.json'];
+    if (!file || !file.content) return;
+    var data = JSON.parse(file.content);
     var current = chrome.runtime.getManifest().version;
     var hasUpdate = !!data.version && compareVersions(data.version, current) > 0;
 
