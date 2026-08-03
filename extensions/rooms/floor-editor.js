@@ -190,6 +190,7 @@
         clearTimeout(_renderTilesDebounce);
         _renderTilesDebounce = null;
       }
+      _dragOrigin = null;
     }
   }
 
@@ -281,8 +282,7 @@
     const originalRelease = window.FloorplanEditor.onPointerRelease.bind(window.FloorplanEditor);
     window.FloorplanEditor.onPointerRelease = function(e) {
       originalRelease(e);
-      if (!window.__fe_isEnabled()) return;
-      if (_dragOrigin) window.RoomEngine.areaSelectionManager().deactivate();
+      if (window.__fe_isEnabled() && _dragOrigin) window.RoomEngine.areaSelectionManager().deactivate();
       _dragOrigin = null;
     };
 
