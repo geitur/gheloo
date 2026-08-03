@@ -75,20 +75,20 @@
   // the real client: `let s = t[a] && t[a][i] || false`, an occupied-tiles boolean grid)
   // — undefined throws immediately on the first row. The source extension always passes
   // a value called `originalOccupiedTiles`, read off a different object than
-  // FloorplanEditor itself (one this codebase has no handle on), so the exact property
-  // name on window.FloorplanEditor is NOT confirmed from static source. Probe a few
-  // plausible names; if none match, fall back to an empty array — t[a] on an empty
-  // array safely returns undefined (no throw, unlike literal undefined), so every tile
-  // is just treated as "not occupied" rather than crashing. Logs once so the real
-  // property name can still be found and wired in later if it matters.
+  // FloorplanEditor itself (one this codebase has no handle on) — but the real data is
+  // available anyway: FloorplanEditor's own live _tilemap[row][col] is a grid of tile
+  // objects (confirmed against a real client: `{_height, _isBlocked}`, e.g.
+  // JSON.stringify(window.FloorplanEditor._tilemap[7])), and _isBlocked is exactly the
+  // per-tile boolean setTilemap's second argument expects (matches its own real source:
+  // `let s = t[a] && t[a][i] || false; ...; new iX(heightChar, s)`). Reading it straight
+  // off the CURRENT _tilemap (before we overwrite it) preserves the darker "has furni"
+  // rendering across Undo/Expand instead of wiping it to "nothing occupied".
   function _occupiedTilesSnapshot() {
-    const fe = window.FloorplanEditor;
-    const candidates = ['_originalOccupiedTiles', 'originalOccupiedTiles', '_occupiedTiles', 'occupiedTiles'];
-    for (let i = 0; i < candidates.length; i++) {
-      if (fe && fe[candidates[i]] !== undefined) return fe[candidates[i]];
-    }
-    window.__fe_log('warning: no occupied-tiles property found on FloorplanEditor (keys: ' + (fe ? Object.keys(fe).join(',') : 'n/a') + ') — using empty array (all tiles treated as unoccupied)');
-    return [];
+    const tilemap = window.FloorplanEditor && window.FloorplanEditor._tilemap;
+    if (!tilemap) return [];
+    return tilemap.map(function(row) {
+      return row ? row.map(function(tile) { return !!(tile && tile._isBlocked); }) : [];
+    });
   }
 
   function _ensureFloorEditorButtons() {
