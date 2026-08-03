@@ -159,9 +159,13 @@
         e.stopImmediatePropagation();
         if (!window.__fe_isEnabled()) return;
         if (_originalTilemap === null) return;
-        window.FloorplanEditor.setTilemap(_originalTilemap, _occupiedTilesSnapshot());
-        window.FloorplanEditor.renderTiles();
-        window.__fe_log('undo: restored original tilemap');
+        try {
+          window.FloorplanEditor.setTilemap(_originalTilemap, _occupiedTilesSnapshot());
+          window.FloorplanEditor.renderTiles();
+          window.__fe_log('undo: restored original tilemap');
+        } catch (err) {
+          window.__fe_log('undo error: ' + (err && err.message ? err.message : err));
+        }
       }, true);
     }
 
@@ -173,10 +177,14 @@
     expandBtn.textContent = 'Expand';
     expandBtn.addEventListener('click', function() {
       if (!window.__fe_isEnabled()) return;
-      const next = _expandTilemap(window.FloorplanEditor.getCurrentTilemapString());
-      window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
-      window.FloorplanEditor.renderTiles();
-      window.__fe_log('expand: tilemap padded to 64x64');
+      try {
+        const next = _expandTilemap(window.FloorplanEditor.getCurrentTilemapString());
+        window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
+        window.FloorplanEditor.renderTiles();
+        window.__fe_log('expand: tilemap padded to 64x64');
+      } catch (err) {
+        window.__fe_log('expand error: ' + (err && err.message ? err.message : err));
+      }
     });
 
     const shrinkBtn = document.createElement('div');
@@ -185,10 +193,14 @@
     shrinkBtn.textContent = 'Shrink';
     shrinkBtn.addEventListener('click', function() {
       if (!window.__fe_isEnabled()) return;
-      const next = _shrinkTilemap(window.FloorplanEditor.getCurrentTilemapString(), window.FloorplanEditor.doorLocation);
-      window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
-      window.FloorplanEditor.renderTiles();
-      window.__fe_log('shrink: tilemap cropped to bounding box');
+      try {
+        const next = _shrinkTilemap(window.FloorplanEditor.getCurrentTilemapString(), window.FloorplanEditor.doorLocation);
+        window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
+        window.FloorplanEditor.renderTiles();
+        window.__fe_log('shrink: tilemap cropped to bounding box');
+      } catch (err) {
+        window.__fe_log('shrink error: ' + (err && err.message ? err.message : err));
+      }
     });
 
     primaryBtn.parentElement.appendChild(expandBtn);
