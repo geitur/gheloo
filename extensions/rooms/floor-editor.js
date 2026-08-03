@@ -97,21 +97,24 @@
   // ── Snapshot of the tilemap when the editor opened, for the Undo hook.
   let _originalTilemap = null;
 
-  // setTilemap's second argument is some "occupied tiles" snapshot — the source
-  // extension always passes a value called `originalOccupiedTiles`, but read off a
-  // different object than FloorplanEditor itself (one this codebase has no handle on),
-  // so the exact property name on window.FloorplanEditor is NOT confirmed from static
-  // source. Probe a few plausible names rather than hardcoding a guess; if none match,
-  // log the real Object.keys() so the actual name can be read off a live client and
-  // this function fixed in one line.
+  // setTilemap's second argument is read as t[row][col] internally (confirmed against
+  // the real client: `let s = t[a] && t[a][i] || false`, an occupied-tiles boolean grid)
+  // — undefined throws immediately on the first row. The source extension always passes
+  // a value called `originalOccupiedTiles`, read off a different object than
+  // FloorplanEditor itself (one this codebase has no handle on), so the exact property
+  // name on window.FloorplanEditor is NOT confirmed from static source. Probe a few
+  // plausible names; if none match, fall back to an empty array — t[a] on an empty
+  // array safely returns undefined (no throw, unlike literal undefined), so every tile
+  // is just treated as "not occupied" rather than crashing. Logs once so the real
+  // property name can still be found and wired in later if it matters.
   function _occupiedTilesSnapshot() {
     const fe = window.FloorplanEditor;
     const candidates = ['_originalOccupiedTiles', 'originalOccupiedTiles', '_occupiedTiles', 'occupiedTiles'];
     for (let i = 0; i < candidates.length; i++) {
       if (fe && fe[candidates[i]] !== undefined) return fe[candidates[i]];
     }
-    window.__fe_log('warning: no occupied-tiles property found on FloorplanEditor (keys: ' + (fe ? Object.keys(fe).join(',') : 'n/a') + ') — passing undefined to setTilemap');
-    return undefined;
+    window.__fe_log('warning: no occupied-tiles property found on FloorplanEditor (keys: ' + (fe ? Object.keys(fe).join(',') : 'n/a') + ') — using empty array (all tiles treated as unoccupied)');
+    return [];
   }
 
   function _ensureFloorEditorButtons() {
