@@ -1,11 +1,14 @@
 (function() {
   if (window.__fe_log) return; // singleton guard — no panel element to key off, this file has no floating UI of its own
 
-  // Floor Editor Tools — injects Expand/Shrink buttons and an Undo hook into Nitro's
-  // native floorplan editor, live-previews tilemap edits on the actual 3D room floor,
-  // and lets you drag-select tiles directly on the room instead of only the small
-  // editor grid. Ported from a competitor extension ("hibisco"), minus its Fill and
-  // Autofloor buttons. Full design/risk notes: docs/superpowers/specs/2026-08-03-floor-editor-design.md.
+  // Floor Editor Tools — repurposes Nitro's native floorplan editor buttons: the
+  // primary button becomes Undo, the (normally disabled) Preview button becomes Expand.
+  // Also live-previews tilemap edits on the actual 3D room floor and lets you drag-select
+  // tiles directly on the room instead of only the small editor grid. Ported from a
+  // competitor extension ("hibisco"), minus its Fill, Autofloor, and Shrink (Shrink's
+  // pure-bounding-box approach turned out unusable on rooms with stray disconnected
+  // walkable tiles — see live-testing notes in the design doc). Full design/risk notes:
+  // docs/superpowers/specs/2026-08-03-floor-editor-design.md.
   //
   // No floating Gheloo panel — everything here either patches the native editor's own
   // DOM/behavior, or (this box) is a minimal on-screen log, since there's no devtools
@@ -65,35 +68,6 @@
     return padded.join('\r');
   }
 
-  function _shrinkTilemap(tilemapString, doorLocation) {
-    const rows = tilemapString.split('\r');
-    let minX = 100, minY = 100, maxX = 0, maxY = 0;
-    for (let y = 0; y < rows.length; y++) {
-      const row = rows[y] || '';
-      for (let x = 0; x < row.length; x++) {
-        if (row[x] === 'x') continue;
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
-    }
-    if (doorLocation) {
-      if (doorLocation.x < minX) minX = doorLocation.x;
-      if (doorLocation.x > maxX) maxX = doorLocation.x;
-      if (doorLocation.y < minY) minY = doorLocation.y;
-      if (doorLocation.y > maxY) maxY = doorLocation.y;
-    }
-    const out = [];
-    for (let y = minY; y <= maxY; y++) {
-      const row = rows[y] || '';
-      let line = '';
-      for (let x = minX; x <= maxX; x++) line += row[x] || 'x';
-      out.push(line);
-    }
-    return out.join('\r');
-  }
-
   // ── Snapshot of the tilemap when the editor opened, for the Undo hook.
   let _originalTilemap = null;
 
@@ -128,7 +102,7 @@
     //   RoomEngine.areaSelectionManager() internally for their own purposes; driving the
     //   same singleton from here conflicts with that and throws inside native code
     //   (dX.processAreaSelection/onClick) on release.
-    // Expand/Shrink/Undo don't depend on either — they only touch the small editor grid,
+    // Expand/Undo don't depend on either — they only touch the small editor grid,
     // native and unpatched. See docs/superpowers/specs/2026-08-03-floor-editor-design.md.
     // _patchRenderTilesForLivePreview();
     // _patchPointerHandlersForDragSelect();
@@ -175,52 +149,42 @@
       }, true);
     }
 
-    if (document.querySelector('.__fe_expand_btn')) return; // already injected
-
-    const expandBtn = document.createElement('div');
-    expandBtn.className = 'd-flex align-items-center justify-content-center btn btn-primary btn-sm __fe_expand_btn';
-    expandBtn.style.marginLeft = '2px';
-    expandBtn.textContent = 'Expand';
-    expandBtn.addEventListener('click', function() {
-      if (!window.__fe_isEnabled()) return;
-      if (_originalTilemap === null) return;
-      try {
-        // Reads _originalTileMap (the tilemap as of editor-open), not
-        // getCurrentTilemapString() — confirmed unreliable in live testing (internal
-        // _tilemap array doesn't stay in sync with _height/_width outside native code's
-        // own control flow, throws when read externally). Tradeoff: acts on the opened
-        // state, not any native edits already made in this session before clicking.
-        const next = _expandTilemap(_originalTilemap);
-        window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
-        window.FloorplanEditor.renderTiles();
-        window.__fe_log('expand: tilemap padded to 64x64');
-      } catch (err) {
-        window.__fe_log('expand error: ' + (err && err.message ? err.message : err));
-      }
-    });
-
-    const shrinkBtn = document.createElement('div');
-    shrinkBtn.className = 'd-flex align-items-center justify-content-center btn btn-primary btn-sm __fe_shrink_btn';
-    shrinkBtn.style.marginLeft = '2px';
-    shrinkBtn.textContent = 'Shrink';
-    shrinkBtn.addEventListener('click', function() {
-      if (!window.__fe_isEnabled()) return;
-      if (_originalTilemap === null) return;
-      try {
-        // See the Expand handler above — reads _originalTileMap, not
-        // getCurrentTilemapString(), for the same reliability reason.
-        const next = _shrinkTilemap(_originalTilemap, window.FloorplanEditor.doorLocation);
-        window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
-        window.FloorplanEditor.renderTiles();
-        window.__fe_log('shrink: tilemap cropped to bounding box');
-      } catch (err) {
-        window.__fe_log('shrink error: ' + (err && err.message ? err.message : err));
-      }
-    });
-
-    undoBtn.parentElement.appendChild(expandBtn);
-    undoBtn.parentElement.appendChild(shrinkBtn);
-    window.__fe_log('buttons injected');
+    // Relabel + rehook the native (normally disabled) Preview button as Expand — reuses
+    // its existing slot in the button row instead of injecting a new element, so the row
+    // reads Undo | Expand | Import/Export | Opslaan, matching native layout/order.
+    // Matched by position (first child of .btn-group), not text, since its label changes
+    // to "Expand" after the first pass and text-matching would stop finding it.
+    const previewBtn = document.querySelector('.nitro-floorplan-editor .btn-group > .btn-sm.btn-primary:first-child');
+    if (!previewBtn) return;
+    if (previewBtn.textContent.trim() !== 'Expand') {
+      previewBtn.textContent = 'Expand';
+      previewBtn.classList.remove('disabled');
+      previewBtn.replaceWith(previewBtn.cloneNode(true)); // strips native listeners
+    }
+    const expandBtn = document.querySelector('.nitro-floorplan-editor .btn-group > .btn-sm.btn-primary:first-child');
+    if (expandBtn && !expandBtn.dataset.feHooked) {
+      expandBtn.dataset.feHooked = '1';
+      expandBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (!window.__fe_isEnabled()) return;
+        if (_originalTilemap === null) return;
+        try {
+          // Reads _originalTileMap (the tilemap as of editor-open), not
+          // getCurrentTilemapString() — confirmed unreliable in live testing (internal
+          // _tilemap array doesn't stay in sync with _height/_width outside native
+          // code's own control flow, throws when read externally). Tradeoff: acts on
+          // the opened state, not any native edits already made first in this session.
+          const next = _expandTilemap(_originalTilemap);
+          window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
+          window.FloorplanEditor.renderTiles();
+          window.__fe_log('expand: tilemap padded to 64x64');
+        } catch (err) {
+          window.__fe_log('expand error: ' + (err && err.message ? err.message : err));
+        }
+      }, true);
+    }
+    window.__fe_log('buttons wired');
   }
 
   function _resetOnEditorClose() {
@@ -236,9 +200,9 @@
   }
 
   // ── Live preview — patches FloorplanEditor.renderTiles exactly once so every edit
-  // (native click, Expand, Shrink, Undo) also rebuilds the actual 3D room floor, not
-  // just the small editor grid. Debounced so a fast drag across many tiles doesn't
-  // trigger a rebuild per tile.
+  // (native click, Expand, Undo) also rebuilds the actual 3D room floor, not just the
+  // small editor grid. Debounced so a fast drag across many tiles doesn't trigger a
+  // rebuild per tile. Currently disabled — see _ensureFloorEditorButtons.
   let _renderTilesDebounce = null;
   function _patchRenderTilesForLivePreview() {
     if (!window.FloorplanEditor || window.FloorplanEditor.__fePatched) return;
