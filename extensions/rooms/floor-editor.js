@@ -74,17 +74,15 @@
   function _ensureFloorEditorButtons() {
     if (!window.__fe_isEnabled()) return;
     if (!window.FloorplanEditor) return;
-    // Both disabled pending live-testing fixes — confirmed broken against a real client:
-    // - live preview: window.Room.wallHeight comes back -1 (likely a "use server default"
-    //   sentinel, not a real height), which corrupts FloorplanEditor's own internal grid
-    //   once fed through FloorHeightMapMessageParser and pushed into the live room.
-    // - drag-select: FloorplanEditor's native onPointerDown/Move/Release already drive
-    //   RoomEngine.areaSelectionManager() internally for their own purposes; driving the
-    //   same singleton from here conflicts with that and throws inside native code
-    //   (dX.processAreaSelection/onClick) on release.
-    // Expand/Undo don't depend on either — they only touch the small editor grid,
-    // native and unpatched. See docs/superpowers/specs/2026-08-03-floor-editor-design.md.
-    // _patchRenderTilesForLivePreview();
+    // Live preview re-enabled with a wallHeight sanity guard (see
+    // _patchRenderTilesForLivePreview) after the corruption it caused was traced to
+    // window.Room.wallHeight coming back -1 for at least one real room. Drag-select
+    // stays disabled — that one's a genuine conflict with FloorplanEditor's own native
+    // pointer handlers already driving the same RoomEngine.areaSelectionManager()
+    // singleton, throwing inside native code (dX.processAreaSelection/onClick) on
+    // release; not a bad-value problem a guard can fix. See
+    // docs/superpowers/specs/2026-08-03-floor-editor-design.md.
+    _patchRenderTilesForLivePreview();
     // _patchPointerHandlersForDragSelect();
     const primaryBtn = document.querySelector('.nitro-floorplan-editor .d-flex.justify-content-between > .btn-sm.btn-primary');
     if (!primaryBtn) return;
@@ -197,8 +195,18 @@
       _renderTilesDebounce = setTimeout(function() {
         if (!window.__fe_isEnabled()) return;
         try {
-          const tilemapString = window.FloorplanEditor.getCurrentTilemapString();
           const wallHeight = window.Room && window.Room.wallHeight;
+          // window.Room.wallHeight came back -1 for at least one real room in live
+          // testing, which FloorHeightMapMessageParser treats as a literal height
+          // rather than a sentinel, producing a malformed room model that corrupted
+          // FloorplanEditor's own internal state once pushed into the live room. Until
+          // there's a confirmed valid source for this, skip rather than repeat that —
+          // safe no-op instead of another corruption chase.
+          if (typeof wallHeight !== 'number' || wallHeight <= 0) {
+            window.__fe_log('live preview skipped: window.Room.wallHeight looks invalid (' + wallHeight + ')');
+            return;
+          }
+          const tilemapString = window.FloorplanEditor.getCurrentTilemapString();
           const scale = window.Room && window.Room.floorPlanScale;
           const door = window.FloorplanEditor.doorLocation;
           if (!door) { window.__fe_log('live preview skipped: no doorLocation'); return; }
