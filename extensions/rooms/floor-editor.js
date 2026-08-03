@@ -117,8 +117,18 @@
   function _ensureFloorEditorButtons() {
     if (!window.__fe_isEnabled()) return;
     if (!window.FloorplanEditor) return;
-    _patchRenderTilesForLivePreview();
-    _patchPointerHandlersForDragSelect();
+    // Both disabled pending live-testing fixes — confirmed broken against a real client:
+    // - live preview: window.Room.wallHeight comes back -1 (likely a "use server default"
+    //   sentinel, not a real height), which corrupts FloorplanEditor's own internal grid
+    //   once fed through FloorHeightMapMessageParser and pushed into the live room.
+    // - drag-select: FloorplanEditor's native onPointerDown/Move/Release already drive
+    //   RoomEngine.areaSelectionManager() internally for their own purposes; driving the
+    //   same singleton from here conflicts with that and throws inside native code
+    //   (dX.processAreaSelection/onClick) on release.
+    // Expand/Shrink/Undo don't depend on either — they only touch the small editor grid,
+    // native and unpatched. See docs/superpowers/specs/2026-08-03-floor-editor-design.md.
+    // _patchRenderTilesForLivePreview();
+    // _patchPointerHandlersForDragSelect();
     const primaryBtn = document.querySelector('.nitro-floorplan-editor .d-flex.justify-content-between > .btn-sm.btn-primary');
     if (!primaryBtn) return;
 
