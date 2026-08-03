@@ -147,6 +147,7 @@
       undoBtn.addEventListener('click', function(e) {
         e.preventDefault();
         e.stopImmediatePropagation();
+        if (!window.__fe_isEnabled()) return;
         if (_originalTilemap === null) return;
         window.FloorplanEditor.setTilemap(_originalTilemap, _occupiedTilesSnapshot());
         window.FloorplanEditor.renderTiles();
@@ -161,6 +162,7 @@
     expandBtn.style.marginLeft = '2px';
     expandBtn.textContent = 'Expand';
     expandBtn.addEventListener('click', function() {
+      if (!window.__fe_isEnabled()) return;
       const next = _expandTilemap(window.FloorplanEditor.getCurrentTilemapString());
       window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
       window.FloorplanEditor.renderTiles();
@@ -172,6 +174,7 @@
     shrinkBtn.style.marginLeft = '2px';
     shrinkBtn.textContent = 'Shrink';
     shrinkBtn.addEventListener('click', function() {
+      if (!window.__fe_isEnabled()) return;
       const next = _shrinkTilemap(window.FloorplanEditor.getCurrentTilemapString(), window.FloorplanEditor.doorLocation);
       window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
       window.FloorplanEditor.renderTiles();
@@ -190,6 +193,7 @@
         clearTimeout(_renderTilesDebounce);
         _renderTilesDebounce = null;
       }
+      if (_dragOrigin && window.RoomEngine) window.RoomEngine.areaSelectionManager().deactivate();
       _dragOrigin = null;
     }
   }
@@ -282,7 +286,7 @@
     const originalRelease = window.FloorplanEditor.onPointerRelease.bind(window.FloorplanEditor);
     window.FloorplanEditor.onPointerRelease = function(e) {
       originalRelease(e);
-      if (window.__fe_isEnabled() && _dragOrigin) window.RoomEngine.areaSelectionManager().deactivate();
+      if (_dragOrigin) window.RoomEngine.areaSelectionManager().deactivate();
       _dragOrigin = null;
     };
 
@@ -291,6 +295,7 @@
 
   function init() {
     if (_on) _ensureLogBox();
+    if (window.__fe_loadError) window.__fe_log('bundle load error: ' + window.__fe_loadError);
     _ensureFloorEditorButtons();
     if (document.body && typeof MutationObserver !== 'undefined') {
       let scheduled = false;
