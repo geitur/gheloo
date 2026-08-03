@@ -119,7 +119,7 @@
     if (!window.FloorplanEditor) return;
     _patchRenderTilesForLivePreview();
     _patchPointerHandlersForDragSelect();
-    const primaryBtn = document.querySelector('.nitro-floorplan-editor .d-flex > .btn-sm.btn-primary');
+    const primaryBtn = document.querySelector('.nitro-floorplan-editor .d-flex.justify-content-between > .btn-sm.btn-primary');
     if (!primaryBtn) return;
 
     if (_originalTilemap === null) {
@@ -141,7 +141,7 @@
       primaryBtn.textContent = 'Undo';
       primaryBtn.replaceWith(primaryBtn.cloneNode(true)); // strips native listeners
     }
-    const undoBtn = document.querySelector('.nitro-floorplan-editor .d-flex > .btn-sm.btn-primary');
+    const undoBtn = document.querySelector('.nitro-floorplan-editor .d-flex.justify-content-between > .btn-sm.btn-primary');
     if (undoBtn && !undoBtn.dataset.feHooked) {
       undoBtn.dataset.feHooked = '1';
       undoBtn.addEventListener('click', function(e) {
