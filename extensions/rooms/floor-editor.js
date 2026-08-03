@@ -151,8 +151,11 @@
       primaryBtn.textContent = 'Undo';
       primaryBtn.replaceWith(primaryBtn.cloneNode(true)); // strips native listeners
     }
+    // Re-query rather than reuse primaryBtn — replaceWith() above (when it ran) detached
+    // the original node, leaving primaryBtn.parentElement null from here on.
     const undoBtn = document.querySelector('.nitro-floorplan-editor .d-flex.justify-content-between > .btn-sm.btn-primary');
-    if (undoBtn && !undoBtn.dataset.feHooked) {
+    if (!undoBtn) return;
+    if (!undoBtn.dataset.feHooked) {
       undoBtn.dataset.feHooked = '1';
       undoBtn.addEventListener('click', function(e) {
         e.preventDefault();
@@ -177,8 +180,14 @@
     expandBtn.textContent = 'Expand';
     expandBtn.addEventListener('click', function() {
       if (!window.__fe_isEnabled()) return;
+      if (_originalTilemap === null) return;
       try {
-        const next = _expandTilemap(window.FloorplanEditor.getCurrentTilemapString());
+        // Reads _originalTileMap (the tilemap as of editor-open), not
+        // getCurrentTilemapString() — confirmed unreliable in live testing (internal
+        // _tilemap array doesn't stay in sync with _height/_width outside native code's
+        // own control flow, throws when read externally). Tradeoff: acts on the opened
+        // state, not any native edits already made in this session before clicking.
+        const next = _expandTilemap(_originalTilemap);
         window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
         window.FloorplanEditor.renderTiles();
         window.__fe_log('expand: tilemap padded to 64x64');
@@ -193,8 +202,11 @@
     shrinkBtn.textContent = 'Shrink';
     shrinkBtn.addEventListener('click', function() {
       if (!window.__fe_isEnabled()) return;
+      if (_originalTilemap === null) return;
       try {
-        const next = _shrinkTilemap(window.FloorplanEditor.getCurrentTilemapString(), window.FloorplanEditor.doorLocation);
+        // See the Expand handler above — reads _originalTileMap, not
+        // getCurrentTilemapString(), for the same reliability reason.
+        const next = _shrinkTilemap(_originalTilemap, window.FloorplanEditor.doorLocation);
         window.FloorplanEditor.setTilemap(next, _occupiedTilesSnapshot());
         window.FloorplanEditor.renderTiles();
         window.__fe_log('shrink: tilemap cropped to bounding box');
@@ -203,8 +215,8 @@
       }
     });
 
-    primaryBtn.parentElement.appendChild(expandBtn);
-    primaryBtn.parentElement.appendChild(shrinkBtn);
+    undoBtn.parentElement.appendChild(expandBtn);
+    undoBtn.parentElement.appendChild(shrinkBtn);
     window.__fe_log('buttons injected');
   }
 
