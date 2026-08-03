@@ -183,7 +183,13 @@
   }
 
   function _resetOnEditorClose() {
-    if (!document.querySelector('.nitro-floorplan-editor')) _originalTilemap = null;
+    if (!document.querySelector('.nitro-floorplan-editor')) {
+      _originalTilemap = null;
+      if (_renderTilesDebounce) {
+        clearTimeout(_renderTilesDebounce);
+        _renderTilesDebounce = null;
+      }
+    }
   }
 
   // ── Live preview — patches FloorplanEditor.renderTiles exactly once so every edit
@@ -202,6 +208,7 @@
       if (!window.__fe_isEnabled()) return result;
       if (_renderTilesDebounce) clearTimeout(_renderTilesDebounce);
       _renderTilesDebounce = setTimeout(function() {
+        if (!window.__fe_isEnabled()) return;
         try {
           const tilemapString = window.FloorplanEditor.getCurrentTilemapString();
           const wallHeight = window.Room && window.Room.wallHeight;
