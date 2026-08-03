@@ -3,10 +3,32 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     chrome.tabs.sendMessage(msg.tabId, { type: 'apply_figure', figure: msg.figure, gender: msg.gender });
   }
   if (msg && msg.type === 'get_room_viewer_bundle') {
+    var tabId = sender.tab && sender.tab.id;
+    if (tabId == null) { sendResponse({ ok: false, error: 'no sender tab' }); return; }
     getRoomViewerBundle().then(function(code) {
-      sendResponse({ code: code });
+      // Injected via chrome.scripting.executeScript, NOT a page-created <script src="blob:">
+      // tag — the latter is a DOM element the page's own CSP evaluates (indistinguishable
+      // from the page adding it itself), which is why that approach could silently fail
+      // partway through on strict host pages with no catchable JS exception to explain why.
+      // Content scripts injected through this API (like every other file in this extension,
+      // declared in manifest.json's content_scripts) are exempt from the page's CSP — same
+      // exemption, just invoked dynamically instead of declaratively at document_start.
+      return chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        world: 'MAIN',
+        func: function(src) {
+          try {
+            new Function(src)();
+          } catch (e) {
+            window.__rv_loadError = (e && e.stack) ? e.stack : String(e);
+          }
+        },
+        args: [code]
+      });
+    }).then(function() {
+      sendResponse({ ok: true });
     }).catch(function(err) {
-      sendResponse({ code: null, error: String(err) });
+      sendResponse({ ok: false, error: String(err) });
     });
     return true; // keep the message channel open for the async sendResponse above
   }

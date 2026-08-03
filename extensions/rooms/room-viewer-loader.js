@@ -2,10 +2,17 @@
   // The off-screen room renderer (window.__rv_renderThumbnail, window.__rv_getEngine)
   // lives in a bundle hosted outside this repo (see core/bridge.js) — fetched once and
   // cached in IndexedDB from then on, so a normal Gheloo update never re-ships its
-  // ~3.6MB. This loader is the small part that always ships: it asks bridge.js for the
-  // bundle's code and injects it into the page as a real <script> (so it runs with its
-  // own top-level scope, same as any other content script here — a plain
-  // new Function(code)() would still work, but this survives page CSP more reliably).
+  // ~3.6MB. This loader is the small part that always ships: it asks bridge.js to fetch
+  // the bundle and have background.js inject it via chrome.scripting.executeScript
+  // (see background.js's 'get_room_viewer_bundle' handler) — NOT by building a
+  // <script src="blob:"> tag here and appending it to the page ourselves. That used to
+  // be how this worked, and it silently failed on strict-CSP pages: a page-created
+  // <script> element is a DOM node the page's own CSP evaluates, indistinguishable from
+  // the page adding it itself, so a block there throws no catchable JS exception —
+  // confirmed live as "renderer script ran but never registered" with no further info.
+  // chrome.scripting.executeScript is the same privileged, CSP-exempt injection channel
+  // every other file in this extension already gets via manifest.json's content_scripts,
+  // just invoked dynamically instead of declaratively at document_start.
   // Consumers: Room Clone's thumbnail rendering (extensions/rooms/room-clone.js) calls
   // __rv_ensureLoaded before its first __rv_renderThumbnail call each session.
   var _loading = false;
@@ -40,30 +47,17 @@
       window.removeEventListener('message', handler);
       clearTimeout(timeout);
 
-      if (!e.data.code) {
-        _finish(false, 'failed to fetch renderer: ' + (e.data.error || 'unknown error'));
+      // By the time this response arrives, background.js's executeScript call has
+      // already run the bundle's full synchronous top-level code in this page — so
+      // __rv_renderThumbnail (or __rv_loadError, from the bundle's own try/catch banner/
+      // footer, see esbuild.config.mjs) is already set one way or the other.
+      if (!e.data.ok) {
+        _finish(false, 'failed to load renderer: ' + (e.data.error || 'unknown error'));
         return;
       }
-      var blob = new Blob([e.data.code], { type: 'application/javascript' });
-      var url = URL.createObjectURL(blob);
-      var script = document.createElement('script');
-      script.src = url;
-      script.onload = function() {
-        URL.revokeObjectURL(url);
-        script.remove();
-        if (window.__rv_renderThumbnail) _finish(true);
-        // The bundle itself wraps its whole top-level execution in a try/catch (see
-        // esbuild.config.mjs) that stashes any thrown error here — surface the real
-        // reason instead of just "it didn't register", since there's no devtools access
-        // to go look for it directly.
-        else if (window.__rv_loadError) _finish(false, 'renderer threw during load: ' + window.__rv_loadError);
-        else _finish(false, 'renderer script ran but never registered — likely blocked partway through by page CSP');
-      };
-      script.onerror = function() {
-        URL.revokeObjectURL(url);
-        _finish(false, 'renderer script failed to execute — likely blocked by page CSP (blob: scripts not allowed)');
-      };
-      document.head.appendChild(script);
+      if (window.__rv_renderThumbnail) { _finish(true); return; }
+      if (window.__rv_loadError) { _finish(false, 'renderer threw during load: ' + window.__rv_loadError); return; }
+      _finish(false, 'renderer script ran but never registered — this is a real bug, not a CSP block, please report it');
     }
     window.addEventListener('message', handler);
     window.postMessage({ type: '__ghk_rv_request_bundle' }, '*');
