@@ -1,8 +1,62 @@
-chrome.runtime.onMessage.addListener(function(msg) {
+chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   if (msg && msg.type === 'apply_figure_to_tab') {
     chrome.tabs.sendMessage(msg.tabId, { type: 'apply_figure', figure: msg.figure, gender: msg.gender });
   }
+  if (msg && msg.type === 'get_room_viewer_bundle') {
+    getRoomViewerBundle().then(function(code) {
+      sendResponse({ code: code });
+    }).catch(function(err) {
+      sendResponse({ code: null, error: String(err) });
+    });
+    return true; // keep the message channel open for the async sendResponse above
+  }
 });
+
+// Room Viewer's renderer bundle lives outside this repo entirely (a separate public repo,
+// geitur/gheloo-assets) so a normal Gheloo update never re-ships its 3.6MB — fetched once
+// and cached in IndexedDB from then on. This has to happen here in the service worker, not
+// in core/bridge.js (a content script) — content script fetches are bound by the *page's*
+// CORS policy same as the page's own JS would be, so host_permissions doesn't bypass CORS
+// for them the way it does here. Confirmed live: the release asset's actual bytes get
+// served from Azure blob storage after GitHub's redirect, and that response has no CORS
+// headers at all — a content-script fetch to it fails with a generic "Failed to fetch",
+// while the exact same fetch from the background service worker succeeds.
+var RV_BUNDLE_VERSION = 'roomviewer-v1'; // bump only when the compiled bundle itself changes
+var RV_BUNDLE_URL = 'https://github.com/geitur/gheloo-assets/releases/download/' + RV_BUNDLE_VERSION + '/room-viewer.bundle.js';
+
+function rvOpenDb() {
+  return new Promise(function(resolve, reject) {
+    var req = indexedDB.open('gheloo-room-viewer', 1);
+    req.onupgradeneeded = function() { req.result.createObjectStore('bundles'); };
+    req.onsuccess = function() { resolve(req.result); };
+    req.onerror = function() { reject(req.error); };
+  });
+}
+function rvGetCached() {
+  return rvOpenDb().then(function(db) {
+    return new Promise(function(resolve) {
+      var tx = db.transaction('bundles', 'readonly');
+      var req = tx.objectStore('bundles').get(RV_BUNDLE_VERSION);
+      req.onsuccess = function() { resolve(req.result || null); };
+      req.onerror = function() { resolve(null); };
+    });
+  });
+}
+function rvSetCached(code) {
+  return rvOpenDb().then(function(db) {
+    var tx = db.transaction('bundles', 'readwrite');
+    tx.objectStore('bundles').put(code, RV_BUNDLE_VERSION);
+  });
+}
+async function getRoomViewerBundle() {
+  var cached = await rvGetCached();
+  if (cached) return cached;
+  var res = await fetch(RV_BUNDLE_URL);
+  if (!res.ok) throw new Error('fetch failed: ' + res.status);
+  var code = await res.text();
+  await rvSetCached(code);
+  return code;
+}
 
 // gist.githubusercontent.com's raw CDN caches aggressively and ignores cache-busting query
 // strings, so a freshly-edited gist can read stale for several minutes there. The Gists API
