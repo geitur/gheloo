@@ -24,14 +24,14 @@
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ on: _on })); } catch (_) {}
   }
 
-  // ── On-screen log — last 20 lines, fixed bottom-left, only rendered while enabled.
+  // ── On-screen log — last 20 lines, fixed top-right, only rendered while enabled.
   let _logBox = null;
   let _logLines = [];
   function _ensureLogBox() {
     if (_logBox || !_on) return;
     _logBox = document.createElement('div');
     _logBox.id = '__fe_log_box';
-    _logBox.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:999999;max-width:420px;max-height:220px;overflow-y:auto;background:rgba(10,11,16,0.85);color:#eceefb;font:10px/1.5 monospace;padding:6px 8px;border-radius:6px;pointer-events:none;white-space:pre-wrap;word-break:break-all';
+    _logBox.style.cssText = 'position:fixed;right:8px;top:8px;z-index:999999;max-width:420px;max-height:220px;overflow-y:auto;background:rgba(10,11,16,0.85);color:#eceefb;font:10px/1.5 monospace;padding:6px 8px;border-radius:6px;pointer-events:none;white-space:pre-wrap;word-break:break-all';
     document.body.appendChild(_logBox);
   }
   function _renderLog() {
