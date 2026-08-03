@@ -117,6 +117,7 @@
   function _ensureFloorEditorButtons() {
     if (!window.__fe_isEnabled()) return;
     if (!window.FloorplanEditor) return;
+    _patchRenderTilesForLivePreview();
     const primaryBtn = document.querySelector('.nitro-floorplan-editor .d-flex > .btn-sm.btn-primary');
     if (!primaryBtn) return;
 
@@ -183,6 +184,39 @@
 
   function _resetOnEditorClose() {
     if (!document.querySelector('.nitro-floorplan-editor')) _originalTilemap = null;
+  }
+
+  // ── Live preview — patches FloorplanEditor.renderTiles exactly once so every edit
+  // (native click, Expand, Shrink, Undo) also rebuilds the actual 3D room floor, not
+  // just the small editor grid. Debounced so a fast drag across many tiles doesn't
+  // trigger a rebuild per tile.
+  let _renderTilesDebounce = null;
+  function _patchRenderTilesForLivePreview() {
+    if (!window.FloorplanEditor || window.FloorplanEditor.__fePatched) return;
+    if (!window.__fe_applyTilemapLive) return; // bundle not loaded yet — retried on next MutationObserver tick
+    window.FloorplanEditor.__fePatched = true;
+
+    const originalRenderTiles = window.FloorplanEditor.renderTiles.bind(window.FloorplanEditor);
+    window.FloorplanEditor.renderTiles = function() {
+      const result = originalRenderTiles();
+      if (!window.__fe_isEnabled()) return result;
+      if (_renderTilesDebounce) clearTimeout(_renderTilesDebounce);
+      _renderTilesDebounce = setTimeout(function() {
+        try {
+          const tilemapString = window.FloorplanEditor.getCurrentTilemapString();
+          const wallHeight = window.Room && window.Room.wallHeight;
+          const scale = window.Room && window.Room.floorPlanScale;
+          const door = window.FloorplanEditor.doorLocation;
+          if (!door) { window.__fe_log('live preview skipped: no doorLocation'); return; }
+          const ok = window.__fe_applyTilemapLive(tilemapString, wallHeight, scale, door.x, door.y);
+          window.__fe_log(ok ? 'live preview applied' : 'live preview: applyTilemapLive returned false');
+        } catch (e) {
+          window.__fe_log('live preview error: ' + (e && e.message ? e.message : e));
+        }
+      }, 50);
+      return result;
+    };
+    window.__fe_log('renderTiles patched for live preview');
   }
 
   function init() {
