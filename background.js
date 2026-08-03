@@ -21,7 +21,15 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 // served from Azure blob storage after GitHub's redirect, and that response has no CORS
 // headers at all — a content-script fetch to it fails with a generic "Failed to fetch",
 // while the exact same fetch from the background service worker succeeds.
-var RV_BUNDLE_VERSION = 'roomviewer-v1'; // bump only when the compiled bundle itself changes
+// NOTE: 'roomviewer-v1' is permanently retired as a version string — it was reused for the
+// final v1 release, but it was ALSO the tag of the very first throwaway debug build from the
+// start of Room Viewer's development. getRoomViewerBundle() below caches by this exact string
+// in IndexedDB and never re-checks once a key has a cached entry, so anyone who had that early
+// debug build cached silently kept it forever after the "real" v1 was published under the same
+// name — no error, it just never re-fetched. Confirmed live: reloading the extension after the
+// v1 release swap brought back pre-fix behavior (no floor/wall, wrong wall item locations) for
+// exactly this reason. Always bump to a version string that has never been used before.
+var RV_BUNDLE_VERSION = 'roomviewer-v1.1'; // bump only when the compiled bundle itself changes
 var RV_BUNDLE_URL = 'https://github.com/geitur/gheloo-assets/releases/download/' + RV_BUNDLE_VERSION + '/room-viewer.bundle.js';
 
 function rvOpenDb() {
