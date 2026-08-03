@@ -4,5 +4,4 @@
 TestSite/
 docs/
 room-viewer-src/node_modules/
-extensions/floor-editor-src/node_modules/
 room-viewer.bundle.js

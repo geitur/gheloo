@@ -3,12 +3,14 @@
 
   // Floor Editor Tools — repurposes Nitro's native floorplan editor buttons: the
   // primary button becomes Undo, the (normally disabled) Preview button becomes Expand.
-  // Also live-previews tilemap edits on the actual 3D room floor and lets you drag-select
-  // tiles directly on the room instead of only the small editor grid. Ported from a
-  // competitor extension ("hibisco"), minus its Fill, Autofloor, and Shrink (Shrink's
-  // pure-bounding-box approach turned out unusable on rooms with stray disconnected
-  // walkable tiles — see live-testing notes in the design doc). Full design/risk notes:
-  // docs/superpowers/specs/2026-08-03-floor-editor-design.md.
+  // Ported from a competitor extension ("hibisco"), minus its Fill, Autofloor, Shrink
+  // (pure-bounding-box crop turned out unusable on rooms with stray disconnected
+  // walkable tiles), live 3D-room preview, and drag-select-on-the-room — both of the
+  // latter were built and live-tested but dropped: live preview corrupted
+  // FloorplanEditor's internal state on rooms where window.Room.wallHeight comes back
+  // -1, and drag-select conflicted with FloorplanEditor's own native pointer handlers
+  // already driving the same RoomEngine.areaSelectionManager() singleton. Full
+  // design/risk notes: docs/superpowers/specs/2026-08-03-floor-editor-design.md.
   //
   // No floating Gheloo panel — everything here patches the native editor's own
   // DOM/behavior directly.
@@ -25,9 +27,6 @@
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ on: _on })); } catch (_) {}
   }
 
-  // Console-only now — the on-screen log box was useful for initial live debugging but
-  // is gone now that the feature works; window.__fe_log stays as the logging entry
-  // point everything else already calls into, still visible in devtools if needed.
   window.__fe_log = function(msg) {
     console.log('[FloorEditor]', msg);
   };
@@ -74,16 +73,6 @@
   function _ensureFloorEditorButtons() {
     if (!window.__fe_isEnabled()) return;
     if (!window.FloorplanEditor) return;
-    // Live preview re-enabled with a wallHeight sanity guard (see
-    // _patchRenderTilesForLivePreview) after the corruption it caused was traced to
-    // window.Room.wallHeight coming back -1 for at least one real room. Drag-select
-    // stays disabled — that one's a genuine conflict with FloorplanEditor's own native
-    // pointer handlers already driving the same RoomEngine.areaSelectionManager()
-    // singleton, throwing inside native code (dX.processAreaSelection/onClick) on
-    // release; not a bad-value problem a guard can fix. See
-    // docs/superpowers/specs/2026-08-03-floor-editor-design.md.
-    _patchRenderTilesForLivePreview();
-    // _patchPointerHandlersForDragSelect();
     const primaryBtn = document.querySelector('.nitro-floorplan-editor .d-flex.justify-content-between > .btn-sm.btn-primary');
     if (!primaryBtn) return;
 
@@ -168,122 +157,10 @@
   function _resetOnEditorClose() {
     if (!document.querySelector('.nitro-floorplan-editor')) {
       _originalTilemap = null;
-      if (_renderTilesDebounce) {
-        clearTimeout(_renderTilesDebounce);
-        _renderTilesDebounce = null;
-      }
-      if (_dragOrigin && window.RoomEngine) window.RoomEngine.areaSelectionManager().deactivate();
-      _dragOrigin = null;
     }
   }
 
-  // ── Live preview — patches FloorplanEditor.renderTiles exactly once so every edit
-  // (native click, Expand, Undo) also rebuilds the actual 3D room floor, not just the
-  // small editor grid. Debounced so a fast drag across many tiles doesn't trigger a
-  // rebuild per tile. Currently disabled — see _ensureFloorEditorButtons.
-  let _renderTilesDebounce = null;
-  function _patchRenderTilesForLivePreview() {
-    if (!window.FloorplanEditor || window.FloorplanEditor.__fePatched) return;
-    if (!window.__fe_applyTilemapLive) return; // bundle not loaded yet — retried on next MutationObserver tick
-    window.FloorplanEditor.__fePatched = true;
-
-    const originalRenderTiles = window.FloorplanEditor.renderTiles.bind(window.FloorplanEditor);
-    window.FloorplanEditor.renderTiles = function() {
-      const result = originalRenderTiles();
-      if (!window.__fe_isEnabled()) return result;
-      if (_renderTilesDebounce) clearTimeout(_renderTilesDebounce);
-      _renderTilesDebounce = setTimeout(function() {
-        if (!window.__fe_isEnabled()) return;
-        try {
-          const wallHeight = window.Room && window.Room.wallHeight;
-          // window.Room.wallHeight came back -1 for at least one real room in live
-          // testing, which FloorHeightMapMessageParser treats as a literal height
-          // rather than a sentinel, producing a malformed room model that corrupted
-          // FloorplanEditor's own internal state once pushed into the live room. Until
-          // there's a confirmed valid source for this, skip rather than repeat that —
-          // safe no-op instead of another corruption chase.
-          if (typeof wallHeight !== 'number' || wallHeight <= 0) {
-            window.__fe_log('live preview skipped: window.Room.wallHeight looks invalid (' + wallHeight + ')');
-            return;
-          }
-          const tilemapString = window.FloorplanEditor.getCurrentTilemapString();
-          const scale = window.Room && window.Room.floorPlanScale;
-          const door = window.FloorplanEditor.doorLocation;
-          if (!door) { window.__fe_log('live preview skipped: no doorLocation'); return; }
-          const ok = window.__fe_applyTilemapLive(tilemapString, wallHeight, scale, door.x, door.y);
-          window.__fe_log(ok ? 'live preview applied' : 'live preview: applyTilemapLive returned false');
-        } catch (e) {
-          window.__fe_log('live preview error: ' + (e && e.message ? e.message : e));
-        }
-      }, 50);
-      return result;
-    };
-    window.__fe_log('renderTiles patched for live preview');
-  }
-
-  // ── Drag-select on the 3D room — patches FloorplanEditor's own pointer handlers so a
-  // click-drag on the actual room (not just the small editor grid) drives Gheloo's
-  // already-proven area-selection path (window.RoomEngine.areaSelectionManager(), the
-  // same one area-mover.js and room-clone.js already use for their own area capture) —
-  // deliberately NOT the source extension's raw _areaSelectionManager field access,
-  // since Gheloo already has a working method-based path to the same manager.
-  //
-  // Screen-to-tile conversion: offsetX/offsetY run through the isometric inverse
-  // projection the source extension uses. Its NitroPoint wrapper (new
-  // NitroPoint(offsetX, offsetY) then read .x/.y straight back off it) is provably a
-  // no-op passthrough — an empty-body subclass of a Point class inherits that
-  // constructor unchanged, so it just stores x/y as given — meaning the conversion
-  // below operates on raw offsetX/offsetY directly with no wrapper needed.
-  let _dragOrigin = null;
-  function _screenToTile(e) {
-    const x = e.offsetX - 1024;
-    const y = e.offsetY;
-    const tileX = Math.round((x / 16 + y / 8) / 2) - 1;
-    const tileY = Math.round((y / 8 - x / 16) / 2);
-    return [tileX, tileY];
-  }
-  function _patchPointerHandlersForDragSelect() {
-    if (!window.FloorplanEditor || window.FloorplanEditor.__feDragPatched) return;
-    if (!window.RoomEngine) return; // retried on next MutationObserver tick
-    window.FloorplanEditor.__feDragPatched = true;
-
-    const originalDown = window.FloorplanEditor.onPointerDown.bind(window.FloorplanEditor);
-    window.FloorplanEditor.onPointerDown = function(e) {
-      originalDown(e);
-      if (!window.__fe_isEnabled()) return;
-      const mgr = window.RoomEngine.areaSelectionManager();
-      if (mgr.areaSelectionState !== 0) return;
-      const [tx, ty] = _screenToTile(e);
-      _dragOrigin = [tx, ty];
-      mgr.activate(function() {});
-      mgr.startSelecting();
-      mgr.handleTileMouseEvent({ type: 'ROE_MOUSE_DOWN', tileXAsInt: tx, tileYAsInt: ty });
-    };
-
-    const originalMove = window.FloorplanEditor.onPointerMove.bind(window.FloorplanEditor);
-    window.FloorplanEditor.onPointerMove = function(e) {
-      originalMove(e);
-      if (!window.__fe_isEnabled() || !_dragOrigin) return;
-      const [tx, ty] = _screenToTile(e);
-      const x = Math.min(_dragOrigin[0], tx);
-      const y = Math.min(_dragOrigin[1], ty);
-      const w = Math.abs(tx - _dragOrigin[0]) + 1;
-      const h = Math.abs(ty - _dragOrigin[1]) + 1;
-      window.RoomEngine.areaSelectionManager().setHighlight(x, y, w, h);
-    };
-
-    const originalRelease = window.FloorplanEditor.onPointerRelease.bind(window.FloorplanEditor);
-    window.FloorplanEditor.onPointerRelease = function(e) {
-      originalRelease(e);
-      if (_dragOrigin) window.RoomEngine.areaSelectionManager().deactivate();
-      _dragOrigin = null;
-    };
-
-    window.__fe_log('pointer handlers patched for drag-select');
-  }
-
   function init() {
-    if (window.__fe_loadError) window.__fe_log('bundle load error: ' + window.__fe_loadError);
     _ensureFloorEditorButtons();
     if (document.body && typeof MutationObserver !== 'undefined') {
       let scheduled = false;
