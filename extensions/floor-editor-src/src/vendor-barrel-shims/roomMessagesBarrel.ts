@@ -9,7 +9,14 @@
 // itself. See the bundle-size note in esbuild.config.mjs for the full picture.
 //
 // This file re-exports the exact same class object from its direct source file instead,
-// bypassing the barrel. It's the same class (same module instance, same prototype), just
-// resolved via a shorter path — safe for the `instanceof ObjectRoomMapUpdateMessage` check
-// the live game engine's RoomLogic.processUpdateMessage performs on it.
+// bypassing the barrel. It's the same class (same module instance, same prototype) WITHIN
+// THIS BUNDLE. Whether that's enough for the live game engine's own RoomLogic.processUpdateMessage
+// (RoomLogic.ts:212: `if (message instanceof ObjectRoomMapUpdateMessage) { ...; return; }`, no
+// fallback) to accept a message built from our class via `instanceof ObjectRoomMapUpdateMessage`
+// is NOT verified — this extension's bundle and the live game client are two independently-built
+// JS bundles from the same TS source, and two separate module graphs don't automatically share
+// class identity just because they came from identical source. This is unverified pending live
+// testing. If a live tilemap edit silently does nothing (visually), check this first — note that
+// applyTilemapLive's `true` return only confirms `roomObject` was found, not that the message was
+// actually consumed by the engine.
 export { RoomObjectUpdateMessage } from '@nitrots/nitro-renderer/src/room/messages/RoomObjectUpdateMessage';

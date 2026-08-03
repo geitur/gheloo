@@ -1,6 +1,7 @@
 import * as esbuild from 'esbuild';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { statSync } from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,13 +40,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 //
 // Critically, none of these three barrels are reachable ONLY through RoomEngine — they're
 // genuinely needed by code this file legitimately uses (ObjectRoomMapUpdateMessage extends
-// RoomObjectUpdateMessage and is checked with `instanceof` by the live game engine's
-// RoomLogic.processUpdateMessage, so it must stay the real vendor class, not a local
-// lookalike). The fix is to keep using the real classes, but resolve their own internal
-// barrel imports to the exact sibling file they need instead, via the shims in
-// src/vendor-barrel-shims/. Each shim re-exports the same class/type from its direct source
-// file — same module instance, same prototype chain, just reached by a shorter path — so
-// `instanceof` and every other runtime check still work identically.
+// RoomObjectUpdateMessage, and RoomLogic.ts:212 checks `instanceof ObjectRoomMapUpdateMessage`
+// with no fallback, so it must stay the real vendor class, not a local lookalike). The fix is
+// to keep using the real classes, but resolve their own internal barrel imports to the exact
+// sibling file they need instead, via the shims in src/vendor-barrel-shims/. Each shim
+// re-exports the same class/type from its direct source file — same module instance, same
+// prototype chain, just reached by a shorter path — so `instanceof` and every other runtime
+// check work identically WITHIN THIS BUNDLE. Whether that's also true against the live game
+// engine's own separately-built copy of RoomLogic.processUpdateMessage is NOT verified — this
+// extension's bundle and the live client are two independent JS bundles built from the same
+// vendor source, and two separate module graphs don't automatically share class identity just
+// because the source is identical. See the longer note in
+// src/vendor-barrel-shims/roomMessagesBarrel.ts; this needs live in-game testing to confirm.
 //
 // Net effect confirmed via `node esbuild.config.mjs` + `ls -la ../floor-editor.bundle.js`:
 // ~3.72MB -> ~90KB. If this bundle balloons again, re-run with `metafile: true` (see esbuild
@@ -100,3 +106,21 @@ await esbuild.build({
   banner: { js: 'try {' },
   footer: { js: '} catch (e) { window.__fe_loadError = (e && e.stack) ? e.stack : String(e); }' }
 });
+
+// --- Bundle-size regression guard -------------------------------------------------------
+//
+// Nothing above stops a future change (or a @nitrots/nitro-renderer version bump that shifts
+// an internal file path the onResolve plugin above matches by exact path) from silently
+// breaking the redirect and letting this bundle balloon back toward the ~3.7MB it was before
+// this fix — the build would succeed cleanly with zero warning. Fail loudly instead.
+const builtSize = statSync(path.resolve(__dirname, '../floor-editor.bundle.js')).size;
+const MAX_BYTES = 500 * 1024;
+if (builtSize > MAX_BYTES) {
+  throw new Error(
+    `floor-editor.bundle.js is ${(builtSize / 1024).toFixed(0)}KB, over the ${MAX_BYTES / 1024}KB guard — ` +
+    `this bundle should only contain small data/logic classes, not the PIXI renderer. If it's ` +
+    `ballooned again, re-run with { metafile: true } in the esbuild.build() call above and inspect ` +
+    `which import pulled in the extra weight (same diagnosis approach used to fix this the first ` +
+    `time, see the onResolve plugin comments above).`
+  );
+}
