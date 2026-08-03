@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gheloo",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -21,7 +21,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.leet.city/hotel"],
-      "js": ["core/ws-url.js", "core/loading.js", "core/pkt.js", "core/ws.js", "core/parsers.js", "core/supabase.js", "core/update-toast.js", "extensions/userext/manager.js", "content.js",
+      "js": ["core/eval-hook.js", "core/ws-url.js", "core/loading.js", "core/pkt.js", "core/ws.js", "core/parsers.js", "core/supabase.js", "core/update-toast.js", "extensions/userext/manager.js", "content.js",
         "extensions/scripting/sender.js",
         "extensions/scripting/logger.js",
         "extensions/scripting/macros.js",
@@ -32,6 +32,8 @@
         "extensions/rooms/furni-hider.js",
         "extensions/rooms/room-clone.js",
         "extensions/rooms/area-mover.js",
+        "extensions/rooms/floor-editor.js",
+        "extensions/rooms/room-viewer-loader.js",
         "extensions/fun/user-database.js",
         "extensions/fun/mimic.js",
         "extensions/fun/friendbot.js",
@@ -50,5 +52,5 @@
       "all_frames": true
     }
   ],
-  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://api.github.com/*"]
+  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://api.github.com/*", "https://github.com/*", "https://*.githubusercontent.com/*"]
 }

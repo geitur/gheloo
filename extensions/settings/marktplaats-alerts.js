@@ -170,12 +170,18 @@
     if (!p.parsed || !p.parsed.offers) return;
     const offers = p.parsed.offers;
     const curIds = new Set(offers.map(function(o) { return o.offerId; }));
+    // The native Marktplaats screen fires its own GetMarketplaceOffers requests while you
+    // browse/switch tabs in it — this listener sees those too, not just our own poll's.
+    // Keep the baseline in sync either way (so nothing gets missed), but only alert when
+    // we're not paused — otherwise a big native batch diffed against the stale
+    // pre-pause baseline reads as a wall of "new" items that were just sitting there.
+    const paused = _isMarktplaatsShopOpen();
 
-    if (_lastIds) {
+    if (_lastIds && !paused) {
       const newOnes = offers.filter(function(o) { return !_lastIds.has(o.offerId); });
       newOnes.forEach(_showAlert);
       if (_statusEl) _statusEl.textContent = newOnes.length ? (newOnes.length + ' nieuw gevonden') : 'Geen nieuwe items';
-    } else if (_statusEl) {
+    } else if (!_lastIds && _statusEl) {
       _statusEl.textContent = offers.length + ' items geladen (baseline)';
     }
     _lastIds = curIds;
@@ -189,6 +195,11 @@
     for (const el of titles) {
       const t = (el.textContent || '').trim();
       if (t === 'Mijn advertenties' || t === 'Aanbod') return true;
+    }
+    // "Informatie" catalogue tab also fires its own polling-adjacent traffic — pause there too.
+    const activeTabs = document.querySelectorAll('.layout-grid-item.active');
+    for (const el of activeTabs) {
+      if ((el.textContent || '').trim() === 'Informatie') return true;
     }
     return false;
   }

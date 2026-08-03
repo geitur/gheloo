@@ -223,11 +223,11 @@
     }
   }
 
-  // ── Tile capture — click any tile in-game while a capture is armed and its
-  // coordinates get read straight off the outgoing MoveAvatar packet. The click itself
-  // is blocked from reaching the server while armed (window._setOutgoingBlock, ws.js),
-  // so your avatar doesn't visibly walk there. Point A + Point B form the area
-  // (min/max of the two), no separate top-left/bottom-right ordering required.
+  // ── Destination capture — click a tile in-game while armed and its coordinates get
+  // read straight off the outgoing MoveAvatar packet. The click itself is blocked from
+  // reaching the server while armed (window._setOutgoingBlock, ws.js), so your avatar
+  // doesn't visibly walk there. Just the one tile — source area picking is below, and
+  // uses the native area-selection tool instead (see startSourceAreaSelect).
   let _moveAvatarId = null;
   function _setWalkBlocked(blocked) {
     if (_moveAvatarId === null) _moveAvatarId = _outId('MoveAvatar');
@@ -235,19 +235,25 @@
     window._setOutgoingBlock(_moveAvatarId, blocked);
   }
 
-  let _pendingCapture = null; // null | 'A' | 'B' | 'dst'
+  let _pendingCapture = false; // destination only now
   let _ptA = null, _ptB = null, _dstPt = null;
-  window.onPacket('RoomReady', function() { _setWalkBlocked(false); _pendingCapture = null; });
+  window.onPacket('RoomReady', function() {
+    _setWalkBlocked(false);
+    _pendingCapture = false;
+    if (window.RoomEngine && window.RoomEngine.areaSelectionManager().areaSelectionState !== 0) {
+      window.RoomEngine.areaSelectionManager().deactivate();
+    }
+    _clearSourceAreaLiveHighlight();
+    _sourceAreaPicking = false;
+  });
   window.onPacket('MoveAvatar', function(p) {
     if (!_pendingCapture || p.direction !== 'OUT' || !p.raw) return;
     const r = window.makeReader(p.raw);
     if (!r) return;
     let x, y;
     try { x = r.int(); y = r.int(); } catch (e) { return; }
-    if (_pendingCapture === 'A') _ptA = { x: x, y: y };
-    else if (_pendingCapture === 'B') _ptB = { x: x, y: y };
-    else if (_pendingCapture === 'dst') _dstPt = { x: x, y: y };
-    _pendingCapture = null;
+    _dstPt = { x: x, y: y };
+    _pendingCapture = false;
     // Deferred, not immediate — this runs from inside ws.js's addPacket(), which fires
     // BEFORE the block-check for this very packet (same send call, still in progress
     // further down the stack). Unblocking synchronously here would delete the filter
@@ -256,12 +262,84 @@
     _renderCaptureStatus();
   });
   function _renderCaptureStatus() {
-    const a = document.querySelector('#__am_panel #__am_ptA_status');
-    if (a) a.textContent = 'point A: ' + (_ptA ? '(' + _ptA.x + ',' + _ptA.y + ')' : '—');
-    const b = document.querySelector('#__am_panel #__am_ptB_status');
-    if (b) b.textContent = 'point B: ' + (_ptB ? '(' + _ptB.x + ',' + _ptB.y + ')' : '—');
+    const src = document.querySelector('#__am_panel #__am_src_status');
+    if (src) src.textContent = 'source area: ' + (_ptA && _ptB ? '(' + Math.min(_ptA.x, _ptB.x) + ',' + Math.min(_ptA.y, _ptB.y) + ') → (' + Math.max(_ptA.x, _ptB.x) + ',' + Math.max(_ptA.y, _ptB.y) + ')' : '—');
     const c = document.querySelector('#__am_panel #__am_dst_status');
     if (c) c.textContent = 'destination: ' + (_dstPt ? '(' + _dstPt.x + ',' + _dstPt.y + ')' : '—');
+  }
+
+  // ── Source area capture — drives the real client's own native area-selection tool
+  // (RoomEngine._areaSelectionManager, exposed as window.RoomEngine by core/eval-hook.js),
+  // same as Room Clone's Capture Area: activate()+startSelecting() arms it, the engine's
+  // own mouse pipeline feeds every drag step into it automatically (dims other furni,
+  // draws its own tile-grid highlight), and setHighlight(x,y,w,h) — called on every one
+  // of those steps — is patched here to also keep window.__gh_FurniSelect's recolor in
+  // sync live on whatever's currently inside the rectangle, not just once at the end.
+  let _sourceAreaPicking = false;
+  let _sourceAreaLiveHighlightedIds = [];
+  let _sourceAreaColorMatched = false;
+  function _matchSourceAreaHighlightColors() {
+    if (_sourceAreaColorMatched || !window.__gh_FurniSelect || !window.__gh_FurniSelect._selectionShader) return;
+    window.__gh_FurniSelect._selectionShader.color = 0x66CCFF;
+    window.__gh_FurniSelect._selectionShader.lineColor = 0xFFFFFF;
+    _sourceAreaColorMatched = true;
+  }
+  function _syncSourceAreaLiveHighlight(x, y, w, h) {
+    if (!window.__gh_FurniSelect || !window.Room) return;
+    _matchSourceAreaHighlightColors();
+    const wantIds = (w && h) ? Object.values(window.Room.floorItems || {})
+      .filter(function(it) { return it.x >= x && it.x <= x + w - 1 && it.y >= y && it.y <= y + h - 1; })
+      .map(function(it) { return it.id; }) : [];
+    const wantSet = new Set(wantIds);
+    const haveSet = new Set(_sourceAreaLiveHighlightedIds);
+    _sourceAreaLiveHighlightedIds.forEach(function(id) {
+      if (!wantSet.has(id)) { try { window.__gh_FurniSelect.hide(id); } catch(_e) {} }
+    });
+    wantIds.forEach(function(id) {
+      if (!haveSet.has(id)) { try { window.__gh_FurniSelect.show(id); } catch(_e) {} }
+    });
+    _sourceAreaLiveHighlightedIds = wantIds;
+  }
+  function _clearSourceAreaLiveHighlight() {
+    if (window.__gh_FurniSelect) {
+      _sourceAreaLiveHighlightedIds.forEach(function(id) { try { window.__gh_FurniSelect.hide(id); } catch(_e) {} });
+    }
+    _sourceAreaLiveHighlightedIds = [];
+  }
+  let _sourceAreaSetHighlightPatched = false;
+  function _ensureSourceAreaSetHighlightPatched(mgr) {
+    if (_sourceAreaSetHighlightPatched) return;
+    const original = mgr.setHighlight.bind(mgr);
+    mgr.setHighlight = function(x, y, w, h) {
+      original(x, y, w, h);
+      _syncSourceAreaLiveHighlight(x, y, w, h);
+    };
+    _sourceAreaSetHighlightPatched = true;
+  }
+  function startSourceAreaSelect(logFn) {
+    if (!(window.Room && window.Room.id)) { logFn('Not in a room.'); return; }
+    if (!window.RoomEngine) { logFn('Real room engine not detected yet — try again in a moment, or reload the page.'); return; }
+    const mgr = window.RoomEngine.areaSelectionManager();
+    if (mgr.areaSelectionState !== 0) return; // already active — ignore, not a fresh start
+    _clearSourceAreaLiveHighlight();
+    _ensureSourceAreaSetHighlightPatched(mgr);
+    mgr.activate(function(x, y, w, h) {
+      mgr.deactivate();
+      _clearSourceAreaLiveHighlight();
+      _sourceAreaPicking = false;
+      // clearHighlight() (called by deactivate() above, but also independently by other
+      // native UI sharing this same manager, e.g. Wired's own area-select screens)
+      // invokes the callback with all-zeros when there's no real selection to report.
+      if (w && h) {
+        _ptA = { x: x, y: y };
+        _ptB = { x: x + w - 1, y: y + h - 1 };
+        _renderCaptureStatus();
+      }
+      logFn(w && h ? 'Source area set: ' + w + 'x' + h + ' tiles.' : 'Source area selection cancelled.');
+    });
+    mgr.startSelecting();
+    _sourceAreaPicking = true;
+    logFn('Click an empty tile and drag to the opposite corner, then release.');
   }
 
   function init() {
@@ -305,11 +383,9 @@
 
           '<div class="__am_card">' +
             '<h4>Source Area</h4>' +
-            '<div class="__am_desc">Click a tile in-game while armed to set it — the click is swallowed, so you won\'t actually walk there.</div>' +
-            '<button class="__am_btn secondary small" id="__am_cap_a">Point A</button>' +
-            '<div class="__am_status_line" id="__am_ptA_status">point A: —</div>' +
-            '<button class="__am_btn secondary small" id="__am_cap_b">Point B</button>' +
-            '<div class="__am_status_line" id="__am_ptB_status">point B: —</div>' +
+            '<div class="__am_desc">Drag a rectangle over the room — other furni dims while you drag, matching furni recolor live, release to set the area.</div>' +
+            '<button class="__am_btn secondary small" id="__am_cap_src">Select Source Area</button>' +
+            '<div class="__am_status_line" id="__am_src_status">source area: —</div>' +
           '</div>' +
 
           '<div class="__am_card">' +
@@ -368,18 +444,11 @@
       return { tiles: tiles, dx: dx, dy: dy };
     }
 
-    bodyEl.querySelector('#__am_cap_a').addEventListener('click', function() {
-      _pendingCapture = 'A';
-      _setWalkBlocked(true);
-      log('Armed — click point A now...');
-    });
-    bodyEl.querySelector('#__am_cap_b').addEventListener('click', function() {
-      _pendingCapture = 'B';
-      _setWalkBlocked(true);
-      log('Armed — click point B now...');
+    bodyEl.querySelector('#__am_cap_src').addEventListener('click', function() {
+      startSourceAreaSelect(log);
     });
     bodyEl.querySelector('#__am_cap_dst').addEventListener('click', function() {
-      _pendingCapture = 'dst';
+      _pendingCapture = true;
       _setWalkBlocked(true);
       log('Armed — click the destination tile now...');
     });

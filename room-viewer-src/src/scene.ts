@@ -40,7 +40,8 @@ export interface RoomMapSize {
 export function buildRoomMap(
   roomEngine: IRoomEngine,
   floorPlan: string,
-  wallHeight: number
+  wallHeight: number,
+  roomId: number = ROOM_VIEWER_ROOM_ID
 ): RoomMapSize {
   const fhm = new FloorHeightMapMessageParser();
   fhm.parseModel(floorPlan, wallHeight, false);
@@ -108,7 +109,7 @@ export function buildRoomMap(
   // instead of crashing) have likely been silently no-op-ing this whole time. See
   // waitForRoomLogic() in main.ts, called before those.
 
-  roomEngine.createRoomInstance(ROOM_VIEWER_ROOM_ID, roomMap);
+  roomEngine.createRoomInstance(roomId, roomMap);
 
   // Wall furni location (getLocation() in addWallItem below) is computed against a SEPARATE
   // height-map structure — LegacyWallGeometry, reached via getLegacyWallGeometry — not against
@@ -119,7 +120,7 @@ export function buildRoomMap(
   // against a permanently-empty default (width=0, height=0, scale=64) instead — silently wrong
   // for every room, not a crash, which is exactly why it looked like a location-math bug rather
   // than a "some state was never initialized" bug. Mirror the real client's step exactly.
-  const wallGeometry = (roomEngine as unknown as IRoomCreator).getLegacyWallGeometry(ROOM_VIEWER_ROOM_ID);
+  const wallGeometry = (roomEngine as unknown as IRoomCreator).getLegacyWallGeometry(roomId);
   if (wallGeometry) {
     wallGeometry.scale = 32; // LegacyWallGeometry.DEFAULT_SCALE
     wallGeometry.initialize(fhm.width, fhm.height, planeParser.floorHeight);
@@ -135,7 +136,7 @@ export function buildRoomMap(
   return size;
 }
 
-export function addFloorItem(roomEngine: IRoomEngine, item: FloorItem): void {
+export function addFloorItem(roomEngine: IRoomEngine, item: FloorItem, roomId: number = ROOM_VIEWER_ROOM_ID): void {
   const objectData = new LegacyDataType();
   if (item.stuff && item.stuff.state) objectData.setString(item.stuff.state);
 
@@ -146,7 +147,7 @@ export function addFloorItem(roomEngine: IRoomEngine, item: FloorItem): void {
   // confirmed live to leave state changes invisible even though the underlying data
   // (and a full scene rebuild) was correct.
   roomEngine.addFurnitureFloor(
-    ROOM_VIEWER_ROOM_ID,
+    roomId,
     item.id,
     item.typeId,
     new Vector3d(item.x, item.y, item.z),
@@ -163,14 +164,14 @@ export function addFloorItem(roomEngine: IRoomEngine, item: FloorItem): void {
   );
 }
 
-export function addWallItem(roomEngine: IRoomEngine, item: WallItem): void {
+export function addWallItem(roomEngine: IRoomEngine, item: WallItem, roomId: number = ROOM_VIEWER_ROOM_ID): void {
   const parsed = parseWallLocation(item.location);
 
   // Mirrors RoomMessageHandler's own internal addRoomObjectFurnitureWall: the wall
   // location string doesn't decode into a Vector3d by itself — it has to go through the
   // room's own LegacyWallGeometry (built from the tile map by buildRoomMap/createRoomInstance),
   // the same way the library handles a real incoming wall-furniture packet.
-  const wallGeometry = (roomEngine as unknown as IRoomCreator).getLegacyWallGeometry(ROOM_VIEWER_ROOM_ID);
+  const wallGeometry = (roomEngine as unknown as IRoomCreator).getLegacyWallGeometry(roomId);
 
   if (!wallGeometry) {
     throw new Error('no wall geometry for room — buildRoomMap must run before addWallItem');
@@ -180,7 +181,7 @@ export function addWallItem(roomEngine: IRoomEngine, item: WallItem): void {
   const direction = new Vector3d(wallGeometry.getDirection(parsed.direction));
 
   roomEngine.addFurnitureWall(
-    ROOM_VIEWER_ROOM_ID,
+    roomId,
     item.id,
     item.typeId,
     location,
@@ -195,10 +196,10 @@ export function addWallItem(roomEngine: IRoomEngine, item: WallItem): void {
   );
 }
 
-export function removeFloorItem(roomEngine: IRoomEngine, id: number): void {
-  roomEngine.removeRoomObjectFloor(ROOM_VIEWER_ROOM_ID, id);
+export function removeFloorItem(roomEngine: IRoomEngine, id: number, roomId: number = ROOM_VIEWER_ROOM_ID): void {
+  roomEngine.removeRoomObjectFloor(roomId, id);
 }
 
-export function removeWallItem(roomEngine: IRoomEngine, id: number): void {
-  roomEngine.removeRoomObjectWall(ROOM_VIEWER_ROOM_ID, id);
+export function removeWallItem(roomEngine: IRoomEngine, id: number, roomId: number = ROOM_VIEWER_ROOM_ID): void {
+  roomEngine.removeRoomObjectWall(roomId, id);
 }

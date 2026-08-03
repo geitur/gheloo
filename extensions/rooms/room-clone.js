@@ -28,6 +28,13 @@
     }
     return null;
   }
+  function _inId(name) {
+    if (!window.PKT || !window.PKT.IN) return null;
+    for (const id in window.PKT.IN) {
+      if (window.shortName(window.PKT.IN[id], 'IN') === name) return parseInt(id);
+    }
+    return null;
+  }
 
   // Tile pickers (Capture Area's two corners, Build's anchor) read x/y off the real
   // MoveAvatar click packet but must stop it actually reaching the server — otherwise
@@ -336,50 +343,120 @@
     _applyBlueprintNow(id, retry, includeWalls);
   });
 
-  // Area capture — no native drag-select API exists, but every tile click already
-  // sends a real outgoing MoveAvatar{x,y} packet through the normal walk-there flow,
-  // so two clicks (walking the avatar there each time) define a rectangle's corners.
-  let _areaPicking = 0; // 0 off, 1 waiting for corner 1, 2 waiting for corner 2
-  let _areaCorner1 = null;
+  // Area capture — drives the real client's OWN native area-selection tool
+  // (RoomEngine._areaSelectionManager, exposed as window.RoomEngine by core/eval-hook.js —
+  // same one Habbo's Wired "select furni by area" screens use, and what hibisco itself just
+  // arms rather than building its own). activate()+startSelecting() is the entire
+  // integration: the engine's own mouse pipeline (_roomObjectEventHandler.
+  // handleRoomObjectMouseEvent, confirmed in the decoded client) already feeds every tile
+  // mousedown/move/click into the manager automatically once armed — it dims every other
+  // furni to 20% alpha and draws its own live tile-highlight as you drag, with zero
+  // per-frame code from us. The manager eats the finishing click itself (RoomEngine.
+  // dispatchMouseEvent short-circuits the normal walk-there dispatch when
+  // finishSelecting() fires), so unlike the old two-corner-click version, no avatar
+  // movement blocking or packet interception is needed here at all — the same reason
+  // clicking on a furni sprite (instead of open floor) to START a drag won't work: that
+  // click never becomes a floor/tile mouse event in the first place.
+  let _areaPicking = false;
+  let _areaLiveHighlightedIds = []; // ids currently wearing window.__gh_FurniSelect's recolor
+
+  // The real client's own _selectionShader defaults to white/60%-gray, not this
+  // extension's cyan look — same one-time repoint area-mover.js does too (independent
+  // file, no shared module system between content scripts, hence the small duplication
+  // rather than a cross-file call).
+  let _areaColorMatched = false;
+  function _matchAreaHighlightColors() {
+    if (_areaColorMatched || !window.__gh_FurniSelect || !window.__gh_FurniSelect._selectionShader) return;
+    window.__gh_FurniSelect._selectionShader.color = 0x66CCFF;
+    window.__gh_FurniSelect._selectionShader.lineColor = 0xFFFFFF;
+    _areaColorMatched = true;
+  }
+
+  // Diffs the recolor onto whatever's currently inside (x,y,w,h) rather than clearing and
+  // reapplying everything on every call — this runs on every drag step (see the setHighlight
+  // patch below), so a full hide-then-show-all each time would flicker every covered item on
+  // every single mouse-move.
+  function _syncAreaLiveHighlight(x, y, w, h) {
+    if (!window.__gh_FurniSelect || !window.Room) return;
+    _matchAreaHighlightColors();
+    const wantIds = (w && h) ? Object.values(window.Room.floorItems || {})
+      .filter(function(it) { return it.x >= x && it.x <= x + w - 1 && it.y >= y && it.y <= y + h - 1; })
+      .map(function(it) { return it.id; }) : [];
+    const wantSet = new Set(wantIds);
+    const haveSet = new Set(_areaLiveHighlightedIds);
+    _areaLiveHighlightedIds.forEach(function(id) {
+      if (!wantSet.has(id)) { try { window.__gh_FurniSelect.hide(id); } catch(_e) {} }
+    });
+    wantIds.forEach(function(id) {
+      if (!haveSet.has(id)) { try { window.__gh_FurniSelect.show(id); } catch(_e) {} }
+    });
+    _areaLiveHighlightedIds = wantIds;
+  }
+
+  function _clearAreaLiveHighlight() {
+    if (window.__gh_FurniSelect) {
+      _areaLiveHighlightedIds.forEach(function(id) { try { window.__gh_FurniSelect.hide(id); } catch(_e) {} });
+    }
+    _areaLiveHighlightedIds = [];
+  }
+
+  // Patched once, on the manager instance (persists across every start/cancel cycle —
+  // areaSelectionManager() always returns the same singleton). setHighlight(x,y,w,h) is
+  // what the manager's own handleTileMouseEvent calls on every ROE_MOUSE_DOWN/MOUSE_MOVE
+  // it receives from the room's normal mouse pipeline while selecting — i.e. every drag
+  // step, live, which is exactly what's needed to keep the recolor in sync as the
+  // rectangle grows/shrinks/moves, not just once at the end.
+  let _areaSetHighlightPatched = false;
+  function _ensureAreaSetHighlightPatched(mgr) {
+    if (_areaSetHighlightPatched) return;
+    const original = mgr.setHighlight.bind(mgr);
+    mgr.setHighlight = function(x, y, w, h) {
+      original(x, y, w, h);
+      _syncAreaLiveHighlight(x, y, w, h);
+    };
+    _areaSetHighlightPatched = true;
+  }
 
   function startAreaCapture() {
     if (!(window.Room && window.Room.id)) { _log('Not in a room.'); return; }
-    _setWalkBlocked(true);
-    _areaPicking = 1;
-    _areaCorner1 = null;
+    if (!window.RoomEngine) { _log('Real room engine not detected yet — try again in a moment, or reload the page.'); return; }
+    const mgr = window.RoomEngine.areaSelectionManager();
+    if (mgr.areaSelectionState !== 0) return; // already active somehow — ignore, not a fresh start
+    _clearAreaLiveHighlight(); // in case a previous capture somehow left recolor dangling
+    _ensureAreaSetHighlightPatched(mgr);
+    mgr.activate(function(x, y, w, h) {
+      mgr.deactivate();
+      _clearAreaLiveHighlight();
+      _areaPicking = false;
+      _renderCaptureTab();
+      // clearHighlight() (called by deactivate() above, but also independently by other
+      // native UI that shares this same manager, e.g. Wired's own area-select screens)
+      // invokes the callback with all-zeros when there's no real selection to report —
+      // not a capture to act on.
+      if (!w || !h) return;
+      captureRoom({ minX: x, maxX: x + w - 1, minY: y, maxY: y + h - 1 });
+    });
+    mgr.startSelecting();
+    _areaPicking = true;
     _renderCaptureTab();
   }
 
   function cancelAreaCapture() {
-    _setWalkBlocked(false);
-    _areaPicking = 0;
-    _areaCorner1 = null;
+    if (window.RoomEngine) window.RoomEngine.areaSelectionManager().deactivate();
+    _clearAreaLiveHighlight();
+    _areaPicking = false;
     _renderCaptureTab();
   }
 
-  window.onPacket('RoomReady', function() { _setWalkBlocked(false); _areaPicking = 0; _areaCorner1 = null; });
-  window.onPacket('MoveAvatar', function(p) {
-    if (!_areaPicking || p.direction !== 'OUT' || !p.parsed) return;
-    if (_areaPicking === 1) {
-      _areaCorner1 = { x: p.parsed.x, y: p.parsed.y };
-      _areaPicking = 2;
-      _renderCaptureTab();
-      return;
+  window.onPacket('RoomReady', function() {
+    // Not gated on _areaPicking — that already flips false as soon as the drag finishes,
+    // but the manager itself (and our recolor) can still be sitting there un-deactivated
+    // during the deferred 1s confirmation window that follows.
+    if (window.RoomEngine && window.RoomEngine.areaSelectionManager().areaSelectionState !== 0) {
+      window.RoomEngine.areaSelectionManager().deactivate();
     }
-    const c2 = { x: p.parsed.x, y: p.parsed.y };
-    const rect = {
-      minX: Math.min(_areaCorner1.x, c2.x), maxX: Math.max(_areaCorner1.x, c2.x),
-      minY: Math.min(_areaCorner1.y, c2.y), maxY: Math.max(_areaCorner1.y, c2.y)
-    };
-    // Deferred, not immediate — this callback runs from inside ws.js's addPacket(),
-    // which fires BEFORE the block-check for this very packet (same ws.send call,
-    // still in progress further down the stack). Unblocking synchronously here deletes
-    // the filter before that check ever runs, so this click's own packet slips through.
-    setTimeout(function() { _setWalkBlocked(false); }, 0);
-    _areaPicking = 0;
-    _areaCorner1 = null;
-    _renderCaptureTab();
-    captureRoom(rect);
+    _clearAreaLiveHighlight();
+    _areaPicking = false;
   });
 
   // ── Capture ──────────────────────────────────────────────────────────────
@@ -502,7 +579,7 @@
     wallItems.forEach(function(it) {
       _log('Wall captured: ' + _typeName(it.typeId) + ' — "' + it.location + '"');
     });
-    _captureScreenshotThumbnail(blueprint);
+    _renderRoomThumbnail(blueprint);
     // Diagnostic: confirm captured states actually vary before blaming the placement/
     // chat logic — if this shows one state for everything, the bug is in what got
     // captured, not in how :bs gets sent afterward.
@@ -516,40 +593,114 @@
   }
 
   // Placing an area blueprint needs to know where in the destination room to start —
-  // reuses the same real-MoveAvatar-click trick as Capture Area, but only one click
-  // since there's no rectangle to define, just an offset from the original capture's
-  // top-left tile (areaOrigin). The offset is stashed on the blueprint itself (same
-  // run-scoped-annotation pattern as blueprint._missing) so the isRetry continuation
-  // paths (buy-then-place, "Build Without") reuse the same anchor without re-prompting.
-  let _buildAnchorId = null; // blueprint id currently waiting for its anchor tile click
+  // reuses the same real-MoveAvatar-click trick as Capture Area for reading tile clicks
+  // without the avatar actually walking there. Just two buttons, both always visible:
+  // Preview (toggles into "click around the room to move a live ghost preview" mode —
+  // same fake-ObjectAdd/ObjectRemove technique Area Mover's own Preview uses, becomes
+  // "Clear Preview" while on) and Build (commits at wherever the preview last was;
+  // disabled until a tile's been clicked at least once). The offset is stashed on the
+  // blueprint itself (same run-scoped-annotation pattern as blueprint._missing) so the
+  // isRetry continuation paths (buy-then-place, "Build Without") reuse it without
+  // re-prompting.
+  let _buildAnchorId = null; // blueprint id the current preview/offset belongs to
+  let _buildPreviewOn = false; // toggle state — while true, tile clicks move the preview
+  let _buildPreviewOffset = null; // {dx,dy} once a tile's been clicked — null before that
+  const _buildPreviewGhosts = []; // {ghostId, ownerId}
+  let _buildGhostIdCounter = 2100000000; // distinct range from area-mover.js's own counter
 
-  function startBuildAnchorPick(id) {
+  function _clearBuildPreview() {
+    if (!_buildPreviewGhosts.length) return;
+    _buildPreviewGhosts.forEach(function(g) {
+      window.sendPacket('IN', 2703 /* ObjectRemove, hardcoded id — same convention furni-hider.js/area-mover.js use */,
+        '{s:"' + g.ghostId + '"}{i:' + g.ownerId + '}{b:200}{i:0}');
+    });
+    _buildPreviewGhosts.length = 0;
+  }
+
+  function _spawnBuildPreview(blueprint, offset) {
+    const addId = _inId('ObjectAdd');
+    if (addId === null) { _log('ObjectAdd not found in PKT — no preview available, Build still works.'); return 0; }
+    _clearBuildPreview();
+    let count = 0;
+    blueprint.floorItems.forEach(function(item) {
+      const x = item.x + offset.dx;
+      const y = item.y + offset.dy;
+      // Stored z is relative to the ORIGINAL tile's terrain (captureRoom's own doing) —
+      // add back whatever terrain height exists at the destination tile in THIS room, the
+      // same reconstruction a real placement needs, just done here for visual accuracy
+      // instead of left to the server.
+      const terrainZ = window.Room && window.Room.floorPlan ? _terrainHeightAt(window.Room.floorPlan, x, y) : 0;
+      const z = (item.z || 0) + terrainZ;
+      const ghostId = ++_buildGhostIdCounter;
+      const stuffState = String(item.state != null ? item.state : 0);
+      const expr = '{i:' + ghostId + '}' +
+        '{i:' + item.typeId + '}' +
+        '{i:' + x + '}' +
+        '{i:' + y + '}' +
+        '{i:' + (item.facing || 0) + '}' +
+        '{s:"' + String(z) + '"}' +
+        '{s:"1.0"}' +
+        '{i:0}' +
+        '{i:0}{s:"' + stuffState.replace(/"/g, '\\"') + '"}' +
+        '{i:-1}{i:1}' +
+        '{i:-1}{s:""}';
+      if (window.sendPacket('IN', addId, expr)) { _buildPreviewGhosts.push({ ghostId: ghostId, ownerId: -1 }); count++; }
+    });
+    return count;
+  }
+
+  function toggleBuildPreview(id) {
     if (!(window.Room && window.Room.id)) { _log('Enter the target room first.'); return; }
+    if (_buildAnchorId === id && _buildPreviewOn) {
+      // Turning off just stops clicks from moving it — the position/ghosts-off state is
+      // kept, not a full reset, so Build still works afterward.
+      _setWalkBlocked(false);
+      _buildPreviewOn = false;
+      _clearBuildPreview();
+      _renderBuildTab();
+      return;
+    }
+    // Switching to a different blueprint's preview (or starting fresh) leaves the
+    // previous blueprint's offset meaningless — drop it so its ghosts (if any were still
+    // showing) don't linger orphaned, unreachable by that blueprint's own toggle anymore.
+    if (_buildAnchorId !== id) {
+      _clearBuildPreview();
+      _buildPreviewOffset = null;
+    }
     _setWalkBlocked(true);
     _buildAnchorId = id;
-    _log('Click the tile in this room where the area should start building.');
+    _buildPreviewOn = true;
+    _log('Click a tile in this room to preview the area there.');
+    if (_buildPreviewOffset) {
+      // Resuming the SAME blueprint after a prior toggle-off — show it again at the last
+      // position right away instead of waiting for a fresh click.
+      const blueprint = _blueprints.find(function(b) { return b.id === id; });
+      if (blueprint) _spawnBuildPreview(blueprint, _buildPreviewOffset);
+    }
     _renderBuildTab();
   }
 
-  function cancelBuildAnchorPick() {
+  function confirmBuildAnchor(id) {
+    if (_buildAnchorId !== id || !_buildPreviewOffset) return;
     _setWalkBlocked(false);
     _buildAnchorId = null;
+    _buildPreviewOn = false;
+    _buildPreviewOffset = null;
+    _clearBuildPreview();
     _renderBuildTab();
+    applyBlueprint(id);
   }
 
-  window.onPacket('RoomReady', function() { _setWalkBlocked(false); _buildAnchorId = null; });
+  window.onPacket('RoomReady', function() { _setWalkBlocked(false); _buildAnchorId = null; _buildPreviewOn = false; _buildPreviewOffset = null; _clearBuildPreview(); });
   window.onPacket('MoveAvatar', function(p) {
-    if (_buildAnchorId === null || p.direction !== 'OUT' || !p.parsed) return;
-    const id = _buildAnchorId;
-    // Deferred — see the matching comment in the area-capture MoveAvatar handler above;
-    // same re-entrancy hazard (this callback runs before the block-check for this packet).
-    setTimeout(function() { _setWalkBlocked(false); }, 0);
-    _buildAnchorId = null;
-    const blueprint = _blueprints.find(function(b) { return b.id === id; });
+    if (_buildAnchorId === null || !_buildPreviewOn || p.direction !== 'OUT' || !p.parsed) return;
+    const blueprint = _blueprints.find(function(b) { return b.id === _buildAnchorId; });
+    if (!blueprint || !blueprint.areaOrigin) { _setWalkBlocked(false); _buildAnchorId = null; _buildPreviewOn = false; _clearBuildPreview(); return; }
+    _buildPreviewOffset = { dx: p.parsed.x - blueprint.areaOrigin.x, dy: p.parsed.y - blueprint.areaOrigin.y };
+    blueprint._buildOffset = _buildPreviewOffset;
+    const count = _spawnBuildPreview(blueprint, _buildPreviewOffset);
+    _log('Preview: ' + count + ' item(s) at (' + p.parsed.x + ',' + p.parsed.y + ') — click elsewhere to move it, Clear Preview to stop, or Build to place.');
     _renderBuildTab();
-    if (!blueprint || !blueprint.areaOrigin) return;
-    blueprint._buildOffset = { dx: p.parsed.x - blueprint.areaOrigin.x, dy: p.parsed.y - blueprint.areaOrigin.y };
-    applyBlueprint(id);
   });
 
   // ── Apply ────────────────────────────────────────────────────────────────
@@ -939,7 +1090,7 @@
     // matches that script's defaults (state/edit delay 210ms, place delay 95ms).
     const realPools = _buildInventoryPools();
     // Area blueprints get placed relative to a user-picked anchor tile instead of their
-    // original captured coordinates (see startBuildAnchorPick) — full-room blueprints
+    // original captured coordinates (see toggleBuildPreview) — full-room blueprints
     // have no offset and place at their exact original x/y as before.
     const offX = blueprint._buildOffset ? blueprint._buildOffset.dx : 0;
     const offY = blueprint._buildOffset ? blueprint._buildOffset.dy : 0;
@@ -1206,7 +1357,7 @@
       '.__rc_chip:hover:not(.active){color:#eceefb}',
       '.__rc_card2{width:100%;border-radius:10px;border:1px solid #23252f;background:#1c1e2a;overflow:hidden;display:flex;flex-direction:column;cursor:pointer;transition:border-color .14s,transform .14s}',
       '.__rc_card2:hover{border-color:#6C7CFF;transform:translateY(-2px)}',
-      '.__rc_card2_thumb{width:100%;aspect-ratio:1/1;position:relative;overflow:hidden;background:#0A0B10}',
+      '.__rc_card2_thumb{width:100%;aspect-ratio:1/1;position:relative;overflow:hidden;background:#0A0B10;cursor:zoom-in}',
       '.__rc_card2_thumb img{width:100%;height:100%;object-fit:cover}',
       '.__rc_card2_fade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.55) 100%);pointer-events:none}',
       '.__rc_card2_hoveractions{position:absolute;inset:auto 8px 8px 8px;display:flex;justify-content:flex-end;gap:6px;opacity:0;transform:translateY(4px);transition:opacity .14s,transform .14s}',
@@ -1218,8 +1369,18 @@
       '.__rc_card2_name{font-size:12px;font-weight:700;color:#eceefb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
       '.__rc_card2_owner{font-size:10.5px;color:#82849a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
       '.__rc_card2_meta{display:flex;gap:8px;font:10px monospace;color:#5c5e6b;font-variant-numeric:tabular-nums;margin-top:2px}',
+      '#__rc_expand_modal{display:none;position:fixed;inset:0;z-index:3000;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}',
+      '#__rc_expand_modal *{box-sizing:border-box}',
+      '#__rc_expand_backdrop{position:absolute;inset:0;background:rgba(0,0,0,.72);cursor:pointer}',
+      '#__rc_expand_body{position:relative;background:#12131A;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.6);padding:20px;max-width:90vw;max-height:90vh;display:flex;flex-direction:column;align-items:center}',
+      '#__rc_expand_close{position:absolute;top:6px;right:10px;z-index:1;cursor:pointer;color:#5c5e6b;font-size:22px;line-height:1;padding:4px 8px}',
+      '#__rc_expand_close:hover{color:#eceefb}',
+      '#__rc_expand_content{position:relative;width:min(60vw,500px);height:min(60vh,500px);min-width:200px;min-height:200px;overflow:hidden;cursor:grab}',
+      '#__rc_expand_content:active{cursor:grabbing}',
+      '#__rc_expand_content img{position:absolute;top:0;left:0;max-width:none;max-height:none;border-radius:8px;display:block;user-select:none;-webkit-user-drag:none}',
+      '#__rc_expand_status{color:#82849a;font-size:12px;padding:40px;text-align:center}',
       '.__rc_detail_hdr{display:flex;gap:14px;padding:18px 20px;border-bottom:1px solid #23252f}',
-      '.__rc_detail_thumb{width:84px;height:84px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#0A0B10;border:1px solid #23252f}',
+      '.__rc_detail_thumb{width:84px;height:84px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#0A0B10;border:1px solid #23252f;cursor:zoom-in}',
       '.__rc_detail_thumb img{width:100%;height:100%;object-fit:cover}',
       '.__rc_detail_meta{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px}',
       '.__rc_detail_name{font-size:16px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -1333,46 +1494,145 @@
       });
     });
   }
-  function _findRenderCanvas() {
-    const canvases = Array.from(document.querySelectorAll('canvas'));
-    let best = null, bestArea = 0;
-    canvases.forEach(function(c) {
-      if (c.offsetWidth === 0 || c.offsetHeight === 0) return; // skip hidden canvases
-      const area = c.width * c.height;
-      if (area > bestArea) { bestArea = area; best = c; }
+  // Renders an actual isometric room thumbnail via the Room Viewer's own off-screen Nitro
+  // engine (room-viewer-src/src/thumbnail.ts) instead of screenshotting whatever the real
+  // game canvas happened to be showing (wrong crop/angle/zoom for area captures especially
+  // — that screenshot was the whole visible viewport, not just the captured tiles). Lazily
+  // downloads the ~3.6MB renderer bundle the first time this runs in a session, same as
+  // opening the Room Viewer panel itself (room-viewer-loader.js) — cached afterward.
+  function _renderRoomThumbnail(blueprint) {
+    if (!window.__rv_ensureLoaded) { _log('Thumbnail: Room Viewer loader script missing — reload the extension.'); return; }
+    window.__rv_ensureLoaded(function() {
+      if (!window.__rv_renderThumbnail) { _log('Thumbnail: renderer loaded but __rv_renderThumbnail missing.'); return; }
+      window.__rv_renderThumbnail({
+        floorItems: blueprint.floorItems,
+        wallItems: blueprint.wallItems,
+        floorProps: blueprint.floorProps
+      }).then(function(result) {
+        _log('Thumbnail: ' + result.itemsResolved + '/' + result.itemsRequested + ' item(s) rendered.');
+        if (!result.dataUrl) { _log('Thumbnail: render produced nothing for this blueprint.'); return; }
+        _thumbCache.set(String(blueprint.id), result.dataUrl);
+        _saveThumbToDb(String(blueprint.id), result.dataUrl);
+        _renderBlueprints();
+      }).catch(function(err) {
+        _log('Thumbnail render failed: ' + (err && err.message ? err.message : String(err)));
+      });
+    }, function(err) {
+      _log('Thumbnail: failed to load renderer — ' + err);
     });
-    return best;
   }
-  function _captureScreenshotThumbnail(blueprint) {
-    try {
-      const canvas = _findRenderCanvas();
-      if (!canvas) { _log('Screenshot: no room render canvas found — no thumbnail for this blueprint.'); return; }
 
-      // The render canvas is the whole (wide) game viewport, not a square room photo —
-      // fitting that directly into a square thumbnail left black letterbox bars top and
-      // bottom. Crop a square out of it instead (matching the shorter side, which is
-      // the canvas height in a wide viewport). Horizontally the room isn't centered —
-      // confirmed too much empty space showed up on the left, so HORIZONTAL_BIAS shifts
-      // the crop window rightward (0.5 = centered, 1.0 = flush against the right edge).
-      const side = Math.min(canvas.width, canvas.height);
-      const HORIZONTAL_BIAS = 0.7;
-      const sx = (canvas.width - side) * HORIZONTAL_BIAS;
-      const sy = (canvas.height - side) / 2;
-      const out = document.createElement('canvas');
-      out.width = 200;
-      out.height = 200;
-      const ctx = out.getContext('2d');
-      ctx.drawImage(canvas, sx, sy, side, side, 0, 0, 200, 200);
-      const dataUrl = out.toDataURL('image/png');
+  // ── Full render modal — the small 200x200 card thumbnail is deliberately just a cropped
+  // preview (see thumbnail.ts: fitting a whole room into that box broke floor/wall plane
+  // rendering entirely). Click it to re-render the same blueprint with fitWhole=true — the
+  // renderer computes a canvas big enough to contain the ENTIRE room at its normal scale
+  // (see thumbnail.ts), so the resulting image is complete even though the modal's own CSS
+  // viewport only shows part of it at once; dragging (see _ensureExpandModal's pan wiring)
+  // pans across the actual image data instead of trying to scale/fit it all into view.
+  const _expandCache = new Map(); // blueprint id -> dataUrl, session-only (not persisted — big images)
+  let _expandModalEl = null;
 
-      _thumbCache.set(String(blueprint.id), dataUrl);
-      _saveThumbToDb(String(blueprint.id), dataUrl);
-      _renderBlueprints();
-    } catch (err) {
-      // Tainted-canvas SecurityError happens if any texture on it was loaded without
-      // CORS — surfaced here instead of failing silently.
-      _log('Screenshot capture failed: ' + err.message);
+  function _ensureExpandModal() {
+    if (_expandModalEl) return _expandModalEl;
+    const el = document.createElement('div');
+    el.id = '__rc_expand_modal';
+    el.innerHTML =
+      '<div id="__rc_expand_backdrop"></div>' +
+      '<div id="__rc_expand_body">' +
+        '<span id="__rc_expand_close">&times;</span>' +
+        '<div id="__rc_expand_content"></div>' +
+      '</div>';
+    document.body.appendChild(el);
+    function close() { el.style.display = 'none'; }
+    el.querySelector('#__rc_expand_backdrop').addEventListener('click', close);
+    el.querySelector('#__rc_expand_close').addEventListener('click', close);
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && el.style.display !== 'none') close(); });
+
+    // Drag-to-pan — the rendered image is shown at its native size (bigger than the
+    // 80vw/80vh viewport, deliberately: fitting the whole thing scaled-down was the
+    // previous version, reverted), so parts of it sit outside the visible area until
+    // dragged into view. Wired once here rather than per-render since #__rc_expand_content
+    // itself is a stable node — only the <img> inside it gets replaced each render.
+    const content = el.querySelector('#__rc_expand_content');
+    let panX = 0, panY = 0, dragging = false, lastX = 0, lastY = 0;
+    function currentImg() { return content.querySelector('img'); }
+    function clampPan() {
+      const img = currentImg();
+      if (!img) return;
+      const minX = Math.min(0, content.clientWidth - (img.naturalWidth || img.width));
+      const minY = Math.min(0, content.clientHeight - (img.naturalHeight || img.height));
+      panX = Math.min(0, Math.max(minX, panX));
+      panY = Math.min(0, Math.max(minY, panY));
     }
+    function applyPan() {
+      const img = currentImg();
+      if (img) img.style.transform = 'translate(' + panX + 'px,' + panY + 'px)';
+    }
+    // Called after a new image is set — starts centered rather than pinned to the
+    // top-left corner, so the initially-visible crop matches the small card thumbnail's
+    // own framing instead of jumping to a random edge.
+    el.resetExpandPan = function() {
+      const img = currentImg();
+      if (!img) return;
+      function center() {
+        panX = Math.min(0, (content.clientWidth - (img.naturalWidth || img.width)) / 2);
+        panY = Math.min(0, (content.clientHeight - (img.naturalHeight || img.height)) / 2);
+        clampPan();
+        applyPan();
+      }
+      if (img.complete) center(); else img.addEventListener('load', center, { once: true });
+    };
+    content.addEventListener('mousedown', function(e) {
+      if (!currentImg()) return;
+      dragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', function(e) {
+      if (!dragging) return;
+      panX += e.clientX - lastX;
+      panY += e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      clampPan();
+      applyPan();
+    });
+    window.addEventListener('mouseup', function() { dragging = false; });
+
+    _expandModalEl = el;
+    return el;
+  }
+
+  function openThumbnailExpand(blueprint) {
+    const el = _ensureExpandModal();
+    const content = el.querySelector('#__rc_expand_content');
+    el.style.display = 'flex';
+
+    const cached = _expandCache.get(blueprint.id);
+    if (cached) { content.innerHTML = '<img src="' + cached + '" alt="">'; el.resetExpandPan(); return; }
+
+    content.innerHTML = '<div id="__rc_expand_status">Rendering...</div>';
+    if (!window.__rv_ensureLoaded) { content.innerHTML = '<div id="__rc_expand_status">Room Viewer loader script missing — reload the extension.</div>'; return; }
+    window.__rv_ensureLoaded(function() {
+      if (!window.__rv_renderThumbnail) { content.innerHTML = '<div id="__rc_expand_status">Renderer loaded but __rv_renderThumbnail missing.</div>'; return; }
+      window.__rv_renderThumbnail({
+        floorItems: blueprint.floorItems,
+        wallItems: blueprint.wallItems,
+        floorProps: blueprint.floorProps
+      }, 450, true).then(function(result) {
+        if (el.style.display === 'none') return; // closed before this resolved
+        if (!result.dataUrl) { content.innerHTML = '<div id="__rc_expand_status">Render produced nothing for this blueprint.</div>'; return; }
+        _expandCache.set(blueprint.id, result.dataUrl);
+        content.innerHTML = '<img src="' + result.dataUrl + '" alt="">';
+        el.resetExpandPan();
+      }).catch(function(err) {
+        if (el.style.display === 'none') return;
+        content.innerHTML = '<div id="__rc_expand_status">Render failed: ' + _esc(err && err.message ? err.message : String(err)) + '</div>';
+      });
+    }, function(err) {
+      content.innerHTML = '<div id="__rc_expand_status">Failed to load renderer — ' + _esc(String(err)) + '</div>';
+    });
   }
 
   // Bill-of-materials for a captured room — every item type needed to build it, full
@@ -1458,9 +1718,8 @@
     if (areaBtn) areaBtn.textContent = _areaPicking ? 'Cancel Area Capture' : 'Capture Area';
     const areaHint = panel.querySelector('#__rc_area_hint');
     if (areaHint) {
-      areaHint.textContent = _areaPicking === 1 ? 'Click the first corner tile in the room.' :
-        _areaPicking === 2 ? 'Corner 1 set at (' + _areaCorner1.x + ',' + _areaCorner1.y + ') — click the second corner.' :
-        'Captures only the floor items inside a rectangle you click. No wall items.';
+      areaHint.textContent = _areaPicking ? 'Click an empty tile and drag to the opposite corner, then release.' :
+        'Drag a rectangle over the room (other furni dims while you drag) — the area captures on release. No wall items.';
     }
   }
 
@@ -1496,7 +1755,12 @@
     const buyProg = (_buyProgress && _buyProgress.id === blueprint.id) ? _buyProgress : null;
     const buildProg = (_applyProgress && _applyProgress.id === blueprint.id) ? _applyProgress : null;
     const isRunning = !!(buyProg || buildProg);
-    const pickingAnchor = _buildAnchorId === blueprint.id;
+    // Preview/Build are always both visible for an area blueprint (no separate "start
+    // picking" step) — state belongs to whichever blueprint id last toggled Preview on,
+    // so switching to a different blueprint mid-preview just shows it as not-yet-started.
+    const ownsPreview = _buildAnchorId === blueprint.id;
+    const previewOn = ownsPreview && _buildPreviewOn;
+    const hasAnchorPos = ownsPreview && !!_buildPreviewOffset;
 
     pane.innerHTML =
       '<div class="__rc_detail_hdr">' +
@@ -1517,11 +1781,18 @@
         '<div class="__rc_detail_list">' + rowsHtml(groups.needed) + '</div>' +
         _progressBarHtml(buyProg, 'Buying') +
         _progressBarHtml(buildProg, 'Building') +
-        (pickingAnchor ? '<div class="__rc_muted">Click the tile in the room where the area should start building.</div>' : '') +
+        (blueprint.isArea
+          ? '<div class="__rc_muted">' + (previewOn
+              ? 'Click a tile to place the preview, click elsewhere to move it, or Build once it looks right.'
+              : hasAnchorPos
+                ? 'Preview paused at the last position — Preview to resume, or Build to place it there.'
+                : 'Preview, then click a tile in this room to place it.') + '</div>'
+          : '') +
         '<div class="__rc_detail_actions">' +
           (isRunning ? '<button class="__rc_btn __rc_btn_danger_outline" data-action="abort">Abort</button>' : '') +
-          (pickingAnchor
-            ? '<button class="__rc_btn __rc_btn_danger_outline" data-action="cancelanchor">Cancel</button>'
+          (blueprint.isArea
+            ? '<button class="__rc_btn __rc_btn_secondary" data-action="confirmanchor"' + (hasAnchorPos ? '' : ' disabled') + '>Build</button>' +
+              '<button class="__rc_btn __rc_btn_secondary" data-action="togglepreview">' + (previewOn ? 'Clear Preview' : 'Preview') + '</button>'
             : '<button class="__rc_btn __rc_btn_secondary" data-action="apply"' + (isRunning ? ' disabled' : '') + '>Build</button>') +
           (blueprint.floorProps && blueprint.floorProps.floorPlan
             ? '<button class="__rc_btn __rc_btn_secondary" data-action="applyfloor"' + (isRunning ? ' disabled' : '') + ' title="Reshapes this room to match the original and sets wall height — only works if you own it">Build Floor + Wall</button>'
@@ -1533,11 +1804,14 @@
 
     pane.querySelector('#__rc_clear_selection').addEventListener('click', _clearSelection);
     pane.querySelector('#__rc_visit_room').addEventListener('click', function() { visitRoom(blueprint.id); });
+    const detailThumbEl = pane.querySelector('.__rc_detail_thumb');
+    if (detailThumbEl) detailThumbEl.addEventListener('click', function() { openThumbnailExpand(blueprint); });
     pane.querySelector('.__rc_detail_actions').addEventListener('click', function(e) {
       const btn = e.target.closest('button[data-action]');
       if (!btn) return;
-      if (btn.dataset.action === 'apply') { if (blueprint.isArea) startBuildAnchorPick(blueprint.id); else applyBlueprint(blueprint.id); }
-      else if (btn.dataset.action === 'cancelanchor') cancelBuildAnchorPick();
+      if (btn.dataset.action === 'apply') applyBlueprint(blueprint.id);
+      else if (btn.dataset.action === 'togglepreview') toggleBuildPreview(blueprint.id);
+      else if (btn.dataset.action === 'confirmanchor') confirmBuildAnchor(blueprint.id);
       else if (btn.dataset.action === 'applyfloor') applyFloorProperties(blueprint.id);
       else if (btn.dataset.action === 'buy') buyMissing(blueprint.id);
       else if (btn.dataset.action === 'abort') abortBuild(blueprint.id);
@@ -1675,7 +1949,14 @@
         return;
       }
       const card = e.target.closest('.__rc_card2[data-id]');
-      if (card) _selectBlueprint(parseInt(card.dataset.id));
+      if (!card) return;
+      const thumb = e.target.closest('.__rc_card2_thumb');
+      if (thumb) {
+        const blueprint = _blueprints.find(function(b) { return b.id === parseInt(card.dataset.id); });
+        if (blueprint) openThumbnailExpand(blueprint);
+        return;
+      }
+      _selectBlueprint(parseInt(card.dataset.id));
     });
 
     _renderBlueprints();

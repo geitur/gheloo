@@ -1,16 +1,18 @@
 (function() {
-  // The actual Room Viewer panel (window.__rv_open) lives in a bundle hosted outside this
-  // repo (see core/bridge.js) — fetched once and cached in IndexedDB from then on, so a
-  // normal Gheloo update never re-ships its ~3.6MB. This loader is the small part that
-  // always ships: it asks bridge.js for the bundle's code, injects it into the page as a
-  // real <script> (so it runs with its own top-level scope, same as any other content
-  // script here — a plain new Function(code)() would still work, but this survives page
-  // CSP more reliably), and only then calls the panel's own open function.
+  // The off-screen room renderer (window.__rv_renderThumbnail, window.__rv_getEngine)
+  // lives in a bundle hosted outside this repo (see core/bridge.js) — fetched once and
+  // cached in IndexedDB from then on, so a normal Gheloo update never re-ships its
+  // ~3.6MB. This loader is the small part that always ships: it asks bridge.js for the
+  // bundle's code and injects it into the page as a real <script> (so it runs with its
+  // own top-level scope, same as any other content script here — a plain
+  // new Function(code)() would still work, but this survives page CSP more reliably).
+  // Consumers: Room Clone's thumbnail rendering (extensions/rooms/room-clone.js) calls
+  // __rv_ensureLoaded before its first __rv_renderThumbnail call each session.
   var _loading = false;
   var _pending = []; // { cb, onError } queued while a fetch is already in flight
 
   window.__rv_ensureLoaded = function(cb, onError) {
-    if (window.__rv_open) { cb(); return; }
+    if (window.__rv_renderThumbnail) { cb(); return; }
     _pending.push({ cb: cb, onError: onError });
     if (_loading) return; // already fetching — this rides along with that request
     _loading = true;
@@ -49,7 +51,12 @@
       script.onload = function() {
         URL.revokeObjectURL(url);
         script.remove();
-        if (window.__rv_open) _finish(true);
+        if (window.__rv_renderThumbnail) _finish(true);
+        // The bundle itself wraps its whole top-level execution in a try/catch (see
+        // esbuild.config.mjs) that stashes any thrown error here — surface the real
+        // reason instead of just "it didn't register", since there's no devtools access
+        // to go look for it directly.
+        else if (window.__rv_loadError) _finish(false, 'renderer threw during load: ' + window.__rv_loadError);
         else _finish(false, 'renderer script ran but never registered — likely blocked partway through by page CSP');
       };
       script.onerror = function() {

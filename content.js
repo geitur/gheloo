@@ -16,7 +16,6 @@
       roomclone: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 16v3a2 2 0 002 2h9a2 2 0 002-2v-9a2 2 0 00-2-2h-3"/></svg>',
       areamover: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M19 9l3 3-3 3M9 19l3 3 3-3"/><path d="M2 12h20M12 2v20"/></svg>',
       flooreditor: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>',
-      roomviewer: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8M12 18v2"/></svg>',
       photolibrary: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 4h-5L7 7H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="4"/></svg>',
       userdatabase: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>',
       fun: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 13.5c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2"/><circle cx="9" cy="9.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1" fill="currentColor" stroke="none"/></svg>',
@@ -197,20 +196,6 @@
             } },
             { id: 'areamover', title: 'Area Mover', subtitle: 'Shift a rectangular area of furni, stack by stack', icon: ICONS.areamover, close: false, onClick: showPanelById('__am_panel') },
             { id: 'flooreditor', title: 'Floor Editor Tools', subtitle: 'Turn on/off Floor Editor Tools', icon: ICONS.flooreditor, close: false, onClick: function() { toggleFloorEditor(); } },
-            { id: 'roomviewer', title: 'Room Viewer', subtitle: 'Render the room you\'re in (first open downloads its renderer once)', icon: ICONS.roomviewer, close: false, onClick: function() {
-              const row = rowEls['roomviewer'];
-              const RV_DEFAULT_SUB = 'Render the room you\'re in (first open downloads its renderer once)';
-              function setSub(t) { if (row) row.row.querySelector('.ghl-row-subtitle').textContent = t; }
-              if (window.__rv_open) { window.__rv_open(); return; }
-              if (!window.__rv_ensureLoaded) { setSub('Loader script missing — reload the extension'); return; }
-              setSub('Downloading renderer (one-time, ~3.6MB)...');
-              window.__rv_ensureLoaded(function() {
-                setSub(RV_DEFAULT_SUB);
-                window.__rv_open();
-              }, function(err) {
-                setSub('Failed: ' + err);
-              });
-            } },
           ]},
         ],
       },
