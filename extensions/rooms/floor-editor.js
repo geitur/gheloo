@@ -118,6 +118,7 @@
     if (!window.__fe_isEnabled()) return;
     if (!window.FloorplanEditor) return;
     _patchRenderTilesForLivePreview();
+    _patchPointerHandlersForDragSelect();
     const primaryBtn = document.querySelector('.nitro-floorplan-editor .d-flex > .btn-sm.btn-primary');
     if (!primaryBtn) return;
 
@@ -224,6 +225,68 @@
       return result;
     };
     window.__fe_log('renderTiles patched for live preview');
+  }
+
+  // ── Drag-select on the 3D room — patches FloorplanEditor's own pointer handlers so a
+  // click-drag on the actual room (not just the small editor grid) drives Gheloo's
+  // already-proven area-selection path (window.RoomEngine.areaSelectionManager(), the
+  // same one area-mover.js and room-clone.js already use for their own area capture) —
+  // deliberately NOT the source extension's raw _areaSelectionManager field access,
+  // since Gheloo already has a working method-based path to the same manager.
+  //
+  // Screen-to-tile conversion: offsetX/offsetY run through the isometric inverse
+  // projection the source extension uses. Its NitroPoint wrapper (new
+  // NitroPoint(offsetX, offsetY) then read .x/.y straight back off it) is provably a
+  // no-op passthrough — an empty-body subclass of a Point class inherits that
+  // constructor unchanged, so it just stores x/y as given — meaning the conversion
+  // below operates on raw offsetX/offsetY directly with no wrapper needed.
+  let _dragOrigin = null;
+  function _screenToTile(e) {
+    const x = e.offsetX - 1024;
+    const y = e.offsetY;
+    const tileX = Math.round((x / 16 + y / 8) / 2) - 1;
+    const tileY = Math.round((y / 8 - x / 16) / 2);
+    return [tileX, tileY];
+  }
+  function _patchPointerHandlersForDragSelect() {
+    if (!window.FloorplanEditor || window.FloorplanEditor.__feDragPatched) return;
+    if (!window.RoomEngine) return; // retried on next MutationObserver tick
+    window.FloorplanEditor.__feDragPatched = true;
+
+    const originalDown = window.FloorplanEditor.onPointerDown.bind(window.FloorplanEditor);
+    window.FloorplanEditor.onPointerDown = function(e) {
+      originalDown(e);
+      if (!window.__fe_isEnabled()) return;
+      const mgr = window.RoomEngine.areaSelectionManager();
+      if (mgr.areaSelectionState !== 0) return;
+      const [tx, ty] = _screenToTile(e);
+      _dragOrigin = [tx, ty];
+      mgr.activate(function() {});
+      mgr.startSelecting();
+      mgr.handleTileMouseEvent({ type: 'ROE_MOUSE_DOWN', tileXAsInt: tx, tileYAsInt: ty });
+    };
+
+    const originalMove = window.FloorplanEditor.onPointerMove.bind(window.FloorplanEditor);
+    window.FloorplanEditor.onPointerMove = function(e) {
+      originalMove(e);
+      if (!window.__fe_isEnabled() || !_dragOrigin) return;
+      const [tx, ty] = _screenToTile(e);
+      const x = Math.min(_dragOrigin[0], tx);
+      const y = Math.min(_dragOrigin[1], ty);
+      const w = Math.abs(tx - _dragOrigin[0]) + 1;
+      const h = Math.abs(ty - _dragOrigin[1]) + 1;
+      window.RoomEngine.areaSelectionManager().setHighlight(x, y, w, h);
+    };
+
+    const originalRelease = window.FloorplanEditor.onPointerRelease.bind(window.FloorplanEditor);
+    window.FloorplanEditor.onPointerRelease = function(e) {
+      originalRelease(e);
+      if (!window.__fe_isEnabled()) return;
+      if (_dragOrigin) window.RoomEngine.areaSelectionManager().deactivate();
+      _dragOrigin = null;
+    };
+
+    window.__fe_log('pointer handlers patched for drag-select');
   }
 
   function init() {
