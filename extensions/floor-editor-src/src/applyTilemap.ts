@@ -1,4 +1,24 @@
-import { FloorHeightMapMessageParser, ObjectRoomMapUpdateMessage, RoomEngine, RoomObjectCategory, RoomPlaneParser } from '@nitrots/nitro-renderer';
+// These are deep imports into @nitrots/nitro-renderer's source files, not the package root
+// (`@nitrots/nitro-renderer`) and not any intermediate barrel path. This is load-bearing for
+// bundle size, not a style choice — see the long comment in esbuild.config.mjs for the full
+// investigation. Short version: the package root and most intermediate directories are
+// `export *` barrels; walking through ANY of them to reach one of these four classes also
+// links in unrelated sibling exports (including RoomEngine, the actual PIXI-coupled 3D
+// renderer), because esbuild can't safely tree-shake around them. Importing the exact files
+// directly avoids that for imports made from *this* file. It does not fix the same problem
+// inside the vendor package's own internal imports (e.g. ObjectRoomMapUpdateMessage.ts
+// itself imports two of its dependencies via barrels) — those are handled by the
+// onResolve redirects in esbuild.config.mjs, which point at src/vendor-barrel-shims/.
+import { FloorHeightMapMessageParser } from '@nitrots/nitro-renderer/src/nitro/communication/messages/parser/room/mapping/FloorHeightMapMessageParser';
+import { ObjectRoomMapUpdateMessage } from '@nitrots/nitro-renderer/src/nitro/room/messages/ObjectRoomMapUpdateMessage';
+import { RoomObjectCategory } from '@nitrots/nitro-renderer/src/api/nitro/room/object/RoomObjectCategory';
+import { RoomPlaneParser } from '@nitrots/nitro-renderer/src/nitro/room/object/RoomPlaneParser';
+import type { RoomEngine } from '@nitrots/nitro-renderer/src/nitro/room/RoomEngine';
+
+// RoomEngine is imported as a type only, not a value — importing it as a value (even just
+// to read one static constant) would itself pull the PIXI-coupled renderer class into this
+// bundle. ROOM_OBJECT_ID is hardcoded as a literal below instead of read off the class.
+const ROOM_OBJECT_ID = -1; // RoomEngine.ROOM_OBJECT_ID — kept as a literal since RoomEngine is now a type-only import (see comment above)
 
 // Rebuilds the floor mesh of the LIVE room from a tilemap string, without waiting for a
 // round trip to the server. This is the same trick @nitrots/nitro-renderer's own
@@ -40,9 +60,12 @@ export function applyTilemapLive(tilemapString: string, wallHeight: number, scal
   planeParser.setTileHeight(Math.floor(doorX), Math.floor(doorY), doorZ + planeParser.wallHeight);
 
   const roomMap = planeParser.getMapData();
+  // dir: 90 is a fixed simplification, not derived from wall adjacency (the vendor's original
+  // code computes 90 or 180 depending on which wall the door sits against); a west/east-facing
+  // door may render with the wrong entry orientation until verified live.
   roomMap.doors.push({ x: doorX, y: doorY, z: doorZ, dir: 90 });
 
-  const roomObject = engine.getRoomObject(roomId, RoomEngine.ROOM_OBJECT_ID, RoomObjectCategory.ROOM);
+  const roomObject = engine.getRoomObject(roomId, ROOM_OBJECT_ID, RoomObjectCategory.ROOM);
   planeParser.dispose();
   if (!roomObject) return false;
 
