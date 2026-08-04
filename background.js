@@ -51,7 +51,7 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 // name — no error, it just never re-fetched. Confirmed live: reloading the extension after the
 // v1 release swap brought back pre-fix behavior (no floor/wall, wrong wall item locations) for
 // exactly this reason. Always bump to a version string that has never been used before.
-var RV_BUNDLE_VERSION = 'roomviewer-v1.1'; // bump only when the compiled bundle itself changes
+var RV_BUNDLE_VERSION = 'roomviewer-v2'; // bump only when the compiled bundle itself changes
 var RV_BUNDLE_URL = 'https://github.com/geitur/gheloo-assets/releases/download/' + RV_BUNDLE_VERSION + '/room-viewer.bundle.js';
 
 function rvOpenDb() {
