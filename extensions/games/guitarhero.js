@@ -26,6 +26,9 @@
       '.__gh_ver_btn{border:none;border-radius:6px;font:700 10px/1 monospace;padding:0 10px;cursor:pointer;background:transparent;color:#82849a}',
       '.__gh_ver_btn.active{background:#6C7CFF;color:#0A0B10}',
       '.__gh_ver_btn:disabled{cursor:not-allowed;opacity:0.5}',
+      '.__gh_debug_row{display:flex}',
+      '.__gh_debugbtn{font-size:9px;background:none;border:1px solid #23252f;color:#82849a;border-radius:6px;padding:4px 8px;cursor:pointer;margin-left:auto}',
+      '.__gh_debugbtn:hover{color:#eceefb}',
     ].join('');
     document.head.appendChild(style);
 
@@ -41,6 +44,9 @@
         '</div>' +
         '<div id="__gh_main" style="box-sizing:border-box;display:flex;flex-direction:column;padding:0">' +
           '<div style="flex:1;overflow:hidden;padding:8px 12px;display:flex;flex-direction:column;gap:6px">' +
+            '<div class="__gh_debug_row" id="__gh_debug_row" style="display:none">' +
+              '<button id="__gh_debug_copy" class="__gh_debugbtn" title="Copy debug log">Copy log</button>' +
+            '</div>' +
             '<div id="__gh_color_card">' +
               '<span id="__gh_color_label">—</span>' +
               '<span id="__gh_queue" style="font-size:10px;font-family:monospace;color:rgba(255,255,255,0.9)">queue: 0</span>' +
@@ -51,6 +57,7 @@
             '<div class="__gh_ver_wrap">' +
               '<button type="button" class="__gh_ver_btn" id="__gh_ver_v1">V1</button>' +
               '<button type="button" class="__gh_ver_btn" id="__gh_ver_v2">V2</button>' +
+              '<button type="button" class="__gh_ver_btn" id="__gh_ver_v3">V3</button>' +
             '</div>' +
             '<button id="__gh_startstop" class="__gh_btn __gh_btn_success" style="flex:1;font-weight:800">Start</button>' +
           '</div>' +
@@ -365,8 +372,262 @@
       };
     }
 
+    // ── V3 — "in-flight pickup + debug log" implementation. Adds two things V2 doesn't
+    // have: on round-start, sweeps window.Room.floorItems for a tile that's already mid-fall
+    // (the fall loop runs independently of whether we're tracking, so a round can already
+    // have one airborne the instant we arm) instead of waiting up to a full ~5s cycle for it
+    // to lap back through storage; and drops a queued tile immediately if it hits the line
+    // or gets removed before its turn instead of dispatching a walk to an already-dead tile.
+    // No start-delay (unlike V2). Same wrapping approach as V1/V2 — _ghEnabled renamed to
+    // _running, click-handler body split into start()/stop() — plus a copyLog() method for
+    // the debug-log button, since this is the only engine that keeps one.
+    function makeV3Engine(gh) {
+      const GH_LANE_X    = { 20: 'Yellow', 21: 'Red', 22: 'Blue', 23: 'Green' };
+      const GH_LINE_Y    = 36;
+      const GH_STORAGE_Y = 25;
+      const GH_SPAWN_MIN = 26, GH_SPAWN_MAX = 27;
+      const GH_HEX       = { Yellow: '#e8c030', Red: '#e04040', Blue: '#4488ee', Green: '#26c87a' };
+      const GH_BOX       = { Red: [22, 42], Blue: [23, 41], Green: [24, 42], Yellow: [23, 43] };
+      const GH_CENTER    = [23, 42];
+      const GH_VALID_POS = new Set([...Object.values(GH_BOX), GH_CENTER].map(([x, y]) => x + ',' + y));
+      const GH_FALLBACK_MS = 6000;
+      const GH_DEBUG_MAX = 500;
+
+      let _running         = false;
+      let _ghInGame        = false;
+      let _ghSelfIdx       = null;
+      let _ghLastY         = {};
+      let _ghQueue         = [];
+      let _ghActive        = null;
+      let _ghFallbackTimer = null;
+      let _ghAdvanceTimer  = null;
+      let _ghDebugLog      = [];
+
+      function _ghLog(event, data) {
+        _ghDebugLog.push({ t: Date.now(), event: event, data: data || null });
+        if (_ghDebugLog.length > GH_DEBUG_MAX) _ghDebugLog.shift();
+        console.debug('[GH]', event, data || '');
+      }
+
+      function _ghFindSelf() {
+        if (!window._selfName || !window.Room || !window.Room.users) return;
+        const u = Object.values(window.Room.users).find(u => u.name === window._selfName);
+        if (u) _ghSelfIdx = u.index;
+      }
+
+      function _ghStopSession() {
+        _ghLog('session-stop');
+        _ghInGame = false;
+        _ghLastY = {};
+        _ghQueue = [];
+        _ghActive = null;
+        _ghUpdateQueue();
+        _ghSetLabel(null);
+        if (_ghFallbackTimer) { clearTimeout(_ghFallbackTimer); _ghFallbackTimer = null; }
+        if (_ghAdvanceTimer) { clearTimeout(_ghAdvanceTimer); _ghAdvanceTimer = null; }
+      }
+
+      function _ghSetLabel(color) {
+        const card = gh.querySelector('#__gh_color_card');
+        const lbl  = gh.querySelector('#__gh_color_label');
+        if (card) card.style.background = color ? GH_HEX[color] : '#3a3d4a';
+        if (lbl)  lbl.textContent = color || '—';
+      }
+
+      function _ghUpdateQueue() {
+        const el = gh.querySelector('#__gh_queue');
+        if (el) el.textContent = 'queue: ' + _ghQueue.length;
+        const chips = gh.querySelector('#__gh_queue_chips');
+        if (!chips) return;
+        chips.innerHTML = '';
+        _ghQueue.forEach(function(entry, i) {
+          const chip = document.createElement('span');
+          chip.className = '__gh_chip';
+          chip.style.background = GH_HEX[entry.color];
+          chip.textContent = (i + 1) + ' ' + entry.color;
+          chips.appendChild(chip);
+        });
+      }
+
+      function _ghDispatch(entry) {
+        _ghActive = entry;
+        _ghSetLabel(entry.color);
+        if (_ghFallbackTimer) clearTimeout(_ghFallbackTimer);
+        if (_ghAdvanceTimer) { clearTimeout(_ghAdvanceTimer); _ghAdvanceTimer = null; }
+        const dest = GH_BOX[entry.color];
+        _ghLog('dispatch', { id: entry.id, color: entry.color });
+        window.Game.walkTo(dest[0], dest[1]);
+        // Safety net: if we never see this tile's y hit the line or an ObjectRemove for it
+        // (missed/reordered packet), advance anyway instead of getting stuck on it forever.
+        _ghFallbackTimer = setTimeout(function() { _ghAdvance(entry.id, 'fallback'); }, GH_FALLBACK_MS);
+      }
+
+      // Called once the currently-active tile is done (hit the line, got removed, or timed
+      // out) — jumps straight to whatever spawned next in the queue, only resting at center
+      // if nothing has spawned yet.
+      function _ghAdvance(id, reason) {
+        if (!_ghActive || _ghActive.id !== id) return;
+        _ghLog('advance', { id: id, reason: reason || 'unknown' });
+        if (_ghFallbackTimer) { clearTimeout(_ghFallbackTimer); _ghFallbackTimer = null; }
+        if (_ghQueue.length) {
+          _ghDispatch(_ghQueue.shift());
+        } else {
+          _ghActive = null;
+          window.Game.walkTo(GH_CENTER[0], GH_CENTER[1]);
+          _ghSetLabel(null);
+        }
+        _ghUpdateQueue();
+      }
+
+      // Shared entry point for "a falling tile needs to be handled" — used both for a tile
+      // freshly detected leaving storage and for one picked up already mid-fall (see
+      // _ghScanInFlight below).
+      function _ghRegisterFall(id, color) {
+        const entry = { id, color };
+        if (_ghActive) { _ghQueue.push(entry); _ghUpdateQueue(); }
+        else _ghDispatch(entry);
+      }
+
+      function _ghSpawn(id, x, y) {
+        const color = GH_LANE_X[x];
+        if (!color) return;
+        if (y < GH_SPAWN_MIN || y > GH_SPAWN_MAX) return;
+        // Belt-and-suspenders: if this id happens to already be known in
+        // window.Room.floorItems (it usually isn't), require its name to actually be the
+        // falling tile so we don't queue some unrelated furni sitting in the lane's x/y range.
+        const known = window.Room && window.Room.floorItems && window.Room.floorItems[id];
+        if (known && known.furniName && known.furniName.toLowerCase() !== 'kleurtegel (bronze)') return;
+        _ghLog('spawn', { id: id, color: color, x: x, y: y });
+        _ghRegisterFall(id, color);
+      }
+
+      // The room's tile-fall loop runs independently of whether we're tracking — a round can
+      // already have a tile mid-air the instant we arm (arrival at center confirmed). That
+      // tile left storage before we started listening, so it'll never land on y=26/27 again
+      // until it laps all the way back through storage — a full ~5s cycle wasted doing
+      // nothing. Sweep floorItems once on round-start and pick up anything already falling.
+      function _ghScanInFlight() {
+        if (!window.Room || !window.Room.floorItems) return;
+        const inFlight = [];
+        Object.values(window.Room.floorItems).forEach(function(item) {
+          const color = GH_LANE_X[item.x];
+          if (!color) return;
+          if (item.y < GH_SPAWN_MIN || item.y >= GH_LINE_Y) return; // not currently mid-fall
+          if (item.furniName && item.furniName.toLowerCase() !== 'kleurtegel (bronze)') return;
+          inFlight.push({ id: item.id, color: color, y: item.y });
+        });
+        inFlight.sort(function(a, b) { return b.y - a.y; }); // closest to the line first — most urgent
+        inFlight.forEach(function(t) {
+          if (_ghLastY[t.id] !== undefined) return;
+          _ghLastY[t.id] = t.y;
+          _ghLog('inflight-pickup', { id: t.id, color: t.color, y: t.y });
+          _ghRegisterFall(t.id, t.color);
+        });
+      }
+
+      window.onPacket('SlideObjectBundle', p => {
+        if (!_running || !_ghInGame || !p.parsed) return;
+        p.parsed.items.forEach(({ id, x, y }) => {
+          const last = _ghLastY[id];
+          _ghLastY[id] = y;
+          if (_ghActive && _ghActive.id === id) {
+            if (y >= GH_LINE_Y && !_ghAdvanceTimer) {
+              _ghAdvanceTimer = setTimeout(function() { _ghAdvanceTimer = null; _ghAdvance(id, 'line'); }, 500);
+            }
+            return;
+          }
+          const qIdx = _ghQueue.findIndex(function(e) { return e.id === id; });
+          if (qIdx !== -1) {
+            // A tile can hit the line (or get removed, handled below) while it's still
+            // sitting in the queue — the bot fell behind and never got to dispatch it. Drop
+            // it here the instant that happens instead of leaving it in the queue: if we
+            // waited and dispatched it later anyway (old behavior), the deadline was already
+            // gone and the walk landed on a dead/expired tile — no real hit, easy death.
+            if (y >= GH_LINE_Y) {
+              _ghLog('queue-miss', { id: id, reason: 'line' });
+              _ghQueue.splice(qIdx, 1);
+              _ghUpdateQueue();
+            } else if (y === GH_STORAGE_Y) {
+              // Storage (y=25) is where a tile rests between falls — several can idle there at
+              // once. A queued tile reappearing there means it completed a lap without ever
+              // being hit; drop the stale entry instead of dispatching it later out of sync.
+              // It gets re-queued fresh once it actually leaves storage again (y=26/27).
+              _ghLog('queue-miss', { id: id, reason: 'recycled' });
+              _ghQueue.splice(qIdx, 1);
+              _ghUpdateQueue();
+            }
+            return; // still waiting its turn (or just expired above)
+          }
+          // Not active, not queued — y=25 is inert storage and is NEVER a spawn signal on
+          // its own (tiles can sit there idle indefinitely, several at a time). Only 26/27
+          // count as "just left storage and started falling."
+          const enteringPlay = (y === GH_SPAWN_MIN || y === GH_SPAWN_MAX) && (last === undefined || last <= GH_STORAGE_Y);
+          if (enteringPlay) _ghSpawn(id, x, y);
+        });
+      });
+
+      window.onPacket('ObjectRemove', p => {
+        if (!_ghInGame || !p.parsed) return;
+        const id = p.parsed.id;
+        if (_ghActive && _ghActive.id === id) { _ghAdvance(id, 'removed'); return; }
+        // Same reasoning as the queued line-hit case above: a removal for a tile we never
+        // got around to dispatching means its window is gone — drop it, don't dispatch late.
+        const qIdx = _ghQueue.findIndex(function(e) { return e.id === id; });
+        if (qIdx !== -1) {
+          _ghLog('queue-miss', { id: id, reason: 'removed' });
+          _ghQueue.splice(qIdx, 1);
+          _ghUpdateQueue();
+        }
+      });
+
+      window.onPacket('Objects',    () => { setTimeout(_ghFindSelf, 50); });
+      window.onPacket('Users',      () => { setTimeout(_ghFindSelf, 50); });
+      window.onPacket('UserObject', () => { _ghFindSelf(); });
+
+      window.onPacket('UserUpdate', p => {
+        if (_ghSelfIdx === null || !p.parsed || p.parsed.index !== _ghSelfIdx) return;
+        const key = p.parsed.x + ',' + p.parsed.y;
+        // Confirmed real position, logged every time it changes — this is what actually
+        // happened, to compare against the walkTo intent (dispatch) above it in the log
+        // when tracking down a bug.
+        if (_running) _ghLog('position', { x: p.parsed.x, y: p.parsed.y });
+        if (!_ghInGame) {
+          if (_running && p.parsed.x === GH_CENTER[0] && p.parsed.y === GH_CENTER[1]) {
+            _ghInGame = true;
+            _ghLog('round-start');
+            _ghScanInFlight();
+          }
+          return;
+        }
+        if (!GH_VALID_POS.has(key)) _ghStopSession(); // walked out of the box — round's over
+      });
+
+      window.onPacket('RoomReady', () => {
+        if (!_running) return;
+        _ghSelfIdx = null;
+        _ghStopSession();
+      });
+
+      return {
+        start: function() {
+          _running = true;
+          _ghStopSession();
+          _ghFindSelf();
+          window.Game.walkTo(GH_CENTER[0], GH_CENTER[1]);
+        },
+        stop: function() {
+          _running = false;
+          _ghStopSession();
+        },
+        copyLog: function() {
+          return navigator.clipboard.writeText(JSON.stringify(_ghDebugLog, null, 2));
+        }
+      };
+    }
+
     const V1Engine = makeV1Engine(gh);
     const V2Engine = makeV2Engine(gh);
+    const V3Engine = makeV3Engine(gh);
 
     // ── Version toggle — persisted choice between the two engines above. Disabled while
     // running so the selection can't change mid-round.
@@ -374,7 +635,7 @@
     function _ghLoadVersion() {
       try {
         const v = localStorage.getItem(VERSION_KEY);
-        return (v === 'v1' || v === 'v2') ? v : 'v1';
+        return (v === 'v1' || v === 'v2' || v === 'v3') ? v : 'v1';
       } catch (_) { return 'v1'; }
     }
     function _ghSaveVersion(v) {
@@ -384,13 +645,23 @@
     let _ghVersion = _ghLoadVersion();
     let _ghRunning = false;
 
-    function _ghSelectedEngine() { return _ghVersion === 'v2' ? V2Engine : V1Engine; }
+    function _ghSelectedEngine() {
+      if (_ghVersion === 'v2') return V2Engine;
+      if (_ghVersion === 'v3') return V3Engine;
+      return V1Engine;
+    }
 
     const v1Btn = gh.querySelector('#__gh_ver_v1');
     const v2Btn = gh.querySelector('#__gh_ver_v2');
+    const v3Btn = gh.querySelector('#__gh_ver_v3');
+    const debugRow = gh.querySelector('#__gh_debug_row');
     function _ghUpdateVersionButtons() {
       if (v1Btn) { v1Btn.classList.toggle('active', _ghVersion === 'v1'); v1Btn.disabled = _ghRunning; }
       if (v2Btn) { v2Btn.classList.toggle('active', _ghVersion === 'v2'); v2Btn.disabled = _ghRunning; }
+      if (v3Btn) { v3Btn.classList.toggle('active', _ghVersion === 'v3'); v3Btn.disabled = _ghRunning; }
+      // Only V3 keeps a debug log — hide the copy button for the other two rather than
+      // show a control that would just copy an empty array.
+      if (debugRow) debugRow.style.display = _ghVersion === 'v3' ? 'flex' : 'none';
     }
     if (v1Btn) v1Btn.addEventListener('click', function() {
       if (_ghRunning) return;
@@ -404,7 +675,22 @@
       _ghSaveVersion('v2');
       _ghUpdateVersionButtons();
     });
+    if (v3Btn) v3Btn.addEventListener('click', function() {
+      if (_ghRunning) return;
+      _ghVersion = 'v3';
+      _ghSaveVersion('v3');
+      _ghUpdateVersionButtons();
+    });
     _ghUpdateVersionButtons();
+
+    const debugCopyBtn = gh.querySelector('#__gh_debug_copy');
+    if (debugCopyBtn) debugCopyBtn.addEventListener('click', function() {
+      const btn = this;
+      V3Engine.copyLog().catch(() => {}).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy log'; }, 1200);
+      });
+    });
 
     const startStopBtn = gh.querySelector('#__gh_startstop');
     startStopBtn.addEventListener('click', function() {
