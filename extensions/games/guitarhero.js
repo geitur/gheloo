@@ -167,6 +167,7 @@
       });
 
       window.onPacket('RoomReady', () => {
+        if (!_running) return;
         _ghLastY = {};
         _ghQueue = [];
         _ghActive = null;
@@ -345,6 +346,7 @@
       });
 
       window.onPacket('RoomReady', () => {
+        if (!_running) return;
         _ghSelfIdx = null;
         _ghStopSession();
       });
