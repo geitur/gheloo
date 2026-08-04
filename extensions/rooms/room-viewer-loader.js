@@ -57,7 +57,9 @@
       }
       if (window.__rv_renderThumbnail) { _finish(true); return; }
       if (window.__rv_loadError) { _finish(false, 'renderer threw during load: ' + window.__rv_loadError); return; }
-      _finish(false, 'renderer script ran but never registered — this is a real bug, not a CSP block, please report it');
+      var d = e.data.diag;
+      var diagStr = d ? (' [srcLength=' + d.srcLength + ' hadBefore=' + d.hadBefore + ' tail="' + d.srcTail + '"]') : ' [no diag from background.js]';
+      _finish(false, 'renderer script ran but never registered' + diagStr);
     }
     window.addEventListener('message', handler);
     window.postMessage({ type: '__ghk_rv_request_bundle' }, '*');

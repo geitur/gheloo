@@ -24,7 +24,7 @@
   window.addEventListener('message', function(e) {
     if (e.source !== window || !e.data || e.data.type !== '__ghk_rv_request_bundle') return;
     chrome.runtime.sendMessage({ type: 'get_room_viewer_bundle' }, function(response) {
-      window.postMessage({ type: '__ghk_rv_bundle', ok: !!(response && response.ok), error: response && response.error }, '*');
+      window.postMessage({ type: '__ghk_rv_bundle', ok: !!(response && response.ok), error: response && response.error, diag: response && response.diag }, '*');
     });
   });
 })();

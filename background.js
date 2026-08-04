@@ -17,16 +17,30 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
         target: { tabId: tabId },
         world: 'MAIN',
         func: function(src) {
+          var hadBefore = !!window.__rv_renderThumbnail;
           try {
             new Function(src)();
           } catch (e) {
             window.__rv_loadError = (e && e.stack) ? e.stack : String(e);
           }
+          // No devtools access on the target machine — return real numbers instead of
+          // guessing again next time this fails. srcLength close to 0 means the fetch
+          // itself was bad (not a page-context problem at all); a length matching the
+          // real bundle but still no registration and no loadError means something is
+          // silently eating the injected code between here and execution.
+          return {
+            srcLength: src ? src.length : 0,
+            srcTail: src ? src.slice(-80) : '',
+            hadBefore: hadBefore,
+            hasThumbnailFn: !!window.__rv_renderThumbnail,
+            loadError: window.__rv_loadError || null
+          };
         },
         args: [code]
       });
-    }).then(function() {
-      sendResponse({ ok: true });
+    }).then(function(results) {
+      var diag = results && results[0] && results[0].result;
+      sendResponse({ ok: true, diag: diag });
     }).catch(function(err) {
       sendResponse({ ok: false, error: String(err) });
     });
@@ -78,12 +92,27 @@ function rvSetCached(code) {
     tx.objectStore('bundles').put(code, RV_BUNDLE_VERSION);
   });
 }
+// A truncated fetch (confirmed live: a partial download got cached and every retry after
+// that just kept returning the same broken copy forever, with reloading the extension not
+// helping since IndexedDB survives that) used to poison the cache permanently with no way
+// to detect it — the esbuild footer (see esbuild.config.mjs's banner/footer) is always the
+// literal last thing in a complete bundle, so its absence is a cheap, reliable signal that
+// what's stored (or what a fetch just produced) is bad and must not be trusted or kept.
+function _rvLooksComplete(code) {
+  return typeof code === 'string' && code.length > 0 &&
+    code.slice(-200).indexOf('window.__rv_loadError') !== -1;
+}
+
 async function getRoomViewerBundle() {
   var cached = await rvGetCached();
-  if (cached) return cached;
+  if (cached && _rvLooksComplete(cached)) return cached;
+
   var res = await fetch(RV_BUNDLE_URL);
   if (!res.ok) throw new Error('fetch failed: ' + res.status);
   var code = await res.text();
+  if (!_rvLooksComplete(code)) {
+    throw new Error('fetch truncated: got ' + code.length + ' chars, bundle is missing its closing footer');
+  }
   await rvSetCached(code);
   return code;
 }
