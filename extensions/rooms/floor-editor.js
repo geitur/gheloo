@@ -141,18 +141,17 @@
 
   function init() {
     _ensureFloorEditorButtons();
-    if (document.body && typeof MutationObserver !== 'undefined') {
-      let scheduled = false;
-      new MutationObserver(function() {
-        if (scheduled) return;
-        scheduled = true;
-        requestAnimationFrame(function() {
-          scheduled = false;
-          _ensureFloorEditorButtons();
-          _resetOnEditorClose();
-        });
-      }).observe(document.body, { childList: true, subtree: true });
-    }
+    // Interval poll instead of a whole-document MutationObserver — this file only cares
+    // about one specific element (.nitro-floorplan-editor) appearing/disappearing, not
+    // every mutation anywhere on the page. A body-wide observer fired on literally any
+    // other extension's own DOM churn too (e.g. a busy node-graph UI rebuilding its own
+    // panel constantly), scheduling extra rAF work in lockstep with unrelated activity
+    // for no benefit — this matches the same lightweight polling pattern already used
+    // elsewhere in this codebase (see the room-tools-icon injection pattern).
+    setInterval(function() {
+      _ensureFloorEditorButtons();
+      _resetOnEditorClose();
+    }, 500);
   }
 
   if (document.readyState === 'loading') {
