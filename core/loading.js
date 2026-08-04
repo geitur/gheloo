@@ -18,6 +18,19 @@
     let progress = 2, everReady = false, finishing = false;
     let finishTimer = 0, removeTimer = 0, pollTimer = 0, rafQueued = false;
 
+    // This is MAIN world — can't call chrome.runtime.getManifest() directly (see
+    // core/bridge.js) — so read the real installed version off the same
+    // __ghk_update_status relay core/update-toast.js already uses, instead of a hardcoded
+    // string that has to be remembered and bumped by hand every release (and wasn't).
+    let installedVersion = null;
+    window.addEventListener('message', function (e) {
+        if (e.source !== window || !e.data || e.data.type !== '__ghk_update_status') return;
+        if (!e.data.installedVersion) return;
+        installedVersion = e.data.installedVersion;
+        const vEl = root && root.querySelector('.gh-version');
+        if (vEl) vEl.textContent = 'v' + installedVersion;
+    });
+
     function onHotel() {
         return String(location.pathname || '').indexOf('/hotel') >= 0;
     }
@@ -161,7 +174,7 @@
             '<div class="gh-wordmark">' +
                 '<p class="gh-title"><span class="gh-part1">Ghe</span><span class="gh-part2">loo</span></p>' +
                 '<p class="gh-sub">LEET.CITY</p>' +
-                '<p class="gh-version">v2.2.2</p>' +
+                '<p class="gh-version">' + (installedVersion ? 'v' + installedVersion : '') + '</p>' +
             '</div>' +
             '<div class="gh-bar-row">' +
                 '<div class="gh-marker" id="gh-own-marker">G</div>' +
