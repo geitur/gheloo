@@ -15,7 +15,6 @@
       furnihider: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11V8a2 2 0 012-2h12a2 2 0 012 2v3"/><path d="M3 11h18v4a1 1 0 01-1 1H4a1 1 0 01-1-1v-4z"/><path d="M4 16v3M20 16v3"/></svg>',
       roomclone: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 16v3a2 2 0 002 2h9a2 2 0 002-2v-9a2 2 0 00-2-2h-3"/></svg>',
       areamover: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M19 9l3 3-3 3M9 19l3 3 3-3"/><path d="M2 12h20M12 2v20"/></svg>',
-      flooreditor: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>',
       photolibrary: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 4h-5L7 7H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="4"/></svg>',
       userdatabase: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>',
       fun: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 13.5c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2"/><circle cx="9" cy="9.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1" fill="currentColor" stroke="none"/></svg>',
@@ -195,7 +194,6 @@
               if (window.__ghl_rcShowQuick) window.__ghl_rcShowQuick();
             } },
             { id: 'areamover', title: 'Area Mover', subtitle: 'Shift a rectangular area of furni, stack by stack', icon: ICONS.areamover, close: false, onClick: showPanelById('__am_panel') },
-            { id: 'flooreditor', title: 'Floor Editor Tools', subtitle: 'Turn on/off Floor Editor Tools', icon: ICONS.flooreditor, close: false, onClick: function() { toggleFloorEditor(); } },
           ]},
         ],
       },
@@ -946,22 +944,6 @@
     const _mpaInitialOn = !!(window.__mpa_isEnabled && window.__mpa_isEnabled());
     window.Gheloo.setActive('marktplaatsalertstoggle', _mpaInitialOn);
     _updateMarktplaatsAlertsSubtitle(_mpaInitialOn);
-
-    // Floor Editor Tools owns its own on/off state (extensions/rooms/floor-editor.js) —
-    // this row just mirrors and drives it, no separate storage key here.
-    function _updateFloorEditorSubtitle(on) {
-      const row = rowEls['flooreditor'];
-      if (row) row.row.querySelector('.ghl-row-subtitle').textContent = on ? 'Turn Floor Editor Tools off' : 'Turn Floor Editor Tools on';
-    }
-    function toggleFloorEditor() {
-      const next = !(window.__fe_isEnabled && window.__fe_isEnabled());
-      if (window.__fe_setEnabled) window.__fe_setEnabled(next);
-      window.Gheloo.setActive('flooreditor', next);
-      _updateFloorEditorSubtitle(next);
-    }
-    const _feInitialOn = !!(window.__fe_isEnabled && window.__fe_isEnabled());
-    window.Gheloo.setActive('flooreditor', _feInitialOn);
-    _updateFloorEditorSubtitle(_feInitialOn);
 
     function toggleStealCommand() {
       _stealOn = !_stealOn;

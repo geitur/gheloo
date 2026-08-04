@@ -15,27 +15,9 @@
   // No floating Gheloo panel — everything here patches the native editor's own
   // DOM/behavior directly.
 
-  const STORAGE_KEY = '__ghk_floor_editor_settings';
-
-  let _on = false;
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    if (saved.on) _on = true;
-  } catch (_) {}
-
-  function _save() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ on: _on })); } catch (_) {}
-  }
-
   window.__fe_log = function(msg) {
     console.log('[FloorEditor]', msg);
   };
-
-  window.__fe_setEnabled = function(on) {
-    _on = !!on;
-    _save();
-  };
-  window.__fe_isEnabled = function() { return _on; };
 
   // ── Tilemap string helpers — 'x' = void/non-walkable, '0'-'9'/'a'-'z' = walkable at
   // that height, one char per tile, '\r'-separated rows. Matches the FloorHeightMap
@@ -71,7 +53,6 @@
   }
 
   function _ensureFloorEditorButtons() {
-    if (!window.__fe_isEnabled()) return;
     if (!window.FloorplanEditor) return;
     const primaryBtn = document.querySelector('.nitro-floorplan-editor .d-flex.justify-content-between > .btn-sm.btn-primary');
     if (!primaryBtn) return;
@@ -104,7 +85,6 @@
       undoBtn.addEventListener('click', function(e) {
         e.preventDefault();
         e.stopImmediatePropagation();
-        if (!window.__fe_isEnabled()) return;
         if (_originalTilemap === null) return;
         try {
           window.FloorplanEditor.setTilemap(_originalTilemap, _occupiedTilesSnapshot());
@@ -134,7 +114,6 @@
       expandBtn.addEventListener('click', function(e) {
         e.preventDefault();
         e.stopImmediatePropagation();
-        if (!window.__fe_isEnabled()) return;
         if (_originalTilemap === null) return;
         try {
           // Reads _originalTileMap (the tilemap as of editor-open), not
