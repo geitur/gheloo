@@ -79,7 +79,58 @@
     bg.querySelector('#__bg_close').addEventListener('click', () => { bg.style.display = 'none'; });
 
     // ── BINGO ──
-    // Game logic added in Task 2 (dice selection) and Task 3 (value tracking + roll loop).
+    let _bgEnabled      = false;
+    let _bgHostId       = null; // string furni id
+    let _bgOwnId        = null; // string furni id
+    let _bgHostRaw      = null; // last raw state string from the host dice: '-1' | '0' | '1'..'6' | null
+    let _bgHostTarget   = null; // parsed 1-6 number, or null when there's no live call
+    let _bgOwnRaw       = null; // last raw state string from own dice
+    let _bgSelectTarget = null; // 'host' | 'own' | null — which button is waiting for a click
+
+    function _bgSetHostIdUI() {
+      const el = bg.querySelector('#__bg_host_id');
+      if (el) el.textContent = _bgHostId ? '#' + _bgHostId : 'not set';
+    }
+    function _bgSetOwnIdUI() {
+      const el = bg.querySelector('#__bg_own_id');
+      if (el) el.textContent = _bgOwnId ? '#' + _bgOwnId : 'not set';
+    }
+    function _bgUpdateSelectButtons() {
+      const hostBtn = bg.querySelector('#__bg_sel_host_btn');
+      const ownBtn  = bg.querySelector('#__bg_sel_own_btn');
+      if (hostBtn) {
+        hostBtn.textContent = _bgSelectTarget === 'host' ? 'Click a dice…' : 'Select Host Dice';
+        hostBtn.classList.toggle('active', _bgSelectTarget === 'host');
+      }
+      if (ownBtn) {
+        ownBtn.textContent = _bgSelectTarget === 'own' ? 'Click a dice…' : 'Select Own Dice';
+        ownBtn.classList.toggle('active', _bgSelectTarget === 'own');
+      }
+    }
+
+    bg.querySelector('#__bg_sel_host_btn').addEventListener('click', () => {
+      _bgSelectTarget = _bgSelectTarget === 'host' ? null : 'host';
+      _bgUpdateSelectButtons();
+    });
+    bg.querySelector('#__bg_sel_own_btn').addEventListener('click', () => {
+      _bgSelectTarget = _bgSelectTarget === 'own' ? null : 'own';
+      _bgUpdateSelectButtons();
+    });
+
+    // Intercept OUT #355 (click/use object) to capture whichever dice gets clicked next,
+    // same mechanism Color Party uses for its "Select Tile" button.
+    window.PacketStore.subscribe(function(p) {
+      if (!_bgSelectTarget || p.direction !== 'OUT' || p.header !== 355) return;
+      try {
+        const r = window.makeReader(p.raw);
+        if (!r) return;
+        const id = String(r.int());
+        if (_bgSelectTarget === 'host') { _bgHostId = id; _bgSetHostIdUI(); }
+        else { _bgOwnId = id; _bgSetOwnIdUI(); }
+        _bgSelectTarget = null;
+        _bgUpdateSelectButtons();
+      } catch(_) {}
+    });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { window.__ghk_ready(buildBingoPanel); }); else window.__ghk_ready(buildBingoPanel);
