@@ -653,9 +653,28 @@
       try { localStorage.setItem(DESIGN_STORAGE_KEY, JSON.stringify({ on: _defaultDesignOn })); } catch(_) {}
     }
 
-    // Always-on, not tied to Default Leet Design: remove room-enter ad banners.
+    // Always-on, not tied to Default Leet Design: remove room-enter ad banners, and the
+    // GPT/DFP ad-slot popup (div[id^="ad-"] wrapping a google_ads_iframe, shown inside a
+    // Bootstrap modal with its own close button). Removing just .modal-content (as an earlier
+    // version of this did) leaves Bootstrap's own .modal-backdrop overlay and body.modal-open
+    // behind — since we deleted the modal out from under Bootstrap instead of calling its
+    // hide(), it never gets a chance to clean those up itself. That backdrop is a full-screen
+    // fixed-position layer, which is exactly what a grey, unclickable page looks like. So this
+    // takes the whole .modal wrapper (not just modal-content), then strips any now-orphaned
+    // backdrop/body state — but only once no other genuine modal is still open, so a real modal
+    // stacked underneath doesn't lose its backdrop too.
     function _removeRoomAd() {
       document.querySelectorAll('.roomenterad-habblet-container').forEach(function(el) { el.remove(); });
+      document.querySelectorAll('div[id^="ad-"]').forEach(function(el) {
+        if (!el.querySelector('[id*="google_ads_iframe"]')) return;
+        (el.closest('.modal') || el.closest('.modal-content') || el).remove();
+      });
+      if (!document.querySelector('.modal.show')) {
+        document.querySelectorAll('.modal-backdrop').forEach(function(bd) { bd.remove(); });
+        document.body.classList.remove('modal-open');
+        document.body.style.removeProperty('overflow');
+        document.body.style.removeProperty('padding-right');
+      }
     }
     new MutationObserver(_removeRoomAd).observe(document.body, { childList: true, subtree: true });
     _removeRoomAd();
