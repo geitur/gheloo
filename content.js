@@ -11,6 +11,7 @@
       pktsender: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>',
       colorparty: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C8 6 5 10 5 13a7 7 0 0014 0c0-3-3-7-7-11z"/></svg>',
       guitarhero: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="9" width="18" height="4" rx="1"/><circle cx="6" cy="17" r="2"/><circle cx="12" cy="17" r="2"/><circle cx="18" cy="17" r="2"/></svg>',
+      bingo: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="8" cy="16" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="16" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>',
       rooms: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10l9-7 9 7"/><path d="M5 9v11h14V9"/><path d="M9 20v-6h6v6"/></svg>',
       furnihider: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11V8a2 2 0 012-2h12a2 2 0 012 2v3"/><path d="M3 11h18v4a1 1 0 01-1 1H4a1 1 0 01-1-1v-4z"/><path d="M4 16v3M20 16v3"/></svg>',
       roomclone: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 16v3a2 2 0 002 2h9a2 2 0 002-2v-9a2 2 0 00-2-2h-3"/></svg>',
@@ -178,6 +179,7 @@
           { label: '', rows: [
             { id: 'colorparty', title: 'Color Party', subtitle: 'Auto-play Color Party', icon: ICONS.colorparty, close: false, onClick: showPanelById('__rc') },
             { id: 'guitarhero', title: 'Guitar Hero', subtitle: 'Auto-play Guitar Hero', icon: ICONS.guitarhero, close: false, onClick: showPanelById('__gh') },
+            { id: 'bingo', title: 'Bingo', subtitle: 'Auto-roll to match the host dice', icon: ICONS.bingo, close: false, onClick: showPanelById('__bg') },
           ]},
         ],
       },
@@ -1142,7 +1144,7 @@
 
   // Bring-to-front on click: clicking any panel raises it above the others.
   (function() {
-    var _IDS = ['__hbl','__snd','__mac','__rc','__fb','__mb','__mpa_panel','__mimic','__tst','__ext','__fh_panel','__rclone','__photolib','__ins_panel','__am_panel','__userdb','__udb_nc','__rv_panel','__wc_panel'];
+    var _IDS = ['__hbl','__snd','__mac','__rc','__fb','__mb','__mpa_panel','__mimic','__tst','__ext','__fh_panel','__rclone','__photolib','__ins_panel','__am_panel','__userdb','__udb_nc','__rv_panel','__wc_panel','__bg'];
     var _gameStack = []; // back = bottom, front = top
 
     // Find the stacking host for a game panel.

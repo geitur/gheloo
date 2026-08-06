@@ -29,6 +29,7 @@
         "extensions/scripting/room-inspector.js",
         "extensions/games/colorparty.js",
         "extensions/games/guitarhero.js",
+        "extensions/games/bingo.js",
         "extensions/rooms/furni-hider.js",
         "extensions/rooms/room-clone.js",
         "extensions/rooms/area-mover.js",
