@@ -86,6 +86,7 @@
     let _bgHostTarget   = null; // parsed 1-6 number, or null when there's no live call
     let _bgOwnRaw       = null; // last raw state string from own dice
     let _bgSelectTarget = null; // 'host' | 'own' | null — which button is waiting for a click
+    let _bgRollPending  = false; // true from the moment we send a roll until the own dice's next value lands
 
     function _bgSetHostIdUI() {
       const el = bg.querySelector('#__bg_host_id');
@@ -151,6 +152,7 @@
     // this is what actually rolls it.
     function _bgRoll() {
       if (!_bgOwnId) return;
+      _bgRollPending = true;
       window.sendPacket('OUT', 355, '{i:' + _bgOwnId + '}');
     }
 
@@ -158,7 +160,7 @@
     // on a mismatch (no delay) — the server's own roll animation (state passes through '-1'
     // before settling) is what naturally paces this, since we only act on a settled value.
     function _bgMaybeRoll() {
-      if (!_bgEnabled || !_bgOwnId || _bgHostTarget === null) return;
+      if (!_bgEnabled || !_bgOwnId || _bgHostTarget === null || _bgRollPending) return;
       if (_bgOwnRaw === '-1') return; // still mid-roll, wait for it to settle
       const ownNum = /^[1-6]$/.test(_bgOwnRaw || '') ? parseInt(_bgOwnRaw) : null;
       if (ownNum === _bgHostTarget) return; // matched — stop
@@ -177,11 +179,12 @@
       const id = String(p.parsed.id);
       if (_bgHostId && id === _bgHostId) {
         _bgHostRaw = p.parsed.state;
-        _bgHostTarget = /^[1-6]$/.test(_bgHostRaw) ? parseInt(_bgHostRaw) : null;
+        _bgHostTarget = /^[1-6]$/.test(_bgHostRaw || '') ? parseInt(_bgHostRaw) : null;
         _bgSetHostUI();
         _bgMaybeRoll();
       }
       if (_bgOwnId && id === _bgOwnId) {
+        _bgRollPending = false;
         _bgOwnRaw = p.parsed.state;
         _bgSetOwnUI();
         _bgMaybeRoll();
@@ -192,7 +195,7 @@
     window.onPacket('RoomReady', () => {
       _bgEnabled = false;
       _bgHostId = null; _bgOwnId = null;
-      _bgHostRaw = null; _bgHostTarget = null; _bgOwnRaw = null;
+      _bgHostRaw = null; _bgHostTarget = null; _bgOwnRaw = null; _bgRollPending = false;
       _bgSelectTarget = null;
       const ssBtn = bg.querySelector('#__bg_startstop');
       if (ssBtn) { ssBtn.textContent = 'Start'; ssBtn.className = '__bg_btn __bg_btn_success'; }
