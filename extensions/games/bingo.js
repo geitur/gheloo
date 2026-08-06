@@ -131,6 +131,73 @@
         _bgUpdateSelectButtons();
       } catch(_) {}
     });
+
+    function _bgLabelForRaw(raw) {
+      if (raw === null) return '—';
+      if (raw === '-1') return 'Rolling…';
+      if (raw === '0') return 'Closed';
+      return raw;
+    }
+    function _bgSetHostUI() {
+      const el = bg.querySelector('#__bg_host_label');
+      if (el) el.textContent = _bgLabelForRaw(_bgHostRaw);
+    }
+    function _bgSetOwnUI() {
+      const el = bg.querySelector('#__bg_own_label');
+      if (el) el.textContent = _bgLabelForRaw(_bgOwnRaw);
+    }
+
+    // Sends the same OUT-355 click packet a real click would send, aimed at our own dice —
+    // this is what actually rolls it.
+    function _bgRoll() {
+      if (!_bgOwnId) return;
+      window.sendPacket('OUT', 355, '{i:' + _bgOwnId + '}');
+    }
+
+    // Central decision point, called after every relevant state change. Instantly re-rolls
+    // on a mismatch (no delay) — the server's own roll animation (state passes through '-1'
+    // before settling) is what naturally paces this, since we only act on a settled value.
+    function _bgMaybeRoll() {
+      if (!_bgEnabled || !_bgOwnId || _bgHostTarget === null) return;
+      if (_bgOwnRaw === '-1') return; // still mid-roll, wait for it to settle
+      const ownNum = /^[1-6]$/.test(_bgOwnRaw || '') ? parseInt(_bgOwnRaw) : null;
+      if (ownNum === _bgHostTarget) return; // matched — stop
+      _bgRoll();
+    }
+
+    bg.querySelector('#__bg_startstop').addEventListener('click', function() {
+      _bgEnabled = !_bgEnabled;
+      this.textContent = _bgEnabled ? 'Stop' : 'Start';
+      this.className = _bgEnabled ? '__bg_btn __bg_btn_danger' : '__bg_btn __bg_btn_success';
+      if (_bgEnabled) _bgMaybeRoll();
+    });
+
+    window.onPacket('ObjectDataUpdate', p => {
+      if (!p.parsed) return;
+      const id = String(p.parsed.id);
+      if (_bgHostId && id === _bgHostId) {
+        _bgHostRaw = p.parsed.state;
+        _bgHostTarget = /^[1-6]$/.test(_bgHostRaw) ? parseInt(_bgHostRaw) : null;
+        _bgSetHostUI();
+        _bgMaybeRoll();
+      }
+      if (_bgOwnId && id === _bgOwnId) {
+        _bgOwnRaw = p.parsed.state;
+        _bgSetOwnUI();
+        _bgMaybeRoll();
+      }
+    });
+
+    // Reset on room change, same pattern as Color Party.
+    window.onPacket('RoomReady', () => {
+      _bgEnabled = false;
+      _bgHostId = null; _bgOwnId = null;
+      _bgHostRaw = null; _bgHostTarget = null; _bgOwnRaw = null;
+      _bgSelectTarget = null;
+      const ssBtn = bg.querySelector('#__bg_startstop');
+      if (ssBtn) { ssBtn.textContent = 'Start'; ssBtn.className = '__bg_btn __bg_btn_success'; }
+      _bgSetHostUI(); _bgSetOwnUI(); _bgSetHostIdUI(); _bgSetOwnIdUI(); _bgUpdateSelectButtons();
+    });
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { window.__ghk_ready(buildBingoPanel); }); else window.__ghk_ready(buildBingoPanel);
