@@ -155,8 +155,11 @@
       if (!_bgOwnId) return;
       _bgRollPending = true;
       _bgSelfRollInFlight = true;
-      window.sendPacket('OUT', 355, '{i:' + _bgOwnId + '}');
-      _bgSelfRollInFlight = false;
+      try {
+        window.sendPacket('OUT', 355, '{i:' + _bgOwnId + '}');
+      } finally {
+        _bgSelfRollInFlight = false;
+      }
     }
 
     // Central decision point, called after every relevant state change. Instantly re-rolls
