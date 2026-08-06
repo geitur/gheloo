@@ -86,7 +86,6 @@
     let _bgHostTarget   = null; // parsed 1-6 number, or null when there's no live call
     let _bgOwnRaw       = null; // last raw state string from own dice
     let _bgSelectTarget = null; // 'host' | 'own' | null — which button is waiting for a click
-    let _bgSelfRollInFlight = false; // true only while _bgRoll()'s own sendPacket call is executing
     let _bgRollPending  = false; // true from the moment we send a roll until the own dice's next value lands
 
     function _bgSetHostIdUI() {
@@ -122,7 +121,7 @@
     // Intercept OUT #355 (click/use object) to capture whichever dice gets clicked next,
     // same mechanism Color Party uses for its "Select Tile" button.
     window.PacketStore.subscribe(function(p) {
-      if (_bgSelfRollInFlight || !_bgSelectTarget || p.direction !== 'OUT' || p.header !== 355) return;
+      if (!_bgSelectTarget || p.direction !== 'OUT' || p.header !== 355) return;
       try {
         const r = window.makeReader(p.raw);
         if (!r) return;
@@ -149,17 +148,12 @@
       if (el) el.textContent = _bgLabelForRaw(_bgOwnRaw);
     }
 
-    // Sends the same OUT-355 click packet a real click would send, aimed at our own dice —
-    // this is what actually rolls it.
+    // OUT 1990 (ThrowDiceMessageComposer) is the actual roll action — confirmed via a real
+    // capture. OUT 355 (used for selection) only clicks/targets a dice, it doesn't roll it.
     function _bgRoll() {
       if (!_bgOwnId) return;
       _bgRollPending = true;
-      _bgSelfRollInFlight = true;
-      try {
-        window.sendPacket('OUT', 355, '{i:' + _bgOwnId + '}');
-      } finally {
-        _bgSelfRollInFlight = false;
-      }
+      window.sendPacket('OUT', 1990, '{i:' + _bgOwnId + '}');
     }
 
     // Central decision point, called after every relevant state change. Instantly re-rolls
