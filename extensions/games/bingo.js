@@ -87,6 +87,8 @@
     let _bgOwnRaw       = null; // last raw state string from own dice
     let _bgSelectTarget = null; // 'host' | 'own' | null — which button is waiting for a click
     let _bgRollPending  = false; // true from the moment we send a roll until the own dice's next value lands
+    let _bgOwnManual    = false; // true once the user has explicitly picked their own dice — stops auto-detect from overriding it
+    let _bgOwnAuto      = false; // true when _bgOwnId was set by auto-detect (for the UI hint)
 
     function _bgSetHostIdUI() {
       const el = bg.querySelector('#__bg_host_id');
@@ -94,7 +96,37 @@
     }
     function _bgSetOwnIdUI() {
       const el = bg.querySelector('#__bg_own_id');
-      if (el) el.textContent = _bgOwnId ? '#' + _bgOwnId : 'not set';
+      if (el) el.textContent = _bgOwnId ? '#' + _bgOwnId + (_bgOwnAuto ? ' (auto)' : '') : 'not set';
+    }
+
+    // Own dice always spawns on one of the 4 orthogonally-adjacent tiles around the player
+    // (N/S/E/W — never diagonal, never the player's own tile) — so instead of making the
+    // user click it, find the dice-named furni sitting on one of those tiles. Only kicks in
+    // until the user manually picks one via the button (_bgOwnManual), so a deliberate
+    // override always wins and never gets clobbered by a later scan.
+    function _bgAutoDetectOwn() {
+      if (_bgOwnManual || !window._selfName || !window.Room) return;
+      const self = Object.values(window.Room.users).find(u => u.name === window._selfName);
+      if (!self) return;
+      const items = Object.values(window.Room.floorItems || {});
+      const match = items.find(f => {
+        if (String(f.id) === _bgHostId) return false;
+        if (!(f.furniName || '').toLowerCase().includes('dobbel')) return false;
+        const dx = f.x - self.x, dy = f.y - self.y;
+        return (dx === 0 && Math.abs(dy) === 1) || (dy === 0 && Math.abs(dx) === 1);
+      });
+      if (!match) {
+        // Dice that used to be adjacent is gone (moved away, or the furni itself was picked
+        // up) — drop the auto-set id so a stale furni id doesn't linger. Never touches a
+        // manually-picked one (that path returned above already).
+        if (_bgOwnAuto && _bgOwnId) { _bgOwnId = null; _bgOwnAuto = false; _bgSetOwnIdUI(); }
+        return;
+      }
+      const id = String(match.id);
+      if (id === _bgOwnId) return;
+      _bgOwnId = id;
+      _bgOwnAuto = true;
+      _bgSetOwnIdUI();
     }
     function _bgUpdateSelectButtons() {
       const hostBtn = bg.querySelector('#__bg_sel_host_btn');
@@ -126,8 +158,12 @@
         const r = window.makeReader(p.raw);
         if (!r) return;
         const id = String(r.int());
-        if (_bgSelectTarget === 'host') { _bgHostId = id; _bgSetHostIdUI(); }
-        else { _bgOwnId = id; _bgSetOwnIdUI(); }
+        if (_bgSelectTarget === 'host') {
+          _bgHostId = id; _bgSetHostIdUI();
+          _bgAutoDetectOwn(); // re-scan: the item just claimed as host must not also be picked as own
+        } else {
+          _bgOwnId = id; _bgOwnManual = true; _bgOwnAuto = false; _bgSetOwnIdUI();
+        }
         _bgSelectTarget = null;
         _bgUpdateSelectButtons();
       } catch(_) {}
@@ -195,16 +231,45 @@
       }
     });
 
+    // Debug aid: dump every floor item whose name contains "dobbel" (case-insensitive) so
+    // the auto-detect heuristic in _bgAutoDetectOwn can be sanity-checked against the real
+    // furni names/ids/positions in a live room.
+    function _bgLogDobbelItems() {
+      const self = window._selfName && window.Room
+        ? Object.values(window.Room.users).find(u => u.name === window._selfName)
+        : null;
+      const items = Object.values((window.Room && window.Room.floorItems) || {})
+        .filter(f => (f.furniName || '').toLowerCase().includes('dobbel'))
+        .map(f => ({
+          id: f.id, name: f.furniName, x: f.x, y: f.y, ownerId: f.ownerId, ownerName: f.ownerName,
+          distToSelf: self ? Math.hypot(f.x - self.x, f.y - self.y) : null,
+        }));
+      console.log('[Bingo] self pos:', self ? { x: self.x, y: self.y } : null, 'dobbel items:', items);
+      return items;
+    }
+    window.__ghk_bgLogDobbelItems = _bgLogDobbelItems;
+    window.__ghk_bgOwnId = () => _bgOwnId;
+
+    // Auto-detect own dice as soon as room furni/users are known, and again whenever furni
+    // is added later (some Bingo rounds spawn the personal dice after the game starts), or
+    // the player moves — the snapshot at room-entry may predate walking next to the dice.
+    window.onPacket('Objects',    () => { setTimeout(_bgAutoDetectOwn, 50); setTimeout(_bgLogDobbelItems, 50); });
+    window.onPacket('ObjectAdd',  () => setTimeout(_bgAutoDetectOwn, 50));
+    window.onPacket('UserUpdate', () => setTimeout(_bgAutoDetectOwn, 50));
+    window.onPacket('Users',     () => setTimeout(_bgAutoDetectOwn, 50));
+
     // Reset on room change, same pattern as Color Party.
     window.onPacket('RoomReady', () => {
       _bgEnabled = false;
       _bgHostId = null; _bgOwnId = null;
       _bgHostRaw = null; _bgHostTarget = null; _bgOwnRaw = null; _bgRollPending = false;
-      _bgSelectTarget = null;
+      _bgSelectTarget = null; _bgOwnManual = false; _bgOwnAuto = false;
       const ssBtn = bg.querySelector('#__bg_startstop');
       if (ssBtn) { ssBtn.textContent = 'Start'; ssBtn.className = '__bg_btn __bg_btn_success'; }
       _bgSetHostUI(); _bgSetOwnUI(); _bgSetHostIdUI(); _bgSetOwnIdUI(); _bgUpdateSelectButtons();
     });
+
+    _bgAutoDetectOwn();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { window.__ghk_ready(buildBingoPanel); }); else window.__ghk_ready(buildBingoPanel);

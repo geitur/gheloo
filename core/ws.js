@@ -377,7 +377,14 @@
   // Packet Logger (120+ entries/min) and blow through its ring buffer, drowning out
   // everything else. Still parsed and dispatched to onPacket listeners as normal,
   // just excluded from the log/UI history.
-  const _hiddenFromLog = new Set(['GetMarketplaceOffers', 'MarketPlaceOffers']);
+  //
+  // GetGiftWrappingConfiguration/GiftWrappingConfiguration is multitab.js's live ping
+  // probe (fires every __ghk_pingIntervalMs while Settings > Performance > Ping is on) —
+  // same flood reasoning. BundleDiscountRulesetMessageEvent rides along as a side effect
+  // of this hotel's GetGiftWrappingConfiguration handler (confirmed via a live capture:
+  // the server answers with both), so it's noise from the same source, not separate
+  // legitimate traffic — hidden alongside it.
+  const _hiddenFromLog = new Set(['GetMarketplaceOffers', 'MarketPlaceOffers', 'GetGiftWrappingConfiguration', 'GiftWrappingConfiguration', 'BundleDiscountRuleset']);
 
   function addPacket(dir, id, _name, raw) {
     const name = window.shortName(_name || (window.PKT[dir]||{})[id] || '', dir);

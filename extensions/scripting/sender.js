@@ -204,6 +204,7 @@
         '<div class="__snd_hdr" id="__snd_hdr">' +
           '<span class="__snd_eyebrow">Gheloo</span>' +
           '<span class="__snd_title">Packet Sender</span>' +
+          '<span id="__snd_ping" style="font:700 10px monospace;color:#6C7CFF;margin-left:6px" title="Live ping (GetGiftWrappingConfiguration round trip)">— ms</span>' +
           '<span class="__snd_close" id="__snd_hclose">&times;</span>' +
         '</div>' +
         '<div class="__snd_tabs">' +
@@ -254,6 +255,12 @@
         '</div>' +
         '<div class="__snd_pane __snd_tabpane hidden" id="__snd_multi">' +
           '<div id="__ms_rows" class="__snd_table" style="flex:1;min-height:0"></div>' +
+          '<div class="__snd_row3" style="flex-shrink:0">' +
+            '<small class="__snd_lbl">Offset:</small>' +
+            '<input id="__ms_offset" type="number" step="any" class="__snd_input" value="0" style="width:80px;flex-shrink:0" />' +
+            '<button id="__ms_autooffset" class="__snd_btn __snd_btn_sm __snd_btn_secondary __sk_tog" style="flex-shrink:0">Auto</button>' +
+            '<small id="__ms_offset_hint" class="__snd_muted" style="flex-shrink:0">ms tussen elke user (0 = tegelijk, mag decimaal)</small>' +
+          '</div>' +
           '<button id="__ms_sendall" class="__snd_btn __snd_btn_success" style="width:100%;font-weight:800;flex-shrink:0" disabled>&#9654; Send All</button>' +
         '</div>' +
         '<div class="__snd_pane __snd_tabpane hidden" id="__snd_burst">' +
@@ -554,6 +561,11 @@
 
     renderBurst();
 
+    const pingBadge = panel.querySelector('#__snd_ping');
+    setInterval(function() {
+      const v = window.__ghk_rtt;
+      pingBadge.textContent = (v != null ? v : '—') + ' ms';
+    }, 1000);
 
     // Public API
     window.__snd_panel = panel;

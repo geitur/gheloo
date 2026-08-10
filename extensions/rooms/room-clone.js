@@ -183,6 +183,32 @@
   // without reaching into this module's private state.
   window.__ghl_rcStartScan = function() { startFullPageScan(5500, 0); };
 
+  // Exposed so the Gheloo Proxy tab's "Export" button can get the scanned catalog out of
+  // localStorage — that alone is lost if the user ever clears browsing data, and is stuck
+  // in this one browser profile otherwise. Opens the JSON in a new tab (browser's native
+  // JSON viewer) rather than triggering an anchor-click file download: the download
+  // approach completed with no JS error but never actually produced a file (likely the
+  // hotel page's own CSP silently blocking the blob download), whereas window.open, called
+  // synchronously inside the same click handler (still counts as a user gesture, so not
+  // popup-blocked), reliably opens. From there the user can Ctrl+S to save a real file
+  // if they want one — that save happens as a normal browser action, not scripted.
+  window.__ghl_rcExportCatalog = function() {
+    if (!_catalogItems.length) { _log('Export overgeslagen: geen catalog offers bekend.'); return { ok: false, count: 0 }; }
+    const blob = new Blob([JSON.stringify(_catalogItems, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    if (!win) {
+      URL.revokeObjectURL(url);
+      _log('Export mislukt: nieuw tabblad werd geblokkeerd (popup blocker).');
+      return { ok: false, count: 0, blocked: true };
+    }
+    // Delay the revoke so the new tab has time to actually load the blob first —
+    // revoking immediately (like the old download-link approach did) would race it.
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    _log('Catalog geopend in nieuw tabblad: ' + _catalogItems.length + ' offer(s).');
+    return { ok: true, count: _catalogItems.length };
+  };
+
   // Exposed so the Proxy tab can show live scan progress (pages left, offers found)
   // while a Full Scan is running, instead of just the static coverage percentage.
   window.__ghl_rcScanStatus = function() {

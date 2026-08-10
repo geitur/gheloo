@@ -16,6 +16,7 @@
       furnihider: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11V8a2 2 0 012-2h12a2 2 0 012 2v3"/><path d="M3 11h18v4a1 1 0 01-1 1H4a1 1 0 01-1-1v-4z"/><path d="M4 16v3M20 16v3"/></svg>',
       roomclone: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 16v3a2 2 0 002 2h9a2 2 0 002-2v-9a2 2 0 00-2-2h-3"/></svg>',
       areamover: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M19 9l3 3-3 3M9 19l3 3 3-3"/><path d="M2 12h20M12 2v20"/></svg>',
+      furniscatter: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="4" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="7" r="1.4" fill="currentColor" stroke="none"/><circle cx="7" cy="13" r="1.4" fill="currentColor" stroke="none"/><circle cx="16" cy="14" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="20" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg>',
       photolibrary: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 4h-5L7 7H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="4"/></svg>',
       userdatabase: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>',
       fun: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 13.5c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2"/><circle cx="9" cy="9.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1" fill="currentColor" stroke="none"/></svg>',
@@ -36,8 +37,10 @@
       proxy: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17H7a5 5 0 010-10h2M15 7h2a5 5 0 010 10h-2M8 12h8"/></svg>',
       exploits: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h7l-1 8 11-14h-7l1-6z"/></svg>',
       marktplaats: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l1.5-5h15L21 9"/><path d="M4 9h16v10a1 1 0 01-1 1H5a1 1 0 01-1-1V9z"/><path d="M9 13a3 3 0 006 0"/></svg>',
+      deurwaarder: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 12l-8.5 8.5a1.5 1.5 0 01-2-2L12 10"/><path d="M17.5 8.5L22 4"/><path d="M2 22h10"/><path d="M13.5 4.5l6 6"/><path d="M10.5 7.5l6 6"/></svg>',
       roomhistory: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/><path d="M3 12a9 9 0 011.5-5" opacity="0.35"/></svg>',
       avatarcompass: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>',
+      ping: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h4l2-7 4 14 2-7h8"/></svg>',
     };
 
     const style = document.createElement('style');
@@ -88,7 +91,8 @@
       .ghl-proxy-url { font:400 11px monospace; color:#82849a; word-break:break-all; margin-top:4px; }
       .ghl-proxy-btn { align-self:stretch; margin-top:10px; background:rgba(108,124,255,0.12); color:#A6B0FF; border:1px solid rgba(166,176,255,0.24); border-radius:8px; padding:7px 10px; font:600 11px system-ui; cursor:pointer; text-align:center; }
       .ghl-proxy-btn:hover { background:rgba(108,124,255,0.2); }
-      .ghl-fps-overlay { position:fixed; top:12px; left:12px; background:#0A0B10; color:#A6B0FF; font:700 11px monospace; padding:4px 10px; border-radius:8px; border:1px solid #23252f; z-index:2147483647; display:none; cursor:pointer; }
+      .ghl-overlay-row { position:fixed; top:12px; left:12px; z-index:2147483647; display:flex; gap:6px; }
+      .ghl-fps-overlay { background:#0A0B10; color:#A6B0FF; font:700 11px monospace; padding:4px 10px; border-radius:8px; border:1px solid #23252f; display:none; cursor:pointer; }
       .ghl-fps-overlay.show { display:block; }
       .ghl-fps-dropdown { display:none; flex-direction:column; gap:2px; background:#1c1e2a; border-radius:10px; padding:6px; margin:-2px 0 6px; }
       .ghl-fps-dropdown.open { display:flex; }
@@ -103,6 +107,10 @@
     const root = host.attachShadow({ mode: 'open' });
     root.appendChild(style);
 
+    const overlayRow = document.createElement('div');
+    overlayRow.className = 'ghl-overlay-row';
+    root.appendChild(overlayRow);
+
     const fpsOverlay = document.createElement('div');
     fpsOverlay.className = 'ghl-fps-overlay';
     fpsOverlay.textContent = '— FPS';
@@ -110,7 +118,16 @@
       window.Gheloo.showCategory('settings');
       window.Gheloo.open();
     });
-    root.appendChild(fpsOverlay);
+
+    const pingOverlay = document.createElement('div');
+    pingOverlay.className = 'ghl-fps-overlay';
+    pingOverlay.textContent = '— ms';
+    pingOverlay.addEventListener('click', function() {
+      window.Gheloo.showCategory('settings');
+      window.Gheloo.open();
+    });
+    overlayRow.appendChild(fpsOverlay);
+    overlayRow.appendChild(pingOverlay);
 
     const panelEl = document.createElement('div');
     panelEl.className = 'ghl-panel';
@@ -161,6 +178,39 @@
       if (window.__ghk_updatePillsWrapPos) window.__ghk_updatePillsWrapPos();
     }
 
+    // Owns window.__ghk_pingEnabled / window.__ghk_pingIntervalMs — multitab.js reads these
+    // (opt-in probe loop) but never writes them, per its own doc comment at the top of that file.
+    const PING_INTERVAL_OPTIONS = [1000, 2000, 5000, 10000];
+    const PING_STORAGE_KEY = '__ghk_ping_settings';
+    let _pingOn = false;
+    let _pingIntervalMs = 2000;
+    try {
+      const _savedPing = JSON.parse(localStorage.getItem(PING_STORAGE_KEY) || '{}');
+      if (_savedPing.on) _pingOn = true;
+      if (typeof _savedPing.interval === 'number') _pingIntervalMs = _savedPing.interval;
+    } catch(_) {}
+    let _pingIntervalLabel = _pingIntervalMs + 'ms';
+
+    function _savePingSettings() {
+      try { localStorage.setItem(PING_STORAGE_KEY, JSON.stringify({ on: _pingOn, interval: _pingIntervalMs })); } catch(_) {}
+    }
+
+    function _updatePingSubtitle() {
+      rowEls['ping'].row.querySelector('.ghl-row-subtitle').textContent = (_pingOn ? 'On' : 'Off') + ' - ' + _pingIntervalLabel;
+    }
+
+    function togglePing() {
+      _pingOn = !_pingOn;
+      pingOverlay.classList.toggle('show', _pingOn);
+      window.Gheloo.setActive('ping', _pingOn);
+      window.__ghk_pingEnabled = _pingOn;
+      window.__ghk_pingOverlayOn = _pingOn;
+      if (!_pingOn && window.__ghk_resetPing) window.__ghk_resetPing();
+      _updatePingSubtitle();
+      _savePingSettings();
+      if (window.__ghk_updatePillsWrapPos) window.__ghk_updatePillsWrapPos();
+    }
+
     const CATEGORIES = [
       {
         id: 'scripting', label: 'Scripting', icon: ICONS.scripting,
@@ -196,6 +246,7 @@
               if (window.__ghl_rcShowQuick) window.__ghl_rcShowQuick();
             } },
             { id: 'areamover', title: 'Area Mover', subtitle: 'Shift a rectangular area of furni, stack by stack', icon: ICONS.areamover, close: false, onClick: showPanelById('__am_panel') },
+            { id: 'furniscatter', title: 'Scatter', subtitle: 'Randomly place matching inventory items across the room', icon: ICONS.furniscatter, close: false, onClick: showPanelById('__fsc_panel') },
           ]},
         ],
       },
@@ -218,6 +269,7 @@
           { label: '', rows: [
             { id: 'marktplaats', title: 'Marktplaats', subtitle: 'Marktplaats Dupe', icon: ICONS.marktplaats, close: false, onClick: showPanelById('__mb') },
             { id: 'photolibrary', title: 'Photo Library', subtitle: 'Save and organize camera photos', icon: ICONS.photolibrary, close: false, onClick: showPanelById('__photolib') },
+            { id: 'deurwaarder', title: 'Deurwaarder', subtitle: 'Dupe Dashboard', icon: ICONS.deurwaarder, close: false, onClick: function() { if (window.__ghk_openDeurwaarder) window.__ghk_openDeurwaarder(); } },
           ]},
         ],
       },
@@ -250,6 +302,7 @@
         sections: [
           { label: 'Performance', rows: [
             { id: 'fps', title: 'FPS', subtitle: 'Off - Unlimited', icon: ICONS.fps, close: false, onClick: function() { toggleFpsOverlay(); } },
+            { id: 'ping', title: 'Ping', subtitle: 'Off - 2000ms', icon: ICONS.ping, close: false, onClick: function() { togglePing(); } },
           ]},
           { label: 'Appearance', rows: [
             { id: 'defaultdesign', title: 'Default Leet Design', subtitle: 'Back to standaard Leet layout', icon: ICONS.design, close: false, onClick: function() { toggleDefaultDesign(); } },
@@ -484,6 +537,7 @@
         '<div class="ghl-proxy-url-lbl">Catalogus Scan</div>' +
         '<div class="ghl-proxy-url" id="ghl-proxy-catalog">—</div>' +
         '<div class="ghl-proxy-btn" id="ghl-proxy-scan-btn">Scan Again</div>' +
+        '<div class="ghl-proxy-btn" id="ghl-proxy-export-btn" style="margin-top:6px">Export JSON</div>' +
       '</div>';
     panelEl.appendChild(proxyContent);
     contentEls['proxy'] = proxyContent;
@@ -498,7 +552,10 @@
 
     // Room Clone (extensions/room-clone.js) exposes catalog coverage + live scan
     // progress on window.__ghl_rc* so this tab can show it without importing the module.
+    let _catalogMsgUntil = 0; // suppresses the 1s auto-refresh below while a one-off status
+    // (export result, etc.) is being shown, so it doesn't get overwritten within a second.
     function renderCatalogCoverage() {
+      if (Date.now() < _catalogMsgUntil) return;
       const el = proxyContent.querySelector('#ghl-proxy-catalog');
       if (!el) return;
       const scan = window.__ghl_rcScanStatus && window.__ghl_rcScanStatus();
@@ -513,6 +570,15 @@
     setInterval(renderCatalogCoverage, 1000);
     proxyContent.querySelector('#ghl-proxy-scan-btn').addEventListener('click', function() {
       if (window.__ghl_rcStartScan) window.__ghl_rcStartScan();
+    });
+    proxyContent.querySelector('#ghl-proxy-export-btn').addEventListener('click', function() {
+      const catalogEl = proxyContent.querySelector('#ghl-proxy-catalog');
+      if (!window.__ghl_rcExportCatalog) { catalogEl.textContent = 'Export niet beschikbaar (Room Clone niet geladen).'; _catalogMsgUntil = Date.now() + 3000; return; }
+      const result = window.__ghl_rcExportCatalog();
+      catalogEl.textContent = result && result.ok
+        ? 'Geopend in nieuw tabblad: ' + result.count + ' offer(s) — Ctrl+S om op te slaan.'
+        : (result && result.blocked ? 'Popup geblokkeerd — sta pop-ups toe voor deze site.' : 'Niets te exporteren — scan de catalogus eerst.');
+      _catalogMsgUntil = Date.now() + 3000;
     });
 
     const spacer = document.createElement('div');
@@ -629,6 +695,58 @@
       fpsDropdown.classList.remove('open');
     });
 
+    const pingDropdown = document.createElement('div');
+    pingDropdown.className = 'ghl-fps-dropdown';
+    pingDropdown.innerHTML = PING_INTERVAL_OPTIONS.map(function(ms) {
+      return '<div class="ghl-fps-opt' + (ms === _pingIntervalMs ? ' active' : '') + '" data-interval="' + ms + '">' + ms + 'ms</div>';
+    }).join('');
+    rowEls['ping'].row.insertAdjacentElement('afterend', pingDropdown);
+
+    window.__ghk_pingEnabled = _pingOn;
+    window.__ghk_pingIntervalMs = _pingIntervalMs;
+    window.__ghk_pingOverlayOn = _pingOn;
+    if (_pingOn) {
+      pingOverlay.classList.add('show');
+      window.Gheloo.setActive('ping', true);
+    }
+    if (window.__ghk_updatePillsWrapPos) window.__ghk_updatePillsWrapPos();
+    _updatePingSubtitle();
+
+    pingDropdown.querySelectorAll('.ghl-fps-opt').forEach(function(opt) {
+      opt.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const ms = parseInt(opt.dataset.interval, 10);
+        window.__ghk_pingIntervalMs = ms;
+        pingDropdown.querySelectorAll('.ghl-fps-opt').forEach(function(o) { o.classList.toggle('active', o === opt); });
+        pingDropdown.classList.remove('open');
+        _pingIntervalMs = ms;
+        _pingIntervalLabel = ms + 'ms';
+        _updatePingSubtitle();
+        _savePingSettings();
+      });
+    });
+
+    rowEls['ping'].badge.style.cursor = 'pointer';
+    rowEls['ping'].badge.addEventListener('click', function(e) {
+      e.stopPropagation();
+      pingDropdown.classList.toggle('open');
+    });
+
+    document.addEventListener('click', function(e) {
+      if (!pingDropdown.classList.contains('open')) return;
+      if (e.composedPath().includes(rowEls['ping'].badge) || e.composedPath().includes(pingDropdown)) return;
+      pingDropdown.classList.remove('open');
+    });
+
+    // Live ms readout on the row's badge and the top-left overlay chip — window.onLatency
+    // is multitab.js's push-update hook, fires null when Ping toggles off.
+    if (window.onLatency) {
+      window.onLatency(function(ms) {
+        window.Gheloo.setBadge('ping', ms != null ? ms + 'ms' : '');
+        pingOverlay.textContent = (ms != null ? ms : '—') + ' ms';
+      });
+    }
+
     let _fpsFrames = 0, _fpsLast = performance.now();
     function _fpsTick(now) {
       _fpsFrames++;
@@ -656,19 +774,22 @@
     }
 
     // Always-on, not tied to Default Leet Design: remove room-enter ad banners, and the
-    // GPT/DFP ad-slot popup (div[id^="ad-"] wrapping a google_ads_iframe, shown inside a
-    // Bootstrap modal with its own close button). Removing just .modal-content (as an earlier
-    // version of this did) leaves Bootstrap's own .modal-backdrop overlay and body.modal-open
-    // behind — since we deleted the modal out from under Bootstrap instead of calling its
-    // hide(), it never gets a chance to clean those up itself. That backdrop is a full-screen
-    // fixed-position layer, which is exactly what a grey, unclickable page looks like. So this
-    // takes the whole .modal wrapper (not just modal-content), then strips any now-orphaned
-    // backdrop/body state — but only once no other genuine modal is still open, so a real modal
-    // stacked underneath doesn't lose its backdrop too.
+    // GPT/DFP ad-slot popup (div[id^="ad-"] or div[id*="gpt-ad"], shown inside a Bootstrap
+    // modal with its own close button). Used to also require a nested google_ads_iframe
+    // before removing — but an ad slot that's empty/blocked/still loading never gets one,
+    // so the empty modal sat there forever. The div id itself (Google Publisher Tag's own
+    // reserved naming convention) combined with sitting inside a .modal is signal enough on
+    // its own. Removing just .modal-content (as an earlier version of this did) leaves
+    // Bootstrap's own .modal-backdrop overlay and body.modal-open behind — since we deleted
+    // the modal out from under Bootstrap instead of calling its hide(), it never gets a
+    // chance to clean those up itself. That backdrop is a full-screen fixed-position layer,
+    // which is exactly what a grey, unclickable page looks like. So this takes the whole
+    // .modal wrapper (not just modal-content), then strips any now-orphaned backdrop/body
+    // state — but only once no other genuine modal is still open, so a real modal stacked
+    // underneath doesn't lose its backdrop too.
     function _removeRoomAd() {
       document.querySelectorAll('.roomenterad-habblet-container').forEach(function(el) { el.remove(); });
-      document.querySelectorAll('div[id^="ad-"]').forEach(function(el) {
-        if (!el.querySelector('[id*="google_ads_iframe"]')) return;
+      document.querySelectorAll('div[id^="ad-"], div[id*="gpt-ad"]').forEach(function(el) {
         (el.closest('.modal') || el.closest('.modal-content') || el).remove();
       });
       if (!document.querySelector('.modal.show')) {

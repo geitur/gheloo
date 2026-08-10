@@ -11,8 +11,95 @@
   const _peers = {};
   const _pkts  = {};
 
+  // ── Ping API, for your own Extensions (the paste-your-own-JS panel) ──
+  // This file runs the actual RTT measurement; everything below is what it publishes on
+  // `window` so other code — including anything you paste into the Extensions panel — can
+  // read live ping without re-implementing any of this:
+  //
+  //   window.__ghk_rtt            number|null — current smoothed RTT in ms. null while the
+  //                                Ping toggle (Settings > Performance > Ping) is off, or
+  //                                before the first reply has come back.
+  //   window.onLatency(cb)        subscribe instead of polling __ghk_rtt yourself. cb(ms)
+  //                                fires on every update, with ms === null on reset (i.e.
+  //                                when the user switches the Ping toggle off).
+  //   window.__ghk_pingEnabled    bool — mirrors the Settings > Performance > Ping toggle.
+  //                                Read-only from your side; owned by content.js.
+  //   window.__ghk_pingIntervalMs number — current configured probe interval in ms, set
+  //                                from the same Settings row. Read-only from your side.
+  //
+  // Example — log ping every time it changes:
+  //   window.onLatency(ms => console.log('ping:', ms === null ? 'off' : ms + 'ms'));
+
+  // ── Live latency (RTT) — Tried two "official" candidates, both bad fits:
+  // - LatencyPingRequest(295)/LatencyPingResponse(10): in pkt.js's header map but this
+  //   hotel never answers it (confirmed live: 5x sent over 10s, zero replies).
+  // - GetCreditsInfo(273)/CreditBalance(3475): answered once (probably the login-time
+  //   push, not a real reply to our request) then never again — server doesn't treat it
+  //   as a repeatable query.
+  // - RequestFurniInventory(3150)/FurniList(994) DOES answer every time, but the reply is
+  //   the account's full paged inventory — response time scales with furni count, which
+  //   would contaminate the RTT reading with server-side query/serialize time instead of
+  //   pure network latency, and two accounts with different-sized inventories would read
+  //   different "ping" for reasons that have nothing to do with their connection.
+  // Landed on GetGiftWrappingConfiguration(418)/GiftWrappingConfiguration(2234) — confirmed
+  // live: response is a fixed static config blob (color/ribbon options), byte-identical on
+  // every request, same for every account. Not tied to any user data, so response time is
+  // pure network RTT with no server-side query cost riding along, and no per-account skew.
+  let _myRtt = null, _rttEma = null;
+  const _pendingPings = [];
+
+  // Public hook for the paste-your-own-JS Extensions panel (and any other panel) to react
+  // to live ping — same shape as onPacket. window.__ghk_rtt is the plain current-value
+  // read; onLatency is for code that wants to be pushed updates instead of polling it.
+  window._latencyListeners = [];
+  window.onLatency = function(cb) { if (typeof cb === 'function') window._latencyListeners.push(cb); };
+  function _emitLatency(ms) {
+    window._latencyListeners.forEach(cb => { try { cb(ms); } catch(e) { console.error('[onLatency]', e); } });
+  }
+
+  // Clears the reading (rather than just freezing it) when the Settings > Performance >
+  // Ping toggle turns off, so nothing displays a stale number as if it were still live.
+  window.__ghk_resetPing = function() {
+    _myRtt = null; _rttEma = null; _pendingPings.length = 0;
+    window.__ghk_rtt = null;
+    _emitLatency(null);
+    _renderPeers();
+    _renderMulti();
+  };
+
+  function _sendPing() {
+    if (!window.__ghk_pingEnabled) return; // opt-in — only probe while the Ping toggle is on
+    if (!window.sendPacket || (!window._ws && !window._worker && !window._ws_worker)) return;
+    if (_pendingPings.length > 3) _pendingPings.length = 0; // response(s) got lost — don't let stale sends pile up
+    _pendingPings.push(Date.now());
+    window.sendPacket('OUT', 418);
+  }
+  window.onPacket && window.onPacket('GiftWrappingConfiguration', function() {
+    const sentAt = _pendingPings.shift();
+    if (sentAt === undefined) return;
+    _myRtt  = Date.now() - sentAt;
+    _rttEma = _rttEma === null ? _myRtt : Math.round(_rttEma * 0.7 + _myRtt * 0.3);
+    window.__ghk_rtt = _rttEma;
+    _emitLatency(_rttEma);
+    _renderPeers();
+    _renderMulti();
+    // Re-announce immediately on every fresh reading (not just the 4s heartbeat below) so
+    // other tabs' view of OUR rtt stays roughly as fresh as our own ping cadence — matters
+    // for anything comparing two tabs' rtt against each other in near-real-time (e.g.
+    // marktplaats.js's ping-match wait), where up to 4s of staleness would otherwise hide
+    // a match that already exists.
+    _announce();
+  });
+  // Self-rescheduling instead of setInterval so a live interval change (Settings >
+  // Performance > Ping's dropdown) takes effect on the very next tick, no restart needed.
+  function _scheduleNextPing() {
+    setTimeout(function() { _sendPing(); _scheduleNextPing(); }, window.__ghk_pingIntervalMs || 2000);
+  }
+  setTimeout(_sendPing, 1500);
+  _scheduleNextPing();
+
   function _announce() {
-    BC.postMessage({ type: 'hello', tabId: TAB_ID, url: window.__wsUrl || '', user: window._selfName || '', page: window.location.pathname });
+    BC.postMessage({ type: 'hello', tabId: TAB_ID, url: window.__wsUrl || '', user: window._selfName || '', page: window.location.pathname, rtt: _rttEma });
   }
   window.addEventListener('__ws_connect', _announce);
   window.onPacket && window.onPacket('UserObject', () => setTimeout(_announce, 200));
@@ -29,6 +116,7 @@
       _peers[msg.tabId] = {
         url:      msg.url  || (prev && prev.url)  || '',
         user:     msg.user || (prev && prev.user) || '',
+        rtt:      msg.rtt != null ? msg.rtt : (prev ? prev.rtt : null),
         lastSeen: Date.now(),
         enabled:  isNew ? true : prev.enabled,
       };
@@ -109,6 +197,8 @@
 
   let _renderPeers = () => {};
   let _renderMulti = () => {};
+  let _orderedTabs = []; // [{id, user, enabled}] in the same order as the rendered rows —
+  // Send All uses this order to stagger sends (row 1 fires first, row 2 at +offset, etc).
 
   function buildTestPanel() {
     const style = document.createElement('style');
@@ -180,7 +270,8 @@
     const peersEl  = panel.querySelector('#__tst_peers');
 
     function updateMyInfo() {
-      myUserEl.innerHTML = (window._selfName || '—') + ' <span style="font-weight:400;color:#888;font-size:9px">#' + TAB_ID + '</span>';
+      const rttTag = _rttEma != null ? ' <span style="font-weight:700;color:#6C7CFF;font-size:9px">' + _rttEma + 'ms</span>' : '';
+      myUserEl.innerHTML = (window._selfName || '—') + ' <span style="font-weight:400;color:#888;font-size:9px">#' + TAB_ID + '</span>' + rttTag;
     }
     if (window._selfName) updateMyInfo();
     window.onPacket && window.onPacket('UserObject', () => setTimeout(updateMyInfo, 100));
@@ -190,8 +281,9 @@
       const ids = Object.keys(_peers).filter(id => _peers[id].user);
       if (!ids.length) { peersEl.innerHTML = ''; return; }
       peersEl.innerHTML = ids.map(id => {
-        const p     = _peers[id];
-        const label = p.user + ' <span style="font-weight:400;color:#888;font-size:9px">#' + id + '</span>';
+        const p       = _peers[id];
+        const rttTag  = p.rtt != null ? ' <span style="font-weight:700;color:#6C7CFF;font-size:9px">' + p.rtt + 'ms</span>' : '';
+        const label   = p.user + ' <span style="font-weight:400;color:#888;font-size:9px">#' + id + '</span>' + rttTag;
         const cls   = p.enabled ? 'on' : 'off';
         return '<div class="__tst_tabrow">' +
           '<button class="__tst_tog ' + cls + '" data-peer="' + id + '">' + (p.enabled ? 'ON' : 'OFF') + '</button>' +
@@ -219,24 +311,26 @@
       // Save current textarea values before re-render
       msRowsEl.querySelectorAll('.__ms_ta').forEach(ta => { _pkts[ta.dataset.tabid] = ta.value; });
 
-      const namedPeers = Object.entries(_peers).filter(([id, p]) => p.user).map(([id, p]) => ({ id, user: p.user, enabled: p.enabled }));
+      const namedPeers = Object.entries(_peers).filter(([id, p]) => p.user).map(([id, p]) => ({ id, user: p.user, enabled: p.enabled, rtt: p.rtt }));
       if (!namedPeers.length) { msRowsEl.innerHTML = ''; return; }
       const allTabs = [
-        { id: 'self', user: window._selfName || '—', enabled: true },
+        { id: 'self', user: window._selfName || '—', enabled: true, rtt: _rttEma },
         ...namedPeers
       ];
+      _orderedTabs = allTabs;
 
       const rows = allTabs.map(t => {
         const key    = t.id === 'self' ? TAB_ID : t.id;
         const val    = (_pkts[key] || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         const isSelf = t.id === 'self';
         const cls    = t.enabled ? 'on' : 'off';
+        const rttTag = t.rtt != null ? '<span style="font-weight:700;color:#6C7CFF;font-size:9px;margin-left:4px">' + t.rtt + 'ms</span>' : '';
         const togCell = isSelf
           ? '<div class="__ms_tog_cell"><span style="font-size:9px;background:#A6B0FF;color:#0A0B10;padding:1px 6px;border-radius:10px;font-weight:700">YOU</span></div>'
           : '<div class="__ms_tog_cell"><button class="__tst_tog ' + cls + '" data-peer="' + t.id + '">' + (t.enabled ? 'ON' : 'OFF') + '</button></div>';
         return '<div class="__ms_row">' +
           togCell +
-          '<span class="__ms_name" title="' + t.user + ' #' + key + '">' + t.user + '</span>' +
+          '<span class="__ms_name" title="' + t.user + ' #' + key + '">' + t.user + rttTag + '</span>' +
           '<textarea class="__ms_ta" data-tabid="' + key + '" placeholder="{out:Chat}{s:&quot;hello&quot;}{i:0}">' + val + '</textarea>' +
           '<button class="__ms_rowsend __snd_btn __snd_btn_sm __snd_btn_primary" data-tabid="' + key + '" data-self="' + (isSelf ? '1' : '0') + '" disabled>Send</button>' +
         '</div>';
@@ -308,17 +402,76 @@
         ta.addEventListener('input', validate);
         validate();
       });
+
+      _updateAutoOffset();
     };
+
+    // ── Auto offset ── ADDS to the manual value, doesn't replace it — the field stays
+    // yours to type in always; toggling Auto just layers a live correction on top.
+    // self always fires at the fixed T below (~20ms out); the peer's fireAt floats around
+    // it as T + offsetMs. So a SIGNED correction of (selfRtt - peerRtt) is already right in
+    // both directions with zero change to the send logic itself: if self is the slower
+    // connection, the correction is positive and the peer (faster) is delayed to land after
+    // self; if self is faster, it goes negative, which pushes the peer's fireAt before "now"
+    // — send_at's own Math.max(0, ...) clamp then fires it essentially immediately, while
+    // self still waits out its fixed ~20ms — net effect, self (fast) is the one delayed
+    // instead. Either way the two land together server-side, on top of whatever manual
+    // stagger you dialed in yourself.
+    let _autoOffsetOn = false, _autoCorrectionMs = null;
+    try { _autoOffsetOn = localStorage.getItem('__ghk_ms_autooffset') === '1'; } catch(_e) {}
+    const autoBtn = document.getElementById('__ms_autooffset');
+    const offsetEl = document.getElementById('__ms_offset');
+    const offsetHintEl = document.getElementById('__ms_offset_hint');
+
+    // Accepts a comma as the decimal separator too (Dutch keyboards type "1,5"), not just a dot.
+    function _parseManualOffset() {
+      return offsetEl ? (parseFloat(String(offsetEl.value).replace(',', '.')) || 0) : 0;
+    }
+    function _effectiveOffset() {
+      return _parseManualOffset() + (_autoOffsetOn && _autoCorrectionMs != null ? _autoCorrectionMs : 0);
+    }
+
+    function _updateAutoOffset() {
+      if (!autoBtn || !offsetEl) return;
+      autoBtn.classList.toggle('on', _autoOffsetOn);
+      _autoCorrectionMs = (_orderedTabs.length === 2 && _orderedTabs[1] && _orderedTabs[1].rtt != null && _rttEma != null)
+        ? (_rttEma - _orderedTabs[1].rtt)
+        : null;
+      if (!offsetHintEl) return;
+      if (!_autoOffsetOn) {
+        offsetHintEl.textContent = 'ms tussen elke user (0 = tegelijk, mag decimaal)';
+      } else if (_autoCorrectionMs != null) {
+        offsetHintEl.textContent = 'manual ' + _parseManualOffset() + 'ms + auto ' +
+          (_autoCorrectionMs >= 0 ? '+' : '') + _autoCorrectionMs + 'ms = ' + _effectiveOffset() + 'ms effective';
+      } else {
+        offsetHintEl.textContent = 'auto: wachten op ping van beide tabs…';
+      }
+    }
+    if (autoBtn) {
+      autoBtn.addEventListener('click', () => {
+        _autoOffsetOn = !_autoOffsetOn;
+        try { localStorage.setItem('__ghk_ms_autooffset', _autoOffsetOn ? '1' : '0'); } catch(_e) {}
+        _updateAutoOffset();
+      });
+    }
+    if (offsetEl) offsetEl.addEventListener('input', _updateAutoOffset);
+    _updateAutoOffset();
 
     document.getElementById('__ms_sendall').addEventListener('click', () => {
       const vals = {};
       msRowsEl.querySelectorAll('.__ms_ta').forEach(ta => { vals[ta.dataset.tabid] = ta.value.trim(); });
 
+      const offsetMs = _effectiveOffset();
+
       const T = Date.now() + 20;
-      if (vals[TAB_ID]) setTimeout(() => _executeMultiPackets(vals[TAB_ID]), Math.max(0, T - Date.now()));
-      Object.entries(_peers).forEach(([id, p]) => {
-        if (!p.enabled || !vals[id]) return;
-        BC.postMessage({ type: 'send_at', targetId: id, str: vals[id], at: T });
+      let step = 0;
+      _orderedTabs.forEach(t => {
+        const key = t.id === 'self' ? TAB_ID : t.id;
+        if (!t.enabled || !vals[key]) return;
+        const fireAt = T + step * offsetMs;
+        step++;
+        if (t.id === 'self') setTimeout(() => _executeMultiPackets(vals[key]), Math.max(0, fireAt - Date.now()));
+        else BC.postMessage({ type: 'send_at', targetId: key, str: vals[key], at: fireAt });
       });
     });
 

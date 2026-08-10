@@ -502,6 +502,50 @@
     } catch(e) { console.error('[MarketPlaceOffers parser]', e); return null; }
   };
 
+  // MarketPlaceOwnOffers (IN 3884): YOUR OWN active/expired marketplace listings — distinct
+  // packet from MarketPlaceOffers above (that's the public browse list). No prior schema for
+  // this one; reverse-engineered from live captures diffed against each other and against
+  // known ground truth (a real account with 3 confirmed-expired listings that never auto-
+  // cleared + 1 confirmed-active one at ~47h remaining). Each entry is a fixed 34 bytes.
+  // `expiryField` is minutes remaining until the 48h listing window closes (confirmed: 2879
+  // matched an in-game "47 hours" display almost exactly) — once negative, the listing is
+  // dead and it keeps counting further negative for however long the ghost entry has sat
+  // uncleared, not a fixed field. `fieldA` is present but its meaning is NOT confirmed —
+  // values seen ranged from double digits to hundreds of millions across different capture
+  // sessions with no clean correlation to price/expiry, so it's exposed raw rather than
+  // guessed at.
+  // Minutes -> "Xd Yh" (or "<1h" for anything under an hour) — used for expiryField below so
+  // the Packet Logger's detail view shows something readable next to the raw minute count.
+  function _formatDaysHours(mins) {
+    const abs = Math.abs(mins);
+    const days = Math.floor(abs / 1440);
+    const hours = Math.floor((abs % 1440) / 60);
+    const span = days > 0 ? days + 'd ' + hours + 'h' : (hours > 0 ? hours + 'h' : '<1h');
+    return mins < 0 ? span + ' ago' : span + ' left';
+  }
+
+  window.PacketParsers.IN.MarketPlaceOwnOffers = raw => {
+    const r = window.makeReader(raw); if (!r) return null;
+    try {
+      r.int(); // unknown header int, always 0 in every capture seen
+      const count = r.int();
+      const offers = [];
+      for (let i = 0; i < count; i++) {
+        const offerId = r.int();
+        r.int(); // flag1, always 1 so far
+        r.int(); // flag2, always 1 so far
+        const fieldA = r.int(); // unconfirmed meaning
+        r.int(); // zero
+        r.int(); // zero
+        const price = r.short();
+        const expiryField = r.int(); // minutes remaining (negative = expired that many minutes ago)
+        r.int(); // reserved, always 0 so far
+        offers.push({ offerId, fieldA, price, expiryField, expiryLabel: _formatDaysHours(expiryField), expired: expiryField < 0 });
+      }
+      return { count, offers };
+    } catch(e) { console.error('[MarketPlaceOwnOffers parser]', e); return null; }
+  };
+
   // GetGuestRoomResult carries the real room name/owner (sent on room entry, not general
   // navigator browsing) — RoomReady itself only has the numeric roomId, so this is the
   // actual source for display info. Not gated on window.Room.id matching — this fires

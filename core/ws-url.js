@@ -51,15 +51,18 @@ window.__ghk_makeDraggable = function(panel, handleEl, storageKey, shouldSkip) {
   };
 })();
 
-// Shared coordination between the Gheloo FPS overlay (top-left, Shadow DOM) and the
-// #__nitro_pills_wrap stack (Color Party / Friend Adder / Mimic pills, light DOM) so
-// the pill stack sits in the top corner by default, and moves below the FPS overlay
-// only while that overlay is actually visible.
+// Shared coordination between the Gheloo top-left overlay row (FPS + Ping chips, Shadow
+// DOM) and the #__nitro_pills_wrap stack (Color Party / Friend Adder / Mimic pills, light
+// DOM) so the pill stack sits in the top corner by default, and moves below the overlay
+// row only while at least one chip in it is actually visible. Both chips share the same
+// row/height, so which one (or both) is on doesn't change the offset needed — only
+// whether the row has anything visible at all.
 (function() {
   window.__ghk_fpsOverlayOn = false;
+  window.__ghk_pingOverlayOn = false;
   window.__ghk_updatePillsWrapPos = function() {
     const wrap = document.getElementById('__nitro_pills_wrap');
-    if (wrap) wrap.style.top = window.__ghk_fpsOverlayOn ? '48px' : '12px';
+    if (wrap) wrap.style.top = (window.__ghk_fpsOverlayOn || window.__ghk_pingOverlayOn) ? '48px' : '12px';
   };
 })();
 

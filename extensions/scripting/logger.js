@@ -167,6 +167,16 @@
       toutBtn.classList.toggle('on', showOut);
     });
 
+    // Force both filters off on every login (UserObject fires once per login, including
+    // reconnects) — a fresh session starts quiet regardless of how the toggles were left
+    // last time, not just on first page load.
+    window.onPacket('UserObject', function(p) {
+      if (!p.parsed || !p.parsed.name) return;
+      showIn = false; showOut = false;
+      tinBtn.classList.toggle('on', showIn);
+      toutBtn.classList.toggle('on', showOut);
+    });
+
     panel.querySelector('#__hbl_clr').addEventListener('click', () => {
       listEl.innerHTML = '';
       detailEl.innerHTML = '<div class="__hbl_empty">Click a packet</div>';

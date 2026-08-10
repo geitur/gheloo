@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gheloo",
-  "version": "2.2.4",
+  "version": "2.3.0",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -34,12 +34,14 @@
         "extensions/rooms/room-clone.js",
         "extensions/rooms/area-mover.js",
         "extensions/rooms/floor-editor.js",
+        "extensions/rooms/furni-scatter.js",
         "extensions/rooms/room-viewer-loader.js",
         "extensions/fun/user-database.js",
         "extensions/fun/mimic.js",
         "extensions/fun/friendbot.js",
         "extensions/exploits/marktplaats.js",
         "extensions/exploits/photo-library.js",
+        "extensions/exploits/deurwaarder.js",
         "extensions/settings/room-history.js",
         "extensions/settings/marktplaats-alerts.js"],
       "run_at": "document_start",
@@ -53,5 +55,11 @@
       "all_frames": true
     }
   ],
-  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://api.github.com/*", "https://github.com/*", "https://*.githubusercontent.com/*"]
+  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://api.github.com/*", "https://github.com/*", "https://*.githubusercontent.com/*"],
+  "web_accessible_resources": [
+    {
+      "resources": ["extensions/exploits/deurwaarder/users.html", "extensions/exploits/deurwaarder/deurwaarder.js"],
+      "matches": ["https://www.leet.city/*"]
+    }
+  ]
 }
