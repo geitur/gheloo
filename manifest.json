@@ -24,6 +24,7 @@
       "js": ["core/eval-hook.js", "core/ws-url.js", "core/loading.js", "core/pkt.js", "core/ws.js", "core/parsers.js", "core/supabase.js", "core/update-toast.js", "extensions/userext/manager.js", "content.js",
         "extensions/scripting/sender.js",
         "extensions/scripting/logger.js",
+        "extensions/scripting/packet-capture.js",
         "extensions/scripting/macros.js",
         "extensions/scripting/multitab.js",
         "extensions/scripting/room-inspector.js",
