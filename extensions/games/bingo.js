@@ -13,9 +13,12 @@
       '#__bg_status_card{border-radius:10px;background:#3a3d4a;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}',
       '#__bg_host_label{font-size:24px;font-weight:800;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,0.3);line-height:1}',
       '#__bg_own_label{font-size:16px;font-weight:700;color:rgba(255,255,255,0.9);line-height:1}',
-      '.__bg_card{background:#1c1e2a;border-radius:8px;padding:8px 12px}',
+      // Host and Own are visually distinct cards (own accented, since it's the one that
+      // rolls) instead of two rows sharing one box with a divider between them.
+      '.__bg_card{background:#1c1e2a;border-radius:8px;padding:8px 12px;border:1px solid #23252f}',
+      '.__bg_card_own{border-color:rgba(108,124,255,0.25)}',
+      '.__bg_card_hdr{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#6C7CFF;margin-bottom:6px}',
       '.__bg_label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#5c5e6b}',
-      '.__bg_divider{height:1px;background:rgba(255,255,255,0.06)}',
       '.__bg_btn{border:none;border-radius:8px;font-size:11px;font-weight:600;padding:6px 10px;cursor:pointer}',
       '.__bg_btn_sm{font-size:9px;padding:2px 8px}',
       '.__bg_btn_secondary{background:#1c1e2a;color:#82849a;border:1px solid #23252f}',
@@ -39,7 +42,7 @@
           '<span class="__bg_close" id="__bg_close">&times;</span>' +
         '</div>' +
         '<div id="__bg_main" style="box-sizing:border-box;display:flex;flex-direction:column;padding:0">' +
-          '<div style="flex:1;overflow:hidden;padding:8px 12px;display:flex;flex-direction:column;gap:6px">' +
+          '<div style="flex:1;overflow:hidden;padding:8px 12px;display:flex;flex-direction:column;gap:8px">' +
             '<div id="__bg_status_card">' +
               '<div style="display:flex;flex-direction:column;gap:3px">' +
                 '<span class="__bg_label" style="color:rgba(255,255,255,0.7)">Host</span>' +
@@ -50,7 +53,8 @@
                 '<span id="__bg_own_label">—</span>' +
               '</div>' +
             '</div>' +
-            '<div class="__bg_card" style="display:flex;flex-direction:column;gap:10px">' +
+            '<div class="__bg_card">' +
+              '<div class="__bg_card_hdr">Host</div>' +
               '<div style="display:flex;align-items:center;justify-content:space-between">' +
                 '<div style="display:flex;flex-direction:column;gap:2px">' +
                   '<span class="__bg_label">Host dice</span>' +
@@ -58,7 +62,9 @@
                 '</div>' +
                 '<button id="__bg_sel_host_btn" class="__bg_btn __bg_btn_sm __bg_btn_secondary" style="flex-shrink:0">Select Host Dice</button>' +
               '</div>' +
-              '<div class="__bg_divider"></div>' +
+            '</div>' +
+            '<div class="__bg_card __bg_card_own">' +
+              '<div class="__bg_card_hdr">Own</div>' +
               '<div style="display:flex;align-items:center;justify-content:space-between">' +
                 '<div style="display:flex;flex-direction:column;gap:2px">' +
                   '<span class="__bg_label">Own dice</span>' +
@@ -78,7 +84,8 @@
     window.__ghk_makeDraggable(bg, bg.querySelector('#__bg_hdr'), '__ghk_bg_pos', e => e.target.id === '__bg_close');
     bg.querySelector('#__bg_close').addEventListener('click', () => { bg.style.display = 'none'; });
 
-    // ── BINGO ──
+    // ── BINGO ── (single own dice for now — multi-dice hit a server-side rate limit on the
+    // second ThrowDice packet that needs more investigation before bringing it back)
     let _bgEnabled      = false;
     let _bgHostId       = null; // string furni id
     let _bgOwnId        = null; // string furni id
@@ -87,8 +94,6 @@
     let _bgOwnRaw       = null; // last raw state string from own dice
     let _bgSelectTarget = null; // 'host' | 'own' | null — which button is waiting for a click
     let _bgRollPending  = false; // true from the moment we send a roll until the own dice's next value lands
-    let _bgOwnManual    = false; // true once the user has explicitly picked their own dice — stops auto-detect from overriding it
-    let _bgOwnAuto      = false; // true when _bgOwnId was set by auto-detect (for the UI hint)
 
     function _bgSetHostIdUI() {
       const el = bg.querySelector('#__bg_host_id');
@@ -96,37 +101,7 @@
     }
     function _bgSetOwnIdUI() {
       const el = bg.querySelector('#__bg_own_id');
-      if (el) el.textContent = _bgOwnId ? '#' + _bgOwnId + (_bgOwnAuto ? ' (auto)' : '') : 'not set';
-    }
-
-    // Own dice always spawns on one of the 4 orthogonally-adjacent tiles around the player
-    // (N/S/E/W — never diagonal, never the player's own tile) — so instead of making the
-    // user click it, find the dice-named furni sitting on one of those tiles. Only kicks in
-    // until the user manually picks one via the button (_bgOwnManual), so a deliberate
-    // override always wins and never gets clobbered by a later scan.
-    function _bgAutoDetectOwn() {
-      if (_bgOwnManual || !window._selfName || !window.Room) return;
-      const self = Object.values(window.Room.users).find(u => u.name === window._selfName);
-      if (!self) return;
-      const items = Object.values(window.Room.floorItems || {});
-      const match = items.find(f => {
-        if (String(f.id) === _bgHostId) return false;
-        if (!(f.furniName || '').toLowerCase().includes('dobbel')) return false;
-        const dx = f.x - self.x, dy = f.y - self.y;
-        return (dx === 0 && Math.abs(dy) === 1) || (dy === 0 && Math.abs(dx) === 1);
-      });
-      if (!match) {
-        // Dice that used to be adjacent is gone (moved away, or the furni itself was picked
-        // up) — drop the auto-set id so a stale furni id doesn't linger. Never touches a
-        // manually-picked one (that path returned above already).
-        if (_bgOwnAuto && _bgOwnId) { _bgOwnId = null; _bgOwnAuto = false; _bgSetOwnIdUI(); }
-        return;
-      }
-      const id = String(match.id);
-      if (id === _bgOwnId) return;
-      _bgOwnId = id;
-      _bgOwnAuto = true;
-      _bgSetOwnIdUI();
+      if (el) el.textContent = _bgOwnId ? '#' + _bgOwnId : 'not set';
     }
     function _bgUpdateSelectButtons() {
       const hostBtn = bg.querySelector('#__bg_sel_host_btn');
@@ -160,9 +135,8 @@
         const id = String(r.int());
         if (_bgSelectTarget === 'host') {
           _bgHostId = id; _bgSetHostIdUI();
-          _bgAutoDetectOwn(); // re-scan: the item just claimed as host must not also be picked as own
         } else {
-          _bgOwnId = id; _bgOwnManual = true; _bgOwnAuto = false; _bgSetOwnIdUI();
+          _bgOwnId = id; _bgSetOwnIdUI();
         }
         _bgSelectTarget = null;
         _bgUpdateSelectButtons();
@@ -231,45 +205,18 @@
       }
     });
 
-    // Debug aid: dump every floor item whose name contains "dobbel" (case-insensitive) so
-    // the auto-detect heuristic in _bgAutoDetectOwn can be sanity-checked against the real
-    // furni names/ids/positions in a live room.
-    function _bgLogDobbelItems() {
-      const self = window._selfName && window.Room
-        ? Object.values(window.Room.users).find(u => u.name === window._selfName)
-        : null;
-      const items = Object.values((window.Room && window.Room.floorItems) || {})
-        .filter(f => (f.furniName || '').toLowerCase().includes('dobbel'))
-        .map(f => ({
-          id: f.id, name: f.furniName, x: f.x, y: f.y, ownerId: f.ownerId, ownerName: f.ownerName,
-          distToSelf: self ? Math.hypot(f.x - self.x, f.y - self.y) : null,
-        }));
-      console.log('[Bingo] self pos:', self ? { x: self.x, y: self.y } : null, 'dobbel items:', items);
-      return items;
-    }
-    window.__ghk_bgLogDobbelItems = _bgLogDobbelItems;
     window.__ghk_bgOwnId = () => _bgOwnId;
-
-    // Auto-detect own dice as soon as room furni/users are known, and again whenever furni
-    // is added later (some Bingo rounds spawn the personal dice after the game starts), or
-    // the player moves — the snapshot at room-entry may predate walking next to the dice.
-    window.onPacket('Objects',    () => { setTimeout(_bgAutoDetectOwn, 50); setTimeout(_bgLogDobbelItems, 50); });
-    window.onPacket('ObjectAdd',  () => setTimeout(_bgAutoDetectOwn, 50));
-    window.onPacket('UserUpdate', () => setTimeout(_bgAutoDetectOwn, 50));
-    window.onPacket('Users',     () => setTimeout(_bgAutoDetectOwn, 50));
 
     // Reset on room change, same pattern as Color Party.
     window.onPacket('RoomReady', () => {
       _bgEnabled = false;
       _bgHostId = null; _bgOwnId = null;
       _bgHostRaw = null; _bgHostTarget = null; _bgOwnRaw = null; _bgRollPending = false;
-      _bgSelectTarget = null; _bgOwnManual = false; _bgOwnAuto = false;
+      _bgSelectTarget = null;
       const ssBtn = bg.querySelector('#__bg_startstop');
       if (ssBtn) { ssBtn.textContent = 'Start'; ssBtn.className = '__bg_btn __bg_btn_success'; }
       _bgSetHostUI(); _bgSetOwnUI(); _bgSetHostIdUI(); _bgSetOwnIdUI(); _bgUpdateSelectButtons();
     });
-
-    _bgAutoDetectOwn();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { window.__ghk_ready(buildBingoPanel); }); else window.__ghk_ready(buildBingoPanel);
