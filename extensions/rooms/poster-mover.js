@@ -265,6 +265,27 @@
       _render();
       _send();
     });
+
+    // Arrow keys nudge Location by _locStep; Shift+Arrow nudges Offset by _offStep. Only
+    // active while this panel is visible and something is selected — otherwise arrow keys
+    // fall through to native avatar walking as normal. Typing in the location-code field
+    // is left alone so caret navigation still works there.
+    function _keyHandler(e) {
+      if (p.style.display === 'none') return;
+      if (_furniId === null || !_loc) return;
+      if (document.activeElement === txtEl) return;
+      let axis = null, sign = 0;
+      if (e.key === 'ArrowUp')         { axis = e.shiftKey ? 'l2' : 'w2'; sign = -1; }
+      else if (e.key === 'ArrowDown')  { axis = e.shiftKey ? 'l2' : 'w2'; sign = 1; }
+      else if (e.key === 'ArrowLeft')  { axis = e.shiftKey ? 'l1' : 'w1'; sign = -1; }
+      else if (e.key === 'ArrowRight') { axis = e.shiftKey ? 'l1' : 'w1'; sign = 1; }
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+      const step = e.shiftKey ? _offStep : _locStep;
+      _nudge(axis, sign * step);
+    }
+    document.addEventListener('keydown', _keyHandler, true);
   }
 
   if (document.readyState === 'loading') {
