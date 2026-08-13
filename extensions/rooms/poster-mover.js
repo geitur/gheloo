@@ -155,8 +155,56 @@
     p.querySelector('#__pm_close').addEventListener('click', function() { p.style.display = 'none'; });
 
     // ── POSTER MOVER LOGIC ──
-    // Selection capture (Task 2), nudge/rotation handlers (Task 3), the location-code
-    // text field (Task 4), and keyboard nudging (Task 5) are added here.
+    function _render() {
+      const selEl = p.querySelector('#__pm_selected');
+      selEl.textContent = (_furniId !== null && _loc)
+        ? (_furniName || ('type ' + _furniId)) + ' (#' + _furniId + ')'
+        : '—';
+
+      const enabled = _furniId !== null && !!_loc;
+      ['__pm_loc_up', '__pm_loc_down', '__pm_loc_left', '__pm_loc_right',
+       '__pm_off_up', '__pm_off_down', '__pm_off_left', '__pm_off_right',
+       '__pm_rot_l', '__pm_rot_r'].forEach(function(id) {
+        const el = p.querySelector('#' + id);
+        if (el) el.disabled = !enabled;
+      });
+      p.querySelectorAll('#__pm_loc_steps button, #__pm_off_steps button').forEach(function(btn) {
+        btn.disabled = !enabled;
+      });
+      const txt = p.querySelector('#__pm_loc_txt');
+      txt.disabled = !enabled;
+      if (enabled) txt.value = _formatLocation(_loc);
+
+      p.querySelector('#__pm_rot_l').classList.toggle('active', !!_loc && _loc.dir === 'l');
+      p.querySelector('#__pm_rot_r').classList.toggle('active', !!_loc && _loc.dir === 'r');
+    }
+
+    // Captures the target: fires when the player drags a wall item natively, which sends
+    // this same OUT packet. Replaces whatever was tracked before.
+    window.onPacket('MoveWallItem', function(pkt) {
+      if (pkt.direction !== 'OUT' || !pkt.raw) return;
+      const r = window.makeReader(pkt.raw);
+      if (!r) return;
+      let id, str;
+      try { id = r.int(); str = r.str(); } catch (e) { return; }
+      const parsed = _parseLocation(str);
+      if (!parsed) return;
+      _furniId = id;
+      _loc = parsed;
+      const item = window.Room && window.Room.wallItems && window.Room.wallItems[id];
+      _furniName = item ? _typeName(item.typeId) : null;
+      _render();
+    });
+
+    // Resyncs to the server's authoritative location after every move (ours or the game's
+    // own drag) — avoids drift if a move is rejected or clamped server-side.
+    window.onPacket('ItemUpdate', function(pkt) {
+      if (!pkt.parsed || _furniId === null || pkt.parsed.id !== _furniId) return;
+      const parsed = _parseLocation(pkt.parsed.location);
+      if (!parsed) return;
+      _loc = parsed;
+      _render();
+    });
   }
 
   if (document.readyState === 'loading') {
