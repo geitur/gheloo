@@ -247,6 +247,23 @@
       _render();
       _send();
     });
+
+    const txtEl = p.querySelector('#__pm_loc_txt');
+    const errEl = p.querySelector('#__pm_loc_err');
+    txtEl.addEventListener('keydown', function(e) {
+      if (e.key !== 'Enter') return;
+      if (_furniId === null) return;
+      const parsed = _parseLocation(txtEl.value);
+      if (!parsed) {
+        errEl.textContent = 'Invalid format — expected ":w=W,W l=O,O l" or "...r"';
+        errEl.style.display = '';
+        return;
+      }
+      errEl.style.display = 'none';
+      _loc = parsed;
+      _render();
+      _send();
+    });
   }
 
   if (document.readyState === 'loading') {
