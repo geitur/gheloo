@@ -17,6 +17,7 @@
       roomclone: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 16v3a2 2 0 002 2h9a2 2 0 002-2v-9a2 2 0 00-2-2h-3"/></svg>',
       areamover: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M19 9l3 3-3 3M9 19l3 3 3-3"/><path d="M2 12h20M12 2v20"/></svg>',
       furniscatter: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="6" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="4" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="7" r="1.4" fill="currentColor" stroke="none"/><circle cx="7" cy="13" r="1.4" fill="currentColor" stroke="none"/><circle cx="16" cy="14" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="20" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg>',
+      postermover: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none"/><path d="M21 15l-5-5L5 21"/></svg>',
       photolibrary: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 4h-5L7 7H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="4"/></svg>',
       userdatabase: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>',
       fun: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 13.5c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2"/><circle cx="9" cy="9.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1" fill="currentColor" stroke="none"/></svg>',
@@ -41,6 +42,8 @@
       roomhistory: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/><path d="M3 12a9 9 0 011.5-5" opacity="0.35"/></svg>',
       avatarcompass: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>',
       ping: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h4l2-7 4 14 2-7h8"/></svg>',
+      creditredeem: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 013-3c1.5 0 2.5.9 2.5 2s-1 1.6-2 2-1.5.6-1.5 1.5"/><path d="M12 16.5v.01"/></svg>',
+      ecotron: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3l3 3-3 3M17 21l-3-3 3-3"/><path d="M20 10a8 8 0 00-15-3.5M4 14a8 8 0 0015 3.5"/></svg>',
     };
 
     const style = document.createElement('style');
@@ -247,6 +250,7 @@
             } },
             { id: 'areamover', title: 'Area Mover', subtitle: 'Shift a rectangular area of furni, stack by stack', icon: ICONS.areamover, close: false, onClick: showPanelById('__am_panel') },
             { id: 'furniscatter', title: 'Scatter', subtitle: 'Randomly place matching inventory items across the room', icon: ICONS.furniscatter, close: false, onClick: showPanelById('__fsc_panel') },
+            { id: 'postermover', title: 'Poster Mover', subtitle: 'Fine-nudge a wall item after dragging it once', icon: ICONS.postermover, close: false, onClick: showPanelById('__pm_panel') },
           ]},
         ],
       },
@@ -270,6 +274,11 @@
             { id: 'marktplaats', title: 'Marktplaats', subtitle: 'Marktplaats Dupe', icon: ICONS.marktplaats, close: false, onClick: showPanelById('__mb') },
             { id: 'photolibrary', title: 'Photo Library', subtitle: 'Save and organize camera photos', icon: ICONS.photolibrary, close: false, onClick: showPanelById('__photolib') },
             { id: 'deurwaarder', title: 'Deurwaarder', subtitle: 'Dupe Dashboard', icon: ICONS.deurwaarder, close: false, onClick: function() { if (window.__ghk_openDeurwaarder) window.__ghk_openDeurwaarder(); } },
+            { id: 'creditredeem', title: 'Credit Redeem', subtitle: 'Redeem/pickup dupe race', icon: ICONS.creditredeem, close: false, onClick: showPanelById('__cqe') },
+            { id: 'ecotron', title: 'Ecotron Race', subtitle: 'Recycle + marktplaats list/cancel race', icon: ICONS.ecotron, close: false, onClick: function() {
+              showPanelById('__eco_panel')();
+              if (window.__eco_render) window.__eco_render();
+            } },
           ]},
         ],
       },
@@ -1265,7 +1274,7 @@
 
   // Bring-to-front on click: clicking any panel raises it above the others.
   (function() {
-    var _IDS = ['__hbl','__snd','__mac','__rc','__fb','__mb','__mpa_panel','__mimic','__tst','__ext','__fh_panel','__rclone','__photolib','__ins_panel','__am_panel','__userdb','__udb_nc','__rv_panel','__wc_panel','__bg'];
+    var _IDS = ['__hbl','__snd','__mac','__rc','__fb','__mb','__mpa_panel','__mimic','__tst','__ext','__fh_panel','__rclone','__photolib','__ins_panel','__am_panel','__userdb','__udb_nc','__rv_panel','__wc_panel','__bg','__pm_panel'];
     var _gameStack = []; // back = bottom, front = top
 
     // Find the stacking host for a game panel.
