@@ -156,6 +156,8 @@
 
     // ── POSTER MOVER LOGIC ──
     function _render() {
+      if (errEl) errEl.style.display = 'none';
+
       const selEl = p.querySelector('#__pm_selected');
       selEl.textContent = (_furniId !== null && _loc)
         ? (_furniName || ('type ' + _furniId)) + ' (#' + _furniId + ')'
@@ -256,10 +258,9 @@
       const parsed = _parseLocation(txtEl.value);
       if (!parsed) {
         errEl.textContent = 'Invalid format — expected ":w=W,W l=O,O l" or "...r"';
-        errEl.style.display = '';
+        errEl.style.display = 'block';
         return;
       }
-      errEl.style.display = 'none';
       _loc = parsed;
       _render();
       _send();
