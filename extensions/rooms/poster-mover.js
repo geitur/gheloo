@@ -273,7 +273,8 @@
     function _keyHandler(e) {
       if (p.style.display === 'none') return;
       if (_furniId === null || !_loc) return;
-      if (document.activeElement === txtEl) return;
+      const ae = document.activeElement;
+      if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) return;
       let axis = null, sign = 0;
       if (e.key === 'ArrowUp')         { axis = e.shiftKey ? 'l2' : 'w2'; sign = -1; }
       else if (e.key === 'ArrowDown')  { axis = e.shiftKey ? 'l2' : 'w2'; sign = 1; }
