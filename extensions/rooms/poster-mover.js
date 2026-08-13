@@ -205,6 +205,48 @@
       _loc = parsed;
       _render();
     });
+
+    function _nudge(axis, delta) {
+      if (!_loc) return;
+      _loc = Object.assign({}, _loc, { [axis]: _loc[axis] + delta });
+      _render();
+      _send();
+    }
+
+    p.querySelector('#__pm_loc_up').addEventListener('click', function() { _nudge('w2', -_locStep); });
+    p.querySelector('#__pm_loc_down').addEventListener('click', function() { _nudge('w2', _locStep); });
+    p.querySelector('#__pm_loc_left').addEventListener('click', function() { _nudge('w1', -_locStep); });
+    p.querySelector('#__pm_loc_right').addEventListener('click', function() { _nudge('w1', _locStep); });
+
+    p.querySelector('#__pm_off_up').addEventListener('click', function() { _nudge('l2', -_offStep); });
+    p.querySelector('#__pm_off_down').addEventListener('click', function() { _nudge('l2', _offStep); });
+    p.querySelector('#__pm_off_left').addEventListener('click', function() { _nudge('l1', -_offStep); });
+    p.querySelector('#__pm_off_right').addEventListener('click', function() { _nudge('l1', _offStep); });
+
+    function _wireSteps(containerId, setStep) {
+      const container = p.querySelector('#' + containerId);
+      container.querySelectorAll('button').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          setStep(parseInt(btn.getAttribute('data-step'), 10));
+          container.querySelectorAll('button').forEach(function(b) { b.classList.toggle('active', b === btn); });
+        });
+      });
+    }
+    _wireSteps('__pm_loc_steps', function(v) { _locStep = v; });
+    _wireSteps('__pm_off_steps', function(v) { _offStep = v; });
+
+    p.querySelector('#__pm_rot_l').addEventListener('click', function() {
+      if (!_loc) return;
+      _loc = Object.assign({}, _loc, { dir: 'l' });
+      _render();
+      _send();
+    });
+    p.querySelector('#__pm_rot_r').addEventListener('click', function() {
+      if (!_loc) return;
+      _loc = Object.assign({}, _loc, { dir: 'r' });
+      _render();
+      _send();
+    });
   }
 
   if (document.readyState === 'loading') {
