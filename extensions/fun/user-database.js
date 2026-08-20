@@ -122,7 +122,7 @@
     const g = (gender || 'M').toUpperCase();
     window.sendPacket('OUT', fid, '{s:"' + g + '"}{s:"' + figure.replace(/"/g, '\\"') + '"}');
     _wearCooldownUntil = now + WEAR_COOLDOWN_MS;
-    _startWearCooldownRing();
+    _startWearCooldownRing(opts.ringEl);
     if (statusEl && !opts.silent) {
       statusEl.textContent = 'Outfit applied.';
       setTimeout(function() { if (statusEl.textContent === 'Outfit applied.') statusEl.textContent = ''; }, 2000);
@@ -130,8 +130,7 @@
   }
 
   const WEAR_RING_CIRCUMFERENCE = 2 * Math.PI * 9;
-  function _startWearCooldownRing() {
-    const ring = panel && panel.querySelector('#__udb_random_ring_circle');
+  function _animateRing(ring) {
     if (!ring) return;
     ring.style.transition = 'none';
     ring.style.strokeDashoffset = '0';
@@ -140,6 +139,11 @@
     ring.style.transition = 'stroke-dashoffset ' + WEAR_COOLDOWN_MS + 'ms linear, opacity 300ms linear ' + (WEAR_COOLDOWN_MS - 300) + 'ms';
     ring.style.strokeDashoffset = String(WEAR_RING_CIRCUMFERENCE);
     ring.style.opacity = '0';
+  }
+  // Only the ring around whatever was actually clicked pulses — defaults to the dice
+  // ring when nothing specific was passed (dice/auto-random triggers).
+  function _startWearCooldownRing(ringEl) {
+    _animateRing(ringEl || (panel && panel.querySelector('#__udb_random_ring_circle')));
   }
 
   // Picks a random figure out of every logged user's current + previous outfits, then
@@ -430,7 +434,20 @@
       return _matchesQuery(hay, q);
     });
     if (q) list = list.slice().sort(function(a, b) { return _matchScore(a, q) - _matchScore(b, q); });
-    _renderList(list);
+    _renderList(list, q);
+  }
+
+  // If a search hit someone only because one of their OLD names matches (not their
+  // current name), surface that — otherwise a hit like "Frog" for a query "ceder" looks
+  // unexplained. Most recent old name checked first.
+  function _oldNameMatch(u, q) {
+    if (!q) return null;
+    if (_matchesQuery((u.name || '').toLowerCase(), q)) return null;
+    const prev = u.previous_names || [];
+    for (let i = prev.length - 1; i >= 0; i--) {
+      if (_matchesQuery((prev[i] || '').toLowerCase(), q)) return prev[i];
+    }
+    return null;
   }
 
   // At 30k+ logged users, building one DOM row (+ avatar <img>) per match locks up the
@@ -439,7 +456,7 @@
   // not attached per row, so this cap is the only thing keeping render cost bounded.
   const RENDER_CAP = 200;
 
-  function _renderList(users) {
+  function _renderList(users, q) {
     const countEl = panel.querySelector('#__udb_count');
     const listEl = panel.querySelector('#__udb_list');
     countEl.textContent = users.length + ' user' + (users.length !== 1 ? 's' : '') + (_all.length !== users.length ? ' of ' + _all.length : '');
@@ -454,7 +471,10 @@
     listEl.innerHTML = shown.map(function(u) {
       const hasAv = !!u.figure;
       const selCls = _selId === u.id ? ' sel' : '';
-      const subText = u.motto ? _esc(u.motto) : (u.favorite_group ? _esc(u.favorite_group) : '');
+      const oldName = _oldNameMatch(u, q);
+      const subText = oldName
+        ? '<span class="__udb_row_oldname">Old name: ' + _esc(oldName) + '</span>'
+        : (u.motto ? _esc(u.motto) : (u.favorite_group ? _esc(u.favorite_group) : ''));
       return '<div class="__udb_row' + selCls + '" data-uid="' + u.id + '">'
         + '<div class="__udb_row_avatar">'
         + (hasAv
@@ -561,7 +581,8 @@
       '<div class="__udb_dc_header">'
       + '<div class="__udb_dc_avatar' + (hasAv ? ' __udb_outfit_clickable' : '') + '" id="__udb_dc_avatar">'
       + (hasAv
-        ? '<img src="' + _esc(avatarLarge(u.figure)) + '" onerror="this.style.opacity=\'.1\'" title="Click to wear this outfit">'
+        ? '<svg class="__udb_wear_ring" viewBox="0 0 24 24"><circle class="__udb_wear_ring_circle" cx="12" cy="12" r="9"/></svg>'
+          + '<img src="' + _esc(avatarLarge(u.figure)) + '" onerror="this.style.opacity=\'.1\'" title="Click to wear this outfit">'
         : '<span class="__udb_dc_no_av">👤</span>')
       + '</div>'
       + '<div class="__udb_dc_title">'
@@ -582,7 +603,8 @@
       _profileCheck(u.id);
     });
     if (hasAv) {
-      detail.querySelector('#__udb_dc_avatar').addEventListener('click', function() { _wearFigure(u.figure, u.gender, statusEl); });
+      const avatarRing = detail.querySelector('#__udb_dc_avatar .__udb_wear_ring_circle');
+      detail.querySelector('#__udb_dc_avatar').addEventListener('click', function() { _wearFigure(u.figure, u.gender, statusEl, { ringEl: avatarRing }); });
       detail.querySelector('#__udb_dc_ac_btn').addEventListener('click', function(e) {
         e.stopPropagation();
         _avatarCheck(u.figure);
@@ -606,13 +628,16 @@
     const u = _all.find(function(x) { return x.id === userId; });
     container.innerHTML = figs.map(function(fig) {
       return '<div class="__udb_outfit_wrap">'
+        + '<svg class="__udb_wear_ring" viewBox="0 0 24 24"><circle class="__udb_wear_ring_circle" cx="12" cy="12" r="9"/></svg>'
         + '<img src="' + _esc(avatarMini(fig)) + '" data-fig="' + _esc(fig) + '" title="Click to wear this outfit" class="__udb_outfit_clickable" loading="lazy" onerror="this.style.opacity=\'.1\'">'
         + '<button class="__udb_outfit_ac_btn" data-fig="' + _esc(fig) + '" title="Avatar Check — who else wore this outfit">' + _ICON_SEARCH + '</button>'
         + '</div>';
     }).join('');
 
-    container.querySelectorAll('img[data-fig]').forEach(function(img) {
-      img.addEventListener('click', function() { _wearFigure(img.dataset.fig, u && u.gender, statusEl); });
+    container.querySelectorAll('.__udb_outfit_wrap').forEach(function(wrap) {
+      const img = wrap.querySelector('img[data-fig]');
+      const ring = wrap.querySelector('.__udb_wear_ring_circle');
+      img.addEventListener('click', function() { _wearFigure(img.dataset.fig, u && u.gender, statusEl, { ringEl: ring }); });
     });
     container.querySelectorAll('.__udb_outfit_ac_btn').forEach(function(btn) {
       btn.addEventListener('click', function(e) {
@@ -747,10 +772,13 @@
       '.__udb_row_info{flex:1;min-width:0}',
       '.__udb_row_name{font-size:11px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#eceefb}',
       '.__udb_row_sub{font-size:10px;color:#82849a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.__udb_row_oldname{color:#A6B0FF;font-weight:600}',
       '#__udb_detail_panel{flex:1;overflow-y:auto;padding:0}',
       '#__udb_empty{display:flex;align-items:center;justify-content:center;height:100%;color:#5c5e6b;font-size:12px;text-align:center;padding:24px}',
       '.__udb_dc_header{background:linear-gradient(135deg,#2b2f6b,#1a1c3d);padding:20px 20px 16px;display:flex;gap:16px;align-items:flex-end}',
-      '.__udb_dc_avatar{width:90px;height:130px;flex-shrink:0;display:flex;align-items:flex-end;justify-content:center;background:rgba(255,255,255,.06);border-radius:8px 8px 0 0;overflow:hidden}',
+      '.__udb_dc_avatar{position:relative;width:90px;height:130px;flex-shrink:0;display:flex;align-items:flex-end;justify-content:center;background:rgba(255,255,255,.06);border-radius:8px 8px 0 0;overflow:hidden}',
+      '.__udb_wear_ring{position:absolute;top:50%;left:50%;width:70px;height:70px;transform:translate(-50%,-50%) rotate(-90deg);pointer-events:none;z-index:1}',
+      '.__udb_wear_ring circle{fill:none;stroke:#2ecc71;stroke-width:2;stroke-dasharray:56.549;stroke-dashoffset:56.549;opacity:0}',
       '.__udb_dc_avatar img{width:90px;height:130px;object-fit:contain;image-rendering:pixelated}',
       '.__udb_dc_no_av{font-size:34px;opacity:.3}',
       '.__udb_dc_title{flex:1;min-width:0;padding-bottom:6px}',
