@@ -12,7 +12,9 @@
       '.__bg_close:hover{color:#eceefb}',
       '#__bg_status_card{border-radius:10px;background:#3a3d4a;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}',
       '#__bg_host_label{font-size:24px;font-weight:800;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,0.3);line-height:1}',
-      '#__bg_own_label{font-size:16px;font-weight:700;color:rgba(255,255,255,0.9);line-height:1}',
+      '.__bg_own_label{font-size:14px;font-weight:700;color:rgba(255,255,255,0.9);line-height:1}',
+      '.__bg_own_row{display:flex;align-items:center;gap:6px}',
+      '.__bg_own_row .__bg_label{color:rgba(255,255,255,0.6)}',
       // Host and Own are visually distinct cards (own accented, since it's the one that
       // rolls) instead of two rows sharing one box with a divider between them.
       '.__bg_card{background:#1c1e2a;border-radius:8px;padding:8px 12px;border:1px solid #23252f}',
@@ -48,9 +50,10 @@
                 '<span class="__bg_label" style="color:rgba(255,255,255,0.7)">Host</span>' +
                 '<span id="__bg_host_label">—</span>' +
               '</div>' +
-              '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">' +
+              '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' +
                 '<span class="__bg_label" style="color:rgba(255,255,255,0.7)">Own</span>' +
-                '<span id="__bg_own_label">—</span>' +
+                '<div class="__bg_own_row"><span class="__bg_label">1</span><span id="__bg_own_label_1" class="__bg_own_label">—</span></div>' +
+                '<div class="__bg_own_row"><span class="__bg_label">2</span><span id="__bg_own_label_2" class="__bg_own_label">—</span></div>' +
               '</div>' +
             '</div>' +
             '<div class="__bg_card">' +
@@ -64,13 +67,23 @@
               '</div>' +
             '</div>' +
             '<div class="__bg_card __bg_card_own">' +
-              '<div class="__bg_card_hdr">Own</div>' +
+              '<div class="__bg_card_hdr">Own 1</div>' +
               '<div style="display:flex;align-items:center;justify-content:space-between">' +
                 '<div style="display:flex;flex-direction:column;gap:2px">' +
-                  '<span class="__bg_label">Own dice</span>' +
-                  '<span id="__bg_own_id" style="font-size:9px;color:#82849a;font-family:monospace">not set</span>' +
+                  '<span class="__bg_label">Own dice 1</span>' +
+                  '<span id="__bg_own_id_1" style="font-size:9px;color:#82849a;font-family:monospace">not set</span>' +
                 '</div>' +
-                '<button id="__bg_sel_own_btn" class="__bg_btn __bg_btn_sm __bg_btn_secondary" style="flex-shrink:0">Select Own Dice</button>' +
+                '<button id="__bg_sel_own_btn_1" class="__bg_btn __bg_btn_sm __bg_btn_secondary" style="flex-shrink:0">Select Own Dice</button>' +
+              '</div>' +
+            '</div>' +
+            '<div class="__bg_card __bg_card_own">' +
+              '<div class="__bg_card_hdr">Own 2</div>' +
+              '<div style="display:flex;align-items:center;justify-content:space-between">' +
+                '<div style="display:flex;flex-direction:column;gap:2px">' +
+                  '<span class="__bg_label">Own dice 2</span>' +
+                  '<span id="__bg_own_id_2" style="font-size:9px;color:#82849a;font-family:monospace">not set</span>' +
+                '</div>' +
+                '<button id="__bg_sel_own_btn_2" class="__bg_btn __bg_btn_sm __bg_btn_secondary" style="flex-shrink:0">Select Own Dice</button>' +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -84,35 +97,44 @@
     window.__ghk_makeDraggable(bg, bg.querySelector('#__bg_hdr'), '__ghk_bg_pos', e => e.target.id === '__bg_close');
     bg.querySelector('#__bg_close').addEventListener('click', () => { bg.style.display = 'none'; });
 
-    // ── BINGO ── (single own dice for now — multi-dice hit a server-side rate limit on the
-    // second ThrowDice packet that needs more investigation before bringing it back)
-    let _bgEnabled      = false;
-    let _bgHostId       = null; // string furni id
-    let _bgOwnId        = null; // string furni id
-    let _bgHostRaw      = null; // last raw state string from the host dice: '-1' | '0' | '1'..'6' | null
-    let _bgHostTarget   = null; // parsed 1-6 number, or null when there's no live call
-    let _bgOwnRaw       = null; // last raw state string from own dice
-    let _bgSelectTarget = null; // 'host' | 'own' | null — which button is waiting for a click
-    let _bgRollPending  = false; // true from the moment we send a roll until the own dice's next value lands
+    // ── BINGO ── two own dice can run at once. Every ThrowDice send (either dice) goes
+    // through _bgRoll, which enforces a shared _bgRollGapMs cooldown so the two dice's
+    // packets never land back-to-back and trip the server's rate limit.
+    const _bgRollGapMs  = 400;
+    let _bgEnabled       = false;
+    let _bgHostId        = null; // string furni id
+    let _bgHostRaw       = null; // last raw state string from the host dice: '-1' | '0' | '1'..'6' | null
+    let _bgHostTarget    = null; // parsed 1-6 number, or null when there's no live call
+    let _bgSelectTarget  = null; // 'host' | 'own1' | 'own2' | null — which button is waiting for a click
+    let _bgLastRollAt    = 0;    // Date.now() of the most recently scheduled roll send (reserved slot)
+    const _bgOwn = [
+      { id: null, raw: null, pending: false }, // own dice 1
+      { id: null, raw: null, pending: false }, // own dice 2
+    ];
 
     function _bgSetHostIdUI() {
       const el = bg.querySelector('#__bg_host_id');
       if (el) el.textContent = _bgHostId ? '#' + _bgHostId : 'not set';
     }
-    function _bgSetOwnIdUI() {
-      const el = bg.querySelector('#__bg_own_id');
-      if (el) el.textContent = _bgOwnId ? '#' + _bgOwnId : 'not set';
+    function _bgSetOwnIdUI(idx) {
+      const el = bg.querySelector('#__bg_own_id_' + (idx + 1));
+      if (el) el.textContent = _bgOwn[idx].id ? '#' + _bgOwn[idx].id : 'not set';
     }
     function _bgUpdateSelectButtons() {
       const hostBtn = bg.querySelector('#__bg_sel_host_btn');
-      const ownBtn  = bg.querySelector('#__bg_sel_own_btn');
+      const own1Btn = bg.querySelector('#__bg_sel_own_btn_1');
+      const own2Btn = bg.querySelector('#__bg_sel_own_btn_2');
       if (hostBtn) {
         hostBtn.textContent = _bgSelectTarget === 'host' ? 'Click a dice…' : 'Select Host Dice';
         hostBtn.classList.toggle('active', _bgSelectTarget === 'host');
       }
-      if (ownBtn) {
-        ownBtn.textContent = _bgSelectTarget === 'own' ? 'Click a dice…' : 'Select Own Dice';
-        ownBtn.classList.toggle('active', _bgSelectTarget === 'own');
+      if (own1Btn) {
+        own1Btn.textContent = _bgSelectTarget === 'own1' ? 'Click a dice…' : 'Select Own Dice';
+        own1Btn.classList.toggle('active', _bgSelectTarget === 'own1');
+      }
+      if (own2Btn) {
+        own2Btn.textContent = _bgSelectTarget === 'own2' ? 'Click a dice…' : 'Select Own Dice';
+        own2Btn.classList.toggle('active', _bgSelectTarget === 'own2');
       }
     }
 
@@ -120,8 +142,12 @@
       _bgSelectTarget = _bgSelectTarget === 'host' ? null : 'host';
       _bgUpdateSelectButtons();
     });
-    bg.querySelector('#__bg_sel_own_btn').addEventListener('click', () => {
-      _bgSelectTarget = _bgSelectTarget === 'own' ? null : 'own';
+    bg.querySelector('#__bg_sel_own_btn_1').addEventListener('click', () => {
+      _bgSelectTarget = _bgSelectTarget === 'own1' ? null : 'own1';
+      _bgUpdateSelectButtons();
+    });
+    bg.querySelector('#__bg_sel_own_btn_2').addEventListener('click', () => {
+      _bgSelectTarget = _bgSelectTarget === 'own2' ? null : 'own2';
       _bgUpdateSelectButtons();
     });
 
@@ -136,7 +162,8 @@
         if (_bgSelectTarget === 'host') {
           _bgHostId = id; _bgSetHostIdUI();
         } else {
-          _bgOwnId = id; _bgSetOwnIdUI();
+          const idx = _bgSelectTarget === 'own1' ? 0 : 1;
+          _bgOwn[idx].id = id; _bgSetOwnIdUI(idx);
         }
         _bgSelectTarget = null;
         _bgUpdateSelectButtons();
@@ -153,29 +180,40 @@
       const el = bg.querySelector('#__bg_host_label');
       if (el) el.textContent = _bgLabelForRaw(_bgHostRaw);
     }
-    function _bgSetOwnUI() {
-      const el = bg.querySelector('#__bg_own_label');
-      if (el) el.textContent = _bgLabelForRaw(_bgOwnRaw);
+    function _bgSetOwnUI(idx) {
+      const el = bg.querySelector('#__bg_own_label_' + (idx + 1));
+      if (el) el.textContent = _bgLabelForRaw(_bgOwn[idx].raw);
     }
 
     // OUT 1990 (ThrowDiceMessageComposer) is the actual roll action — confirmed via a real
     // capture. OUT 355 (used for selection) only clicks/targets a dice, it doesn't roll it.
-    function _bgRoll() {
-      if (!_bgOwnId) return;
-      _bgRollPending = true;
-      window.sendPacket('OUT', 1990, '{i:' + _bgOwnId + '}');
+    // Sends are staggered through _bgLastRollAt so two dice rolling around the same instant
+    // (e.g. both starting cold, or both reacting to a new host target) still land >=_bgRollGapMs
+    // apart — the server enforces a per-account cooldown between ThrowDice packets.
+    function _bgRoll(idx) {
+      const slot = _bgOwn[idx];
+      if (!slot.id) return;
+      slot.pending = true;
+      const now = Date.now();
+      const waitFor = Math.max(0, _bgLastRollAt + _bgRollGapMs - now);
+      _bgLastRollAt = now + waitFor;
+      setTimeout(() => {
+        window.sendPacket('OUT', 1990, '{i:' + slot.id + '}');
+      }, waitFor);
     }
 
     // Central decision point, called after every relevant state change. Instantly re-rolls
     // on a mismatch (no delay) — the server's own roll animation (state passes through '-1'
     // before settling) is what naturally paces this, since we only act on a settled value.
-    function _bgMaybeRoll() {
-      if (!_bgEnabled || !_bgOwnId || _bgHostTarget === null || _bgRollPending) return;
-      if (_bgOwnRaw === '-1') return; // still mid-roll, wait for it to settle
-      const ownNum = /^[1-6]$/.test(_bgOwnRaw || '') ? parseInt(_bgOwnRaw) : null;
+    function _bgMaybeRoll(idx) {
+      const slot = _bgOwn[idx];
+      if (!_bgEnabled || !slot.id || _bgHostTarget === null || slot.pending) return;
+      if (slot.raw === '-1') return; // still mid-roll, wait for it to settle
+      const ownNum = /^[1-6]$/.test(slot.raw || '') ? parseInt(slot.raw) : null;
       if (ownNum === _bgHostTarget) return; // matched — stop
-      _bgRoll();
+      _bgRoll(idx);
     }
+    function _bgMaybeRollAll() { _bgMaybeRoll(0); _bgMaybeRoll(1); }
 
     bg.querySelector('#__bg_startstop').addEventListener('click', function() {
       _bgEnabled = !_bgEnabled;
@@ -184,7 +222,8 @@
       if (_bgEnabled) {
         _bgSelectTarget = null;
         _bgUpdateSelectButtons();
-        _bgMaybeRoll();
+        _bgMaybeRoll(0);
+        setTimeout(() => _bgMaybeRoll(1), 800); // dice 2's first attempt always waits 800ms after Start
       }
     });
 
@@ -195,27 +234,33 @@
         _bgHostRaw = p.parsed.state;
         _bgHostTarget = /^[1-6]$/.test(_bgHostRaw || '') ? parseInt(_bgHostRaw) : null;
         _bgSetHostUI();
-        _bgMaybeRoll();
+        _bgMaybeRollAll();
       }
-      if (_bgOwnId && id === _bgOwnId) {
-        _bgRollPending = false;
-        _bgOwnRaw = p.parsed.state;
-        _bgSetOwnUI();
-        _bgMaybeRoll();
-      }
+      _bgOwn.forEach((slot, idx) => {
+        if (slot.id && id === slot.id) {
+          slot.pending = false;
+          slot.raw = p.parsed.state;
+          _bgSetOwnUI(idx);
+          _bgMaybeRoll(idx);
+        }
+      });
     });
 
-    window.__ghk_bgOwnId = () => _bgOwnId;
+    window.__ghk_bgOwnIds = () => _bgOwn.map(s => s.id).filter(Boolean);
 
     // Reset on room change, same pattern as Color Party.
     window.onPacket('RoomReady', () => {
       _bgEnabled = false;
-      _bgHostId = null; _bgOwnId = null;
-      _bgHostRaw = null; _bgHostTarget = null; _bgOwnRaw = null; _bgRollPending = false;
+      _bgHostId = null;
+      _bgHostRaw = null; _bgHostTarget = null;
+      _bgOwn.forEach(slot => { slot.id = null; slot.raw = null; slot.pending = false; });
       _bgSelectTarget = null;
+      _bgLastRollAt = 0;
       const ssBtn = bg.querySelector('#__bg_startstop');
       if (ssBtn) { ssBtn.textContent = 'Start'; ssBtn.className = '__bg_btn __bg_btn_success'; }
-      _bgSetHostUI(); _bgSetOwnUI(); _bgSetHostIdUI(); _bgSetOwnIdUI(); _bgUpdateSelectButtons();
+      _bgSetHostUI(); _bgSetOwnUI(0); _bgSetOwnUI(1);
+      _bgSetHostIdUI(); _bgSetOwnIdUI(0); _bgSetOwnIdUI(1);
+      _bgUpdateSelectButtons();
     });
   }
 

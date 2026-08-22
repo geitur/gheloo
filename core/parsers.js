@@ -38,6 +38,90 @@
     return { index, figure, gender, motto, id };
   };
 
+  // ExtendedProfile: id, name, figure, motto, then unmapped fields (join date text,
+  // achievement/friend counts, etc.) — only pulling what's needed to log a viewed profile.
+  window.PacketParsers.IN.ExtendedProfile = raw => {
+    const r = window.makeReader(raw); if (!r) return null;
+    const id     = r.int();
+    const name   = r.str();
+    const figure = r.str();
+    const motto  = r.str();
+    return { id, name, figure, motto };
+  };
+
+  // GuildMembers: unmapped int, group name (own length prefix — often empty, but a real
+  // string field, not a fixed-width short as an earlier version of this parser assumed),
+  // unmapped int, badge code, unmapped int, then a page-count int that reliably drives
+  // the {id,name,figure,joinDate,rank} loop. Byte-verified against three real raw-hex
+  // captures (14-member small group, 16047-member group, and a group with a populated
+  // "Bunny" group-name field) — every field lined up exactly, loop consumed precisely to
+  // the trailing unmapped bytes in all three. Badge code still gets a defensive resync
+  // (tries a few byte offsets, validated by whether the resulting pageCount looks sane —
+  // NOT by printability, since badge codes can contain non-ASCII bytes) as a safety net,
+  // though with the group-name field now accounted for it landed correctly on the first
+  // try in all three captures.
+  window.PacketParsers.IN.GuildMembers = raw => {
+    const r = window.makeReader(raw); if (!r) return null;
+    try {
+      r.int();                        // unmapped
+      r.str();                        // group name (can be empty)
+      r.int();                        // unmapped
+
+      let badgeStartIdx = null;
+      for (let skip = 0; skip <= 4 && badgeStartIdx === null; skip++) {
+        const idx = r.getReadIndex();
+        try {
+          r.str();                    // candidate badge code
+          r.int();                    // unmapped
+          const candidatePageCount = r.int();
+          if (candidatePageCount > 0 && candidatePageCount <= 500) { badgeStartIdx = idx; break; }
+        } catch (_e) { /* out of range at this offset — keep resyncing */ }
+        r.setReadIndex(idx + 1);
+      }
+      if (badgeStartIdx === null) return null;
+      r.setReadIndex(badgeStartIdx);
+
+      r.str();                        // badge code
+      r.int();                        // unmapped
+      const pageCount = r.int();
+      r.int();                        // unmapped (page index?)
+      const members = [];
+      for (let i = 0; i < pageCount; i++) {
+        const id       = r.int();
+        const name     = r.str();
+        const figure   = r.str();
+        const joinDate = r.str();
+        const rank     = r.int();
+        members.push({ id, name, figure, joinDate, rank });
+      }
+      return { members };
+    } catch (e) { return null; }
+  };
+
+  // RelationshipStatusInfo: subjectId, then N categories (best friends / enemies / etc,
+  // exact category meaning unmapped), each as {categoryId, memberCount, member[]} — confirmed
+  // against a live capture: header counts (2 categories, 1 member each) matched the entries
+  // that followed exactly, token for token.
+  window.PacketParsers.IN.RelationshipStatusInfo = raw => {
+    const r = window.makeReader(raw); if (!r) return null;
+    try {
+      const subjectId = r.int();
+      const categoryCount = r.int();
+      const users = [];
+      for (let c = 0; c < categoryCount; c++) {
+        const categoryId  = r.int();
+        const memberCount = r.int();
+        for (let i = 0; i < memberCount; i++) {
+          const id     = r.int();
+          const name   = r.str();
+          const figure = r.str();
+          users.push({ id, name, figure, categoryId });
+        }
+      }
+      return { subjectId, users };
+    } catch (e) { return null; }
+  };
+
   // Dance: userIndex, danceId
   window.PacketParsers.IN.Dance = raw => {
     const r = window.makeReader(raw); if (!r) return null;
