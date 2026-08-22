@@ -57,7 +57,7 @@
       '.__pm_title{font:600 13px system-ui;color:#eceefb;flex:1}',
       '.__pm_close{cursor:pointer;color:#5c5e6b;font-size:16px;line-height:1;padding:2px 6px}',
       '.__pm_close:hover{color:#eceefb}',
-      '#__pm_body{max-height:min(600px,calc(100vh - 90px));overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}',
+      '#__pm_body{padding:12px;display:flex;flex-direction:column;gap:10px}',
       '.__pm_card{background:#1c1e2a;border:1px solid #23252f;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px}',
       '.__pm_card h4{margin:0;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#82849a}',
       '.__pm_desc{font-size:9px;color:#5c5e6b;line-height:1.5}',
@@ -94,7 +94,10 @@
 
           '<div class="__pm_card">' +
             '<h4>Selected</h4>' +
-            '<div class="__pm_selected" id="__pm_selected">&mdash;</div>' +
+            '<div class="__pm_row" style="justify-content:space-between">' +
+              '<div class="__pm_selected" id="__pm_selected">&mdash;</div>' +
+              '<button class="__pm_btn secondary small" id="__pm_clear" disabled>Clear</button>' +
+            '</div>' +
             '<div class="__pm_desc">Drag a wall item once in-game to select it here.</div>' +
           '</div>' +
 
@@ -166,7 +169,7 @@
       const enabled = _furniId !== null && !!_loc;
       ['__pm_loc_up', '__pm_loc_down', '__pm_loc_left', '__pm_loc_right',
        '__pm_off_up', '__pm_off_down', '__pm_off_left', '__pm_off_right',
-       '__pm_rot_l', '__pm_rot_r'].forEach(function(id) {
+       '__pm_rot_l', '__pm_rot_r', '__pm_clear'].forEach(function(id) {
         const el = p.querySelector('#' + id);
         if (el) el.disabled = !enabled;
       });
@@ -175,11 +178,21 @@
       });
       const txt = p.querySelector('#__pm_loc_txt');
       txt.disabled = !enabled;
-      if (enabled) txt.value = _formatLocation(_loc);
+      txt.value = enabled ? _formatLocation(_loc) : '';
 
       p.querySelector('#__pm_rot_l').classList.toggle('active', !!_loc && _loc.dir === 'l');
       p.querySelector('#__pm_rot_r').classList.toggle('active', !!_loc && _loc.dir === 'r');
     }
+
+    // Lets the player deselect without dragging a different item — e.g. to stop keyboard
+    // arrows from nudging anything while they walk around.
+    function _clearSelection() {
+      _furniId = null;
+      _furniName = null;
+      _loc = null;
+      _render();
+    }
+    p.querySelector('#__pm_clear').addEventListener('click', _clearSelection);
 
     // Captures the target: fires when the player drags a wall item natively, which sends
     // this same OUT packet. Replaces whatever was tracked before.
@@ -266,7 +279,7 @@
       _send();
     });
 
-    // Arrow keys nudge Location by _locStep; Shift+Arrow nudges Offset by _offStep. Only
+    // Arrow keys nudge Location by _locStep. Offset has no keybind — buttons only. Only
     // active while this panel is visible and something is selected — otherwise arrow keys
     // fall through to native avatar walking as normal. Typing in the location-code field
     // is left alone so caret navigation still works there.
@@ -276,15 +289,14 @@
       const ae = document.activeElement;
       if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) return;
       let axis = null, sign = 0;
-      if (e.key === 'ArrowUp')         { axis = e.shiftKey ? 'l2' : 'w2'; sign = -1; }
-      else if (e.key === 'ArrowDown')  { axis = e.shiftKey ? 'l2' : 'w2'; sign = 1; }
-      else if (e.key === 'ArrowLeft')  { axis = e.shiftKey ? 'l1' : 'w1'; sign = -1; }
-      else if (e.key === 'ArrowRight') { axis = e.shiftKey ? 'l1' : 'w1'; sign = 1; }
+      if (e.key === 'ArrowUp')         { axis = 'w2'; sign = -1; }
+      else if (e.key === 'ArrowDown')  { axis = 'w2'; sign = 1; }
+      else if (e.key === 'ArrowLeft')  { axis = 'w1'; sign = -1; }
+      else if (e.key === 'ArrowRight') { axis = 'w1'; sign = 1; }
       else return;
       e.preventDefault();
       e.stopPropagation();
-      const step = e.shiftKey ? _offStep : _locStep;
-      _nudge(axis, sign * step);
+      _nudge(axis, sign * _locStep);
     }
     document.addEventListener('keydown', _keyHandler, true);
   }

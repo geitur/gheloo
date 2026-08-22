@@ -34,7 +34,6 @@
         "extensions/rooms/room-clone.js",
         "extensions/rooms/area-mover.js",
         "extensions/rooms/floor-editor.js",
-        "extensions/rooms/furni-scatter.js",
         "extensions/rooms/room-viewer-loader.js",
         "extensions/rooms/poster-mover.js",
         "extensions/fun/user-database.js",
