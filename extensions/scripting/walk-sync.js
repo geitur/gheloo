@@ -18,7 +18,8 @@
   let _followingTabId = null; // tabId currently being followed, or null
   let _dx = 0, _dy = 0; // offset applied to whoever we're following
 
-  // Pre-staged for the follow-reaction MoveAvatar send added in a later task.
+  // Used by _handleWalkMessage below to look up MoveAvatar's OUT packet id for the
+  // follow-reaction send.
   function _outId(name) {
     if (!window.PKT || !window.PKT.OUT) return null;
     for (const id in window.PKT.OUT) {
@@ -46,7 +47,7 @@
     const maId = _outId('MoveAvatar');
     if (maId === null) return;
     const x = msg.x + _dx, y = msg.y + _dy;
-    _lastSynthetic = { x: x, y: y, ts: Date.now() };
+    _pendingSynthetic.push({ x: x, y: y, ts: Date.now() });
     window.sendPacket('OUT', maId, '{i:' + x + '}{i:' + y + '}');
   }
 
@@ -82,12 +83,18 @@
   }, 4000);
 
   // ── Leader side: broadcast our own walk clicks. ──
-  // _lastSynthetic is set right before we send a follow-triggered move (a later task), so
-  // this listener can recognize the echo of our OWN synthetic send and skip re-broadcasting
-  // it. Without this, two tabs following each other would ping-pong forever, each hop adding
-  // the offset again — this guard makes that impossible regardless of whether OUT-packet
-  // dispatch happens synchronously or via the worker-socket path (core/ws.js has both).
-  let _lastSynthetic = null; // { x, y, ts }
+  // _pendingSynthetic tracks follow-reaction moves we've sent but not yet seen echoed back
+  // as our own outgoing MoveAvatar (used by _handleWalkMessage below) — a list, not a single
+  // slot, because on this hotel's worker-socket connection (core/ws.js) the OUT-packet echo
+  // is asynchronous, so two rapid follow-reactions can have echoes in flight at the same
+  // time; a single slot would get overwritten by the second before the first's echo arrives,
+  // letting that first echo leak out as a phantom "leader move" broadcast. Each entry is
+  // matched and removed individually by coordinates, so multiple in-flight sends can't
+  // collide. Note: because a follow-reaction's own echo is always swallowed here (never
+  // re-broadcast), following only propagates one hop — a tab following a tab that is itself
+  // following someone else will not see the original leader's moves. That's an accepted
+  // limitation, not a bug: the design only promises direct leader → follower syncing.
+  let _pendingSynthetic = []; // [{ x, y, ts }]
   if (window.onPacket) {
     window.onPacket('MoveAvatar', function(p) {
       if (p.direction !== 'OUT' || !p.raw) return;
@@ -96,11 +103,14 @@
       let x, y;
       try { x = r.int(); y = r.int(); } catch (e) { return; }
       if (!window.Room) return;
-      if (_lastSynthetic && _lastSynthetic.x === x && _lastSynthetic.y === y && Date.now() - _lastSynthetic.ts < 2000) {
-        _lastSynthetic = null;
+      const now = Date.now();
+      _pendingSynthetic = _pendingSynthetic.filter(function(s) { return now - s.ts < 2000; });
+      const idx = _pendingSynthetic.findIndex(function(s) { return s.x === x && s.y === y; });
+      if (idx !== -1) {
+        _pendingSynthetic.splice(idx, 1);
         return;
       }
-      BC.postMessage({ type: 'walk', tabId: TAB_ID, roomId: window.Room && window.Room.id, x: x, y: y });
+      BC.postMessage({ type: 'walk', tabId: TAB_ID, roomId: window.Room.id, x: x, y: y });
     });
   }
 
