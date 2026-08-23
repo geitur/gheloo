@@ -75,6 +75,28 @@
     if (changed) _renderPeers();
   }, 4000);
 
+  // ── Leader side: broadcast our own walk clicks. ──
+  // _lastSynthetic is set right before we send a follow-triggered move (a later task), so
+  // this listener can recognize the echo of our OWN synthetic send and skip re-broadcasting
+  // it. Without this, two tabs following each other would ping-pong forever, each hop adding
+  // the offset again — this guard makes that impossible regardless of whether OUT-packet
+  // dispatch happens synchronously or via the worker-socket path (core/ws.js has both).
+  let _lastSynthetic = null; // { x, y, ts }
+  if (window.onPacket) {
+    window.onPacket('MoveAvatar', function(p) {
+      if (p.direction !== 'OUT' || !p.raw) return;
+      const r = window.makeReader(p.raw);
+      if (!r) return;
+      let x, y;
+      try { x = r.int(); y = r.int(); } catch (e) { return; }
+      if (_lastSynthetic && _lastSynthetic.x === x && _lastSynthetic.y === y && Date.now() - _lastSynthetic.ts < 2000) {
+        _lastSynthetic = null;
+        return;
+      }
+      BC.postMessage({ type: 'walk', tabId: TAB_ID, roomId: window.Room && window.Room.id, x: x, y: y });
+    });
+  }
+
   function init() {
     const style = document.createElement('style');
     style.textContent = [
