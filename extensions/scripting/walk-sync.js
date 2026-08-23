@@ -18,6 +18,7 @@
   let _followingTabId = null; // tabId currently being followed, or null
   let _dx = 0, _dy = 0; // offset applied to whoever we're following
 
+  // Pre-staged for the follow-reaction MoveAvatar send added in a later task.
   function _outId(name) {
     if (!window.PKT || !window.PKT.OUT) return null;
     for (const id in window.PKT.OUT) {
@@ -47,8 +48,10 @@
     const msg = ev.data;
     if (!msg || msg.tabId === TAB_ID) return;
     if (msg.type === 'hello') {
-      const prevUser = _peers[msg.tabId] && _peers[msg.tabId].user;
-      _peers[msg.tabId] = { user: msg.user || prevUser || '', lastSeen: Date.now() };
+      const prev = _peers[msg.tabId];
+      const isNew = !prev;
+      _peers[msg.tabId] = { user: msg.user || (prev && prev.user) || '', lastSeen: Date.now() };
+      if (isNew) _announce();
       _renderPeers();
     } else if (msg.type === 'bye') {
       delete _peers[msg.tabId];
