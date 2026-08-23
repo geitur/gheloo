@@ -55,19 +55,11 @@
     return next.length > HISTORY_CAP ? next.slice(next.length - HISTORY_CAP) : next;
   }
 
-  // Skip re-upserting an id we already wrote very recently (in-memory only, resets on
-  // reload) — a room roster refresh or overlapping guild pages re-sends the same ids
-  // constantly, and nothing meaningful changes on a sub-2-minute timescale. Saves the
-  // fetch+write round trip entirely rather than just writing redundant data.
-  var RECENT_WRITE_COOLDOWN_MS = 2 * 60 * 1000;
-  var _recentWrites = new Map();
-
   async function upsertUsers(users, opts) {
     opts = opts || {};
     var source = opts.source || 'room';
     var roomId = window.Room ? window.Room.id : null;
     var now    = new Date().toISOString();
-    var nowMs  = Date.now();
 
     // Bots (type 2) and pets (type 4) are never worth a row, regardless of source —
     // even an explicit guild/relationship lookup shouldn't log them.
@@ -81,24 +73,14 @@
       users = users.filter(function(u) { return (u.achievementScore || 0) >= 2500; });
     }
 
-    // UserChange is exempt — the whole point of that source is catching every distinct
-    // outfit change, including quick successive ones within the cooldown window.
-    if (!opts.skipCooldown) {
-      users = users.filter(function(u) {
-        var last = _recentWrites.get(u.id);
-        return !last || (nowMs - last) >= RECENT_WRITE_COOLDOWN_MS;
-      });
-    }
-
     var ids = users.map(function(u) { return u.id; }).filter(Boolean);
     if (!ids.length) return;
-    ids.forEach(function(id) { _recentWrites.set(id, nowMs); });
 
     // Fetch existing rows to detect name/figure changes
     var existing = {};
     try {
       var r = await fetch(
-        SUPABASE_URL + '/rest/v1/users?id=in.(' + ids.join(',') + ')&select=id,name,figure,motto,gender,type,favorite_group,achievement_score,previous_names,previous_figure_ids',
+        SUPABASE_URL + '/rest/v1/users?id=in.(' + ids.join(',') + ')&select=id,name,figure,motto,gender,type,favorite_group,achievement_score,previous_names,previous_figure_ids,last_name_change',
         { headers: HEADERS }
       );
       if (r.ok) {
@@ -109,13 +91,23 @@
       console.warn('[Supabase] fetch existing failed:', e);
     }
 
+    // 'room'/'profile' are real-time — you're either physically in the room right now or
+    // you just opened their live profile card. 'guild'/'relationship' reflect whatever
+    // the server had cached for that list, which can lag behind. So only room/profile
+    // are trusted to update the CURRENT figure; a guild/relationship sighting that
+    // disagrees still gets recorded, just into history instead of displacing a more
+    // trustworthy current figure with a possibly-stale one.
+    var isTrustedSource = source === 'room' || source === 'profile';
+
     // Figures actually changing this round need an id from the shared figures table —
     // resolved once for the whole batch rather than one round trip per user.
     var changedFigures = [];
     users.forEach(function(u) {
       var ex = existing[u.id] || {};
-      var newFigure = u.figure || '';
-      if (ex.figure && ex.figure !== newFigure) changedFigures.push(ex.figure);
+      var candidateFigure = u.figure || '';
+      if (candidateFigure && ex.figure && candidateFigure !== ex.figure) {
+        changedFigures.push(isTrustedSource ? ex.figure : candidateFigure);
+      }
     });
     var figureIdMap = await resolveFigureIds(changedFigures);
 
@@ -124,12 +116,15 @@
       var prevNames     = ex.previous_names || [];
       var prevFigureIds = ex.previous_figure_ids || [];
       var newName       = u.name   || '';
-      var newFigure     = u.figure || '';
+      var candidateFigure = u.figure || '';
+      var newFigure = (!ex.figure || isTrustedSource) ? candidateFigure : ex.figure;
 
       // Track changes
-      if (ex.name && ex.name !== newName) prevNames = appendUniq(prevNames, ex.name);
-      if (ex.figure && ex.figure !== newFigure) {
-        var oldFigureId = figureIdMap[ex.figure];
+      var nameChanged = ex.name && ex.name !== newName;
+      if (nameChanged) prevNames = appendUniq(prevNames, ex.name);
+      if (candidateFigure && ex.figure && candidateFigure !== ex.figure) {
+        var displacedFigure = isTrustedSource ? ex.figure : candidateFigure;
+        var oldFigureId = figureIdMap[displacedFigure];
         if (oldFigureId != null) prevFigureIds = appendUniqId(prevFigureIds, oldFigureId);
       }
 
@@ -153,6 +148,11 @@
         previous_names:        prevNames,
         previous_figure_ids:   prevFigureIds,
         last_seen_via:     source,
+        // Always present (never a per-user-conditional key) — a bulk upsert where some
+        // rows have a key and others don't gets rejected outright by PostgREST (400,
+        // silently swallowed by fetch() since a 400 doesn't reject the promise). Keep
+        // the existing value when this user's name didn't change this round.
+        last_name_change:  nameChanged ? now : (ex.last_name_change || null),
       };
       // Room-encounter fields (last_room_id/last_seen) only get touched for an actual
       // room encounter — profile/guild lookups aren't that, so they get their own
@@ -174,10 +174,18 @@
       method:  'POST',
       headers: Object.assign({}, HEADERS, { 'Prefer': 'resolution=merge-duplicates' }),
       body:    JSON.stringify(upsertRows),
-    }).then(function(res) {
+    }).then(async function(res) {
+      // fetch() only rejects on a real network failure — a 400/500 response resolves
+      // normally, so this HAS to check res.ok explicitly or a rejected write (e.g. a
+      // malformed batch) fails completely silently with nothing in the console.
+      if (!res.ok) {
+        var body = await res.text().catch(function() { return '(no body)'; });
+        console.warn('[Supabase] upsert rejected:', res.status, body);
+        return;
+      }
       // Lets an already-open User Database panel merge these rows in live instead of
       // needing a manual reload to see someone who just got logged.
-      if (res.ok && window.__udb_onUsersUpserted) window.__udb_onUsersUpserted(upsertRows);
+      if (window.__udb_onUsersUpserted) window.__udb_onUsersUpserted(upsertRows);
     }).catch(function(e) {
       console.warn('[Supabase] upsert failed:', e);
     });
@@ -199,7 +207,7 @@
     // Auto-random-outfit (user-database.js) fires a UserChange for yourself every
     // cooldown tick — don't log your own account while that's cycling looks.
     if (window.__udb_autoRandomActive && window._selfName && u.name === window._selfName) return;
-    upsertUsers([u], { skipCooldown: true });
+    upsertUsers([u]);
   });
 
   // ExtendedProfile (profile card opened — either by clicking an avatar in-room, or via
