@@ -41,7 +41,13 @@
   let _renderPeers = function() {}; // replaced once the panel exists
 
   function _handleWalkMessage(msg) {
-    // Filled in by a later task — reacting to a followed peer's walk isn't wired up yet.
+    if (msg.tabId !== _followingTabId) return;
+    if (!window.Room || msg.roomId !== window.Room.id) return;
+    const maId = _outId('MoveAvatar');
+    if (maId === null) return;
+    const x = msg.x + _dx, y = msg.y + _dy;
+    _lastSynthetic = { x: x, y: y, ts: Date.now() };
+    window.sendPacket('OUT', maId, '{i:' + x + '}{i:' + y + '}');
   }
 
   BC.onmessage = function(ev) {
