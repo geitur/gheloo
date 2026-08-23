@@ -42,6 +42,7 @@
         "extensions/fun/friendbot.js",
         "extensions/exploits/marktplaats.js",
         "extensions/exploits/photo-library.js",
+        "extensions/exploits/rare-item-scanner.js",
         "extensions/exploits/deurwaarder.js",
         "extensions/settings/room-history.js",
         "extensions/settings/marktplaats-alerts.js"],
