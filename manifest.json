@@ -42,8 +42,6 @@
         "extensions/exploits/marktplaats.js",
         "extensions/exploits/photo-library.js",
         "extensions/exploits/deurwaarder.js",
-        "extensions/exploits/credit-redeem.js",
-        "extensions/exploits/ecotron.js",
         "extensions/settings/room-history.js",
         "extensions/settings/marktplaats-alerts.js"],
       "run_at": "document_start",

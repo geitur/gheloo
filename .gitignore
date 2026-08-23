@@ -5,3 +5,5 @@ TestSite/
 docs/
 room-viewer-src/node_modules/
 room-viewer.bundle.js
+extensions/exploits/credit-redeem.js
+extensions/exploits/ecotron.js
