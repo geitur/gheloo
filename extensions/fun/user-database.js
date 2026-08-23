@@ -12,6 +12,7 @@
   let _selId = null;
   let _loaded = false;
   let _loading = false;
+  let _showAll = false; // false = only room-encountered users; true = everyone incl. group/profile-only
 
   function _esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _log(msg) { console.log('[UserDatabase]', msg); }
@@ -39,6 +40,10 @@
   const _ICON_PERSON =
     '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
     + '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'
+    + '</svg>';
+  const _ICON_DB =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    + '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>'
     + '</svg>';
 
   // previous_figure_ids are now references into a shared `figures` table (dedup —
@@ -215,41 +220,57 @@
   // and a length-based check would (wrongly) stop after the first page.
   const PAGE_SIZE = 10000;
 
-  async function _loadUsers() {
+  // Shared pager: walks every page of a query via Content-Range's real total, not by
+  // comparing page length to PAGE_SIZE (a lower server-side db-max-rows would make every
+  // page come back short, and a length-based check would wrongly stop after page 1).
+  async function _fetchAllPages(query, onProgress) {
+    let all = [];
+    let offset = 0;
+    for (;;) {
+      const res = await fetch(
+        SUPABASE_URL + '/rest/v1/users?' + query + '&limit=' + PAGE_SIZE + '&offset=' + offset,
+        { headers: Object.assign({}, HEADERS, { 'Prefer': 'count=exact' }) }
+      );
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const page = await res.json();
+      all = all.concat(page);
+      if (onProgress) onProgress(all.length);
+      if (!page.length) break;
+
+      const range = res.headers.get('content-range') || '';
+      const totalMatch = /\/(\d+)$/.exec(range);
+      const endMatch   = /^(\d+)-(\d+)\//.exec(range);
+      if (totalMatch && endMatch) {
+        const total = parseInt(totalMatch[1], 10);
+        const end   = parseInt(endMatch[2], 10);
+        if (end >= total - 1) break;
+        offset = end + 1;
+      } else {
+        // No usable total (shouldn't happen with count=exact) — fall back to the old
+        // length-based check.
+        if (page.length < PAGE_SIZE) break;
+        offset += page.length;
+      }
+    }
+    return all;
+  }
+
+  // Default view only shows accounts you've actually been in a room with at some point
+  // (last_room_id set — only ever written by a real room encounter) — group/profile/
+  // relationship-only entries are just snapshots from someone else's list, often stale
+  // and not verified in person. "Load all accounts" pulls in everything.
+  async function _loadUsers(showAll) {
     if (_loading) return;
     _loading = true;
+    _showAll = !!showAll;
     const countEl = panel && panel.querySelector('#__udb_count');
     if (countEl) countEl.textContent = 'Loading…';
     try {
-      let all = [];
-      let offset = 0;
-      for (;;) {
-        const res = await fetch(
-          SUPABASE_URL + '/rest/v1/users?select=*&type=eq.1&order=last_seen.desc&limit=' + PAGE_SIZE + '&offset=' + offset,
-          { headers: Object.assign({}, HEADERS, { 'Prefer': 'count=exact' }) }
-        );
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const page = await res.json();
-        all = all.concat(page);
-        if (countEl) countEl.textContent = 'Loading… (' + all.length + ')';
-        if (!page.length) break;
-
-        const range = res.headers.get('content-range') || '';
-        const totalMatch = /\/(\d+)$/.exec(range);
-        const endMatch   = /^(\d+)-(\d+)\//.exec(range);
-        if (totalMatch && endMatch) {
-          const total = parseInt(totalMatch[1], 10);
-          const end   = parseInt(endMatch[2], 10);
-          if (end >= total - 1) break;
-          offset = end + 1;
-        } else {
-          // No usable total (shouldn't happen with count=exact) — fall back to the old
-          // length-based check.
-          if (page.length < PAGE_SIZE) break;
-          offset += page.length;
-        }
-      }
-      _all = all;
+      const filter = _showAll ? '' : '&last_room_id=not.is.null';
+      _all = await _fetchAllPages(
+        'select=*&type=eq.1' + filter + '&order=last_seen.desc.nullslast',
+        function(n) { if (countEl) countEl.textContent = 'Loading… (' + n + ')'; }
+      );
       _loaded = true;
       _applyFilters();
       _renderNameChanges();
@@ -263,8 +284,16 @@
 
   async function _ensureLoadedAsync() {
     if (_loaded) return;
-    if (!_loading) { await _loadUsers(); return; }
+    if (!_loading) { await _loadUsers(_showAll); return; }
     while (_loading) await new Promise(function(r) { setTimeout(r, 100); });
+  }
+
+  // Scanner's "skip already-known ids" set must always cover EVERY logged id regardless
+  // of the UI's room-only filter — otherwise ids only known via a group/profile view
+  // would look unscanned and get redundantly re-probed.
+  async function _fetchAllKnownIds() {
+    const rows = await _fetchAllPages('select=id&type=eq.1');
+    return new Set(rows.map(function(r) { return r.id; }));
   }
 
   // ── ID scan (GetExtendedProfile sweep) ──────────────────────────────────────────
@@ -355,8 +384,7 @@
     const btn = panel.querySelector('#__udb_scan_btn');
     if (btn) btn.disabled = true;
     _scanSetStatus('Loading already-logged ids…');
-    await _ensureLoadedAsync();
-    _scanKnownIds = new Set(_all.map(function(u) { return u.id; }));
+    _scanKnownIds = await _fetchAllKnownIds();
 
     // Only reset position when the mode actually changes (or this is the first run) —
     // re-picking the SAME mode after a pause continues where it left off, but switching
@@ -494,7 +522,8 @@
   function _renderNameChanges() {
     if (!ncPanel) return;
     const listEl = ncPanel.querySelector('#__udb_nc_list');
-    const users = _all.filter(function(u) { return u.previous_names && u.previous_names.length > 0; });
+    const users = _all.filter(function(u) { return u.previous_names && u.previous_names.length > 0; })
+      .sort(function(a, b) { return new Date(b.last_name_change || 0) - new Date(a.last_name_change || 0); });
 
     if (!users.length) {
       listEl.innerHTML = '<div class="__udb_empty_sm">No name changes logged yet.</div>';
@@ -506,7 +535,7 @@
       const pills = u.previous_names.slice().reverse().map(function(n) {
         return '<span class="__udb_dc_tag">' + _esc(n) + '</span>';
       }).join('');
-      return '<div class="__udb_ncrow">'
+      return '<div class="__udb_ncrow" data-uid="' + u.id + '">'
         + '<div class="__udb_row_avatar">'
         + (hasAv
           ? '<img src="' + _esc(avatarHead(u.figure)) + '" loading="lazy" onerror="this.style.opacity=\'.2\'">'
@@ -518,6 +547,13 @@
         + '</div>'
         + '</div>';
     }).join('');
+
+    listEl.querySelectorAll('.__udb_ncrow').forEach(function(row) {
+      row.addEventListener('click', function() {
+        panel.style.display = '';
+        _showUser(parseInt(row.dataset.uid, 10));
+      });
+    });
   }
 
   function _rowHtml(label, value) {
@@ -808,7 +844,8 @@
       '#__udb_nc{position:fixed;top:8px;right:664px;width:360px;z-index:1001;user-select:none;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:12px}',
       '#__udb_nc *{box-sizing:border-box}',
       '#__udb_nc_list{max-height:480px;overflow-y:auto}',
-      '.__udb_ncrow{display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.05)}',
+      '.__udb_ncrow{display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer}',
+      '.__udb_ncrow:hover{background:rgba(255,255,255,0.04)}',
       '.__udb_ncrow_info{flex:1;min-width:0}',
       '.__udb_ncrow_name{font-size:12px;font-weight:700;color:#eceefb;margin-bottom:6px}',
       '#__udb_ac{position:fixed;top:8px;right:1034px;width:360px;z-index:1001;user-select:none;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:12px}',
@@ -841,6 +878,7 @@
       + '</span>'
       + '<button class="__udb_iconbtn" id="__udb_random_auto_btn" title="Auto-wear a random outfit every 6s">' + _ICON_REPEAT + '</button>'
       + '<button class="__udb_iconbtn" id="__udb_scan_btn" title="Scan user IDs via GetExtendedProfile">&#9654;</button>'
+      + '<button class="__udb_iconbtn" id="__udb_loadall_btn" title="Load all accounts, including group/profile-only entries never seen in a room">' + _ICON_DB + '</button>'
       + '<button class="__udb_iconbtn" id="__udb_namechanges_btn" title="Name changes">&#8644;</button>'
       + '<span class="__udb_close" id="__udb_close">&times;</span>'
       + '</div>'
@@ -863,7 +901,7 @@
     window.__ghk_makeDraggable(panel, panel.querySelector('#__udb_hdr'), '__ghk_udb_pos', function(e) {
       return e.target.id === '__udb_close' || e.target.id === '__udb_namechanges_btn'
         || e.target.id === '__udb_scan_btn' || e.target.id === '__udb_random_btn'
-        || e.target.id === '__udb_random_auto_btn';
+        || e.target.id === '__udb_random_auto_btn' || e.target.id === '__udb_loadall_btn';
     });
 
     panel.querySelector('#__udb_close').addEventListener('click', function() { panel.style.display = 'none'; });
@@ -875,6 +913,11 @@
     });
     panel.querySelector('#__udb_scan_btn').addEventListener('click', function() {
       if (_scanActive) _scanStop(); else _scanToggleMenu();
+    });
+    panel.querySelector('#__udb_loadall_btn').addEventListener('click', function() {
+      if (_loading) return;
+      _loaded = false;
+      _loadUsers(true);
     });
     panel.querySelector('#__udb_random_btn').addEventListener('click', function() { _randomOutfit(); });
     panel.querySelector('#__udb_random_auto_btn').addEventListener('click', function() { _toggleAutoRandom(); });
@@ -992,8 +1035,17 @@
     let selectedChanged = false;
     rows.forEach(function(row) {
       const idx = _all.findIndex(function(u) { return u.id === row.id; });
-      if (idx === -1) _all.unshift(row);
-      else _all[idx] = Object.assign({}, _all[idx], row);
+      if (idx !== -1) {
+        // Already in the list — merge and bump to the front too, or it'd sit stuck at
+        // its old load-time position even though it's now the most recently touched.
+        const merged = Object.assign({}, _all[idx], row);
+        _all.splice(idx, 1);
+        _all.unshift(merged);
+      } else if (_showAll || row.last_room_id) {
+        // A brand-new row from a group/profile source shouldn't appear in the
+        // room-only default view — matches what a fresh _loadUsers() would show.
+        _all.unshift(row);
+      }
       if (row.id === _selId) selectedChanged = true;
     });
     if (panel && panel.style.display !== 'none') _applyFilters();
