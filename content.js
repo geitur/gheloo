@@ -41,8 +41,6 @@
       roomhistory: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/><path d="M3 12a9 9 0 011.5-5" opacity="0.35"/></svg>',
       avatarcompass: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>',
       ping: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h4l2-7 4 14 2-7h8"/></svg>',
-      creditredeem: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 013-3c1.5 0 2.5.9 2.5 2s-1 1.6-2 2-1.5.6-1.5 1.5"/><path d="M12 16.5v.01"/></svg>',
-      ecotron: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3l3 3-3 3M17 21l-3-3 3-3"/><path d="M20 10a8 8 0 00-15-3.5M4 14a8 8 0 0015 3.5"/></svg>',
     };
 
     const style = document.createElement('style');
@@ -272,11 +270,6 @@
             { id: 'marktplaats', title: 'Marktplaats', subtitle: 'Marktplaats Dupe', icon: ICONS.marktplaats, close: false, onClick: showPanelById('__mb') },
             { id: 'photolibrary', title: 'Photo Library', subtitle: 'Save and organize camera photos', icon: ICONS.photolibrary, close: false, onClick: showPanelById('__photolib') },
             { id: 'deurwaarder', title: 'Deurwaarder', subtitle: 'Dupe Dashboard', icon: ICONS.deurwaarder, close: false, onClick: function() { if (window.__ghk_openDeurwaarder) window.__ghk_openDeurwaarder(); } },
-            { id: 'creditredeem', title: 'Credit Redeem', subtitle: 'Redeem/pickup dupe race', icon: ICONS.creditredeem, close: false, onClick: showPanelById('__cqe') },
-            { id: 'ecotron', title: 'Ecotron Race', subtitle: 'Recycle + marktplaats list/cancel race', icon: ICONS.ecotron, close: false, onClick: function() {
-              showPanelById('__eco_panel')();
-              if (window.__eco_render) window.__eco_render();
-            } },
           ]},
         ],
       },
