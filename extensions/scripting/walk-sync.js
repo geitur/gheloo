@@ -89,6 +89,7 @@
       if (!r) return;
       let x, y;
       try { x = r.int(); y = r.int(); } catch (e) { return; }
+      if (!window.Room) return;
       if (_lastSynthetic && _lastSynthetic.x === x && _lastSynthetic.y === y && Date.now() - _lastSynthetic.ts < 2000) {
         _lastSynthetic = null;
         return;
