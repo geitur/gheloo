@@ -182,29 +182,46 @@
       saveToggles();
     });
 
-    panel.querySelector('#__hbl_exp').addEventListener('click', () => {
-      const list = window.PacketStore.packets || [];
-      if (!list.length) return;
-      const lines = list.map(function(p) {
+    const expBtn = panel.querySelector('#__hbl_exp');
+    expBtn.addEventListener('click', () => {
+      if (!visiblePackets.length) return;
+      const lines = visiblePackets.map(function(p) {
         const t = new Date(p.timestamp);
         const ts = t.toTimeString().slice(0,8) + '.' + String(t.getMilliseconds()).padStart(3,'0');
         const dir = p.direction === 'IN' ? 'in' : 'out';
         const hdrTag = p.name ? '{' + dir + ':' + p.name + '}' : '{' + dir + ':#' + p.header + '}';
         return '[' + ts + '] ' + hdrTag + getDecodeTokens(p).map(tokenToPlain).join('');
       });
-      // Anchor-click downloads get silently swallowed on this hotel page (likely CSP) —
-      // window.open + Ctrl+S is the pattern that actually works here (see room-clone.js).
-      const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const win = window.open(url, '_blank');
-      if (!win) { URL.revokeObjectURL(url); return; }
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      const text = lines.join('\n');
+      const filename = 'gheloo-packets-' + Date.now() + '.txt';
+
+      // chrome.downloads isn't reachable from a content script here, and an <a download>
+      // click from THIS page's own JS gets silently swallowed (same CSP-shaped problem
+      // room-clone.js hit — see its comment). Opening a separate blob tab is the pattern
+      // that actually works on this hotel page; wrapping it in a tiny page with a visible
+      // Download button beats making the user know to hit Ctrl+S on a raw text view.
+      const textBlobUrl = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+      const pageHtml =
+        '<!doctype html><html><head><title>' + esc(filename) + '</title><meta charset="utf-8"><style>' +
+        'body{background:#12131A;color:#eceefb;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;margin:0;padding:24px;display:flex;flex-direction:column;align-items:center;gap:16px}' +
+        'a.dl{background:#A6B0FF;color:#0A0B10;font-weight:700;padding:10px 22px;border-radius:8px;text-decoration:none;font-size:14px}' +
+        'a.dl:hover{filter:brightness(1.08)}' +
+        'pre{width:90%;max-height:70vh;overflow:auto;background:#0A0B10;border:1px solid #23252f;border-radius:8px;padding:12px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0}' +
+        '</style></head><body>' +
+        '<a class="dl" href="' + textBlobUrl + '" download="' + esc(filename) + '">&#8681; Download ' + esc(filename) + '</a>' +
+        '<pre>' + esc(text) + '</pre>' +
+        '</body></html>';
+      const pageUrl = URL.createObjectURL(new Blob([pageHtml], { type: 'text/html' }));
+      const win = window.open(pageUrl, '_blank');
+      if (!win) { URL.revokeObjectURL(pageUrl); URL.revokeObjectURL(textBlobUrl); return; }
+      setTimeout(() => { URL.revokeObjectURL(pageUrl); URL.revokeObjectURL(textBlobUrl); }, 60000);
     });
 
     panel.querySelector('#__hbl_clr').addEventListener('click', () => {
       listEl.innerHTML = '';
       detailEl.innerHTML = '<div class="__hbl_empty">Click a packet</div>';
       selRow = null;
+      visiblePackets.length = 0;
     });
 
     // Click any parsed value (string/number/boolean) to copy it to the clipboard —
@@ -341,9 +358,16 @@
       }
     }
 
+    // Mirrors exactly what's on screen — only packets that passed the IN/OUT filter at
+    // the time they arrived, evicted the same way the DOM rows are, and wiped by Clear —
+    // so Export All matches what's actually in the list, not the full underlying log.
+    const visiblePackets = [];
+
     function addRow(p) {
       if (p.direction==='IN' && !showIn) return;
       if (p.direction==='OUT' && !showOut) return;
+      visiblePackets.push(p);
+      if (visiblePackets.length > 300) visiblePackets.shift();
       const t=new Date(p.timestamp);
       const ts=t.toTimeString().slice(0,8);
       const row=document.createElement('div');
