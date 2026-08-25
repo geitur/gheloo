@@ -117,6 +117,9 @@
       '.__hbl_fi_body{padding:4px 12px 8px;white-space:pre;font:9px/1.6 monospace;background:rgba(255,255,255,0.02);border-top:1px solid rgba(255,255,255,0.04);color:#82849a}',
       '.__hbl_copybtn{font-size:9px;background:none;border:1px solid #23252f;color:#82849a;border-radius:4px;padding:0 6px;cursor:pointer;margin-left:4px}',
       '.__hbl_copybtn:hover{color:#eceefb}',
+      '.__hbl_copyval{cursor:pointer;border-radius:3px;padding:0 2px;margin:0 -2px}',
+      '.__hbl_copyval:hover{background:rgba(255,255,255,0.08)}',
+      '.__hbl_copyval.__hbl_copied{background:rgba(46,204,113,0.35)!important;color:#fff!important}',
     ].join('');
     document.head.appendChild(css);
 
@@ -133,6 +136,7 @@
           '<button id="__hbl_tin"  class="__hbl_btn">IN</button>' +
           '<button id="__hbl_tout" class="__hbl_btn">OUT</button>' +
           '<div class="__hbl_grow"></div>' +
+          '<button id="__hbl_exp"   class="__hbl_btn">Export All</button>' +
           '<button id="__hbl_clr"   class="__hbl_btn">Clear</button>' +
         '</div>' +
         '<div class="__hbl_body">' +
@@ -152,7 +156,16 @@
 
     const listEl   = panel.querySelector('#__hbl_list');
     const detailEl = panel.querySelector('#__hbl_detail');
-    let showIn=false, showOut=false, selRow=null;
+
+    const TOGGLE_KEY = '__ghk_hbl_toggles';
+    function loadToggles() {
+      try { return JSON.parse(localStorage.getItem(TOGGLE_KEY) || '{}'); } catch (_) { return {}; }
+    }
+    function saveToggles() {
+      try { localStorage.setItem(TOGGLE_KEY, JSON.stringify({ in: showIn, out: showOut })); } catch (_) {}
+    }
+    const _savedToggles = loadToggles();
+    let showIn = !!_savedToggles.in, showOut = !!_savedToggles.out, selRow=null;
 
     const tinBtn   = panel.querySelector('#__hbl_tin');
     const toutBtn  = panel.querySelector('#__hbl_tout');
@@ -161,20 +174,31 @@
     tinBtn.addEventListener('click', () => {
       showIn = !showIn;
       tinBtn.classList.toggle('on', showIn);
+      saveToggles();
     });
     toutBtn.addEventListener('click', () => {
       showOut = !showOut;
       toutBtn.classList.toggle('on', showOut);
+      saveToggles();
     });
 
-    // Force both filters off on every login (UserObject fires once per login, including
-    // reconnects) — a fresh session starts quiet regardless of how the toggles were left
-    // last time, not just on first page load.
-    window.onPacket('UserObject', function(p) {
-      if (!p.parsed || !p.parsed.name) return;
-      showIn = false; showOut = false;
-      tinBtn.classList.toggle('on', showIn);
-      toutBtn.classList.toggle('on', showOut);
+    panel.querySelector('#__hbl_exp').addEventListener('click', () => {
+      const list = window.PacketStore.packets || [];
+      if (!list.length) return;
+      const lines = list.map(function(p) {
+        const t = new Date(p.timestamp);
+        const ts = t.toTimeString().slice(0,8) + '.' + String(t.getMilliseconds()).padStart(3,'0');
+        const dir = p.direction === 'IN' ? 'in' : 'out';
+        const hdrTag = p.name ? '{' + dir + ':' + p.name + '}' : '{' + dir + ':#' + p.header + '}';
+        return '[' + ts + '] ' + hdrTag + getDecodeTokens(p).map(tokenToPlain).join('');
+      });
+      // Anchor-click downloads get silently swallowed on this hotel page (likely CSP) —
+      // window.open + Ctrl+S is the pattern that actually works here (see room-clone.js).
+      const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, '_blank');
+      if (!win) { URL.revokeObjectURL(url); return; }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
     });
 
     panel.querySelector('#__hbl_clr').addEventListener('click', () => {
@@ -183,12 +207,23 @@
       selRow = null;
     });
 
+    // Click any parsed value (string/number/boolean) to copy it to the clipboard —
+    // delegated on detailEl so it keeps working across every re-render.
+    detailEl.addEventListener('click', (e) => {
+      const el = e.target.closest('.__hbl_copyval');
+      if (!el) return;
+      const val = el.getAttribute('data-copy');
+      navigator.clipboard.writeText(val).catch(() => {});
+      el.classList.add('__hbl_copied');
+      setTimeout(() => el.classList.remove('__hbl_copied'), 400);
+    });
+
 
     function fmtVal(v, pad) {
       if (v===null||v===undefined) return '<span style="color:#5c5e6b">null</span>';
-      if (typeof v==='boolean') return '<span style="color:#f1c40f">'+v+'</span>';
-      if (typeof v==='number') return '<span style="color:#5b9cf6">'+v+'</span>';
-      if (typeof v==='string') return '<span style="color:#2ecc71">"'+esc(v)+'"</span>';
+      if (typeof v==='boolean') return '<span class="__hbl_copyval" data-copy="'+v+'" style="color:#f1c40f">'+v+'</span>';
+      if (typeof v==='number') return '<span class="__hbl_copyval" data-copy="'+v+'" style="color:#5b9cf6">'+v+'</span>';
+      if (typeof v==='string') return '<span class="__hbl_copyval" data-copy="'+esc(v)+'" style="color:#2ecc71">"'+esc(v)+'"</span>';
       if (Array.isArray(v)) {
         if (!v.length) return '<span style="color:#5c5e6b">[]</span>';
         const inner=pad+'  ';

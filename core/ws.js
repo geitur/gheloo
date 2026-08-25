@@ -4,6 +4,14 @@
   window._blockIncomingFilters = {}; // logicalId → true | function(raw)→bool
   window._blockOutgoingFilters = {}; // logicalId → true | function(raw)→bool
   window._pendingBlockOutgoing = false; // set true by subscriber to block current OUT packet
+
+  // Packet Manipulator hooks — unlike the block-only filters above, these can rewrite a
+  // packet's bytes before it's actually sent/delivered. Each entry is function(raw, logicalId)
+  // returning either undefined (no change), {block:true}, or {buffer: ArrayBuffer} (replacement).
+  // Arrays (not single slots) so more than one manipulating extension can coexist; applied in
+  // order, chaining buffer replacements, short-circuiting on the first block.
+  window._outgoingManipulators = [];
+  window._incomingManipulators = [];
   window._rejoinCommandEnabled = false; // :rejoin chat command, toggled from Settings
   window._stealCommandEnabled = false; // :steal/:steel chat command, toggled from Settings
 
@@ -222,27 +230,44 @@
     if (_wsInstrumented.has(ws)) return;
     _wsInstrumented.add(ws);
     window._ws = ws;
-    _protoAddListener.call(ws, 'open',  () => { if (window.Gheloo) window.Gheloo.setStatus('amber', ws.url); });
-    _protoAddListener.call(ws, 'close', () => { if (window.Gheloo) window.Gheloo.setStatus('red'); });
-    _protoAddListener.call(ws, 'error', () => { if (window.Gheloo) window.Gheloo.setStatus('red'); });
+    // Relogging tears down this socket and opens a new one. Any ping sent on the old
+    // socket that hadn't gotten a reply yet stays in _pendingPings with its original
+    // Date.now() sentAt; without a reset, the first reply on the new socket pairs up
+    // with that stale timestamp and reports an RTT of several seconds (the relog
+    // duration) instead of the real one — this is why toggling Ping off/on in Settings
+    // "fixes" it (that path already calls __ghk_resetPing).
+    _protoAddListener.call(ws, 'open',  () => { if (window.Gheloo) window.Gheloo.setStatus('amber', ws.url); window.__ghk_resetPing && window.__ghk_resetPing(); });
+    _protoAddListener.call(ws, 'close', () => { if (window.Gheloo) window.Gheloo.setStatus('red'); window.__ghk_resetPing && window.__ghk_resetPing(); });
+    _protoAddListener.call(ws, 'error', () => { if (window.Gheloo) window.Gheloo.setStatus('red'); window.__ghk_resetPing && window.__ghk_resetPing(); });
   }
 
-  function _handleIncomingBuffer(ev, raw) {
-    if (raw.byteLength >= 6) {
-      const _logId = new DataView(raw).getUint16(4) - _inOffset;
-      const _bf = window._blockIncomingFilters[_logId];
-      if (_bf !== undefined) {
-        const _doBlock = typeof _bf === 'function' ? _bf(raw) : true;
-        if (_doBlock) {
-          if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
-          try { addPacket('IN', _logId, null, raw); } catch {}
-          return;
-        }
-      }
-      try { addPacket('IN', _logId, null, raw); } catch {}
+  // Runs manipulators first (they can block or rewrite bytes), then the legacy block-only
+  // filter map for backwards compat with extensions still using _blockIncomingFilters
+  // directly. Returns {blocked, raw} so the caller can decide what to actually deliver —
+  // this used to take `ev` and call ev.stopImmediatePropagation(), but that only stops
+  // OTHER listeners registered on this socket from firing; it can't stop the manual
+  // _orig.apply(...) callback further down the chain, so blocking/rewriting has to happen
+  // by controlling what gets *delivered* to that callback instead (see _wrapped below).
+  function _handleIncomingBuffer(raw) {
+    if (raw.byteLength < 6) return { blocked: false, raw };
+    const _logId = new DataView(raw).getUint16(4) - _inOffset;
+    let blocked = false;
+    for (let i = 0; i < window._incomingManipulators.length; i++) {
+      let res; try { res = window._incomingManipulators[i](raw, _logId); } catch (e) { res = undefined; }
+      if (res && res.block) { blocked = true; break; }
+      if (res && res.buffer instanceof ArrayBuffer) raw = res.buffer;
     }
+    if (!blocked) {
+      const _bf = window._blockIncomingFilters[_logId];
+      if (_bf !== undefined) blocked = typeof _bf === 'function' ? _bf(raw) : true;
+    }
+    try { addPacket('IN', _logId, null, raw); } catch {}
+    return { blocked, raw };
   }
 
+  // Returns null when there's nothing to act on (string frames, async Blob path), or
+  // {blocked, raw} for a synchronously-decided ArrayBuffer message — see _wrapped below
+  // for how that result actually controls delivery.
   function _onSocketMessage(ev) {
     if (typeof ev.data === 'string') {
       if (ev.data.includes('{in:UserObject}') && !window._selfName) {
@@ -257,27 +282,54 @@
           if (_hu) _hu.textContent = m[1];
         }
       }
-      return;
+      return null;
     }
     if (ev.data instanceof ArrayBuffer) {
-      _handleIncomingBuffer(ev, ev.data.slice(0));
-      return;
+      return _handleIncomingBuffer(ev.data.slice(0));
     }
     if (typeof Blob !== 'undefined' && ev.data instanceof Blob) {
-      // Can't synchronously block a Blob-delivered message (conversion is async, other
-      // listeners on this same event already ran by the time it resolves) — still logs/
-      // detects offsets, which is what packet logging actually needs.
-      ev.data.arrayBuffer().then(buf => _handleIncomingBuffer(ev, buf)).catch(() => {});
+      // Can't synchronously block/rewrite a Blob-delivered message (conversion is async,
+      // the real listener already ran by the time it resolves) — still logs/detects
+      // offsets, which is what packet logging actually needs. Manipulator rules simply
+      // don't apply to this path.
+      ev.data.arrayBuffer().then(buf => _handleIncomingBuffer(buf)).catch(() => {});
     }
+    return null;
+  }
+
+  // Wraps a real 'message' listener so it's handed a synthetic event carrying the
+  // (possibly rewritten) bytes instead of the original — a native MessageEvent's .data
+  // can't be reassigned, so a lightweight object prototyped off the real event (falling
+  // through to it for .type/.target/etc, shadowing only .data) stands in for it.
+  function _wrapIncomingListener(orig) {
+    return function(ev) {
+      const result = _onSocketMessage(ev);
+      if (result) {
+        if (result.blocked) return;
+        const fakeEv = Object.create(ev);
+        try { Object.defineProperty(fakeEv, 'data', { value: result.raw, configurable: true }); } catch (_e) {}
+        return orig.call(this, fakeEv);
+      }
+      return orig.apply(this, arguments);
+    };
   }
 
   WebSocket.prototype.send = function(data) {
     _instrumentSocket(this);
-    const raw = data && data.slice ? data.slice(0) : data;
+    let raw = data && data.slice ? data.slice(0) : data;
 
     if (raw instanceof ArrayBuffer) {
       if (_offsetsReady && raw.byteLength >= 6) {
         const _outLogId = new DataView(raw).getUint16(4) - _outOffset;
+
+        let _manipBlocked = false;
+        for (let i = 0; i < window._outgoingManipulators.length; i++) {
+          let res; try { res = window._outgoingManipulators[i](raw, _outLogId); } catch (e) { res = undefined; }
+          if (res && res.block) { _manipBlocked = true; break; }
+          if (res && res.buffer instanceof ArrayBuffer) raw = res.buffer;
+        }
+        if (_manipBlocked) { try { addPacket('OUT', _outLogId, null, raw); } catch {} return; }
+
         try { addPacket('OUT', _outLogId, null, raw); } catch {}
         if (_outLogId === _findOutId('OpenFlatConnection')) {
           window._lastRoomEnterPacket = raw.slice(0);
@@ -319,14 +371,13 @@
         } catch(_e) {}
       }
     }
-    return _protoSend.call(this, data);
+    return _protoSend.call(this, raw);
   };
 
   WebSocket.prototype.addEventListener = function(type, listener, options) {
     _instrumentSocket(this);
     if (type === 'message' && typeof listener === 'function' && !listener.__ghkMsgWrapped) {
-      const _orig = listener;
-      const _wrapped = function(ev) { _onSocketMessage(ev); return _orig.apply(this, arguments); };
+      const _wrapped = _wrapIncomingListener(listener);
       _wrapped.__ghkMsgWrapped = true;
       return _protoAddListener.call(this, type, _wrapped, options);
     }
@@ -341,7 +392,7 @@
       set(fn) {
         _instrumentSocket(this);
         if (typeof fn === 'function') {
-          const _wrapped = function(ev) { _onSocketMessage(ev); return fn.call(this, ev); };
+          const _wrapped = _wrapIncomingListener(fn);
           return _onmessageDesc.set.call(this, _wrapped);
         }
         return _onmessageDesc.set.call(this, fn);

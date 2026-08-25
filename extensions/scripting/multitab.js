@@ -62,13 +62,22 @@
   window.__ghk_resetPing = function() {
     _myRtt = null; _rttEma = null; _pendingPings.length = 0;
     window.__ghk_rtt = null;
+    _pingArmed = false; // wait for a fresh OpenFlatConnection before probing again
     _emitLatency(null);
     _renderPeers();
     _renderMulti();
   };
 
+  // Don't start probing right after the socket connects — login sends a burst of
+  // frames the server processes before the client has entered any room, and a ping
+  // sent into that burst reads high for reasons that have nothing to do with real
+  // network latency. Wait for the first real OpenFlatConnection (room entry) instead.
+  let _pingArmed = false;
+  window.onPacket && window.onPacket('OpenFlatConnection', function() { _pingArmed = true; });
+
   function _sendPing() {
     if (!window.__ghk_pingEnabled) return; // opt-in — only probe while the Ping toggle is on
+    if (!_pingArmed) return; // haven't seen a room-enter yet since (re)connect
     if (!window.sendPacket || (!window._ws && !window._worker && !window._ws_worker)) return;
     if (_pendingPings.length > 3) _pendingPings.length = 0; // response(s) got lost — don't let stale sends pile up
     _pendingPings.push(Date.now());
