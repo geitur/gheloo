@@ -340,10 +340,12 @@
       window.onPacket('UserObject', () => { _ghFindSelf(); });
 
       window.onPacket('UserUpdate', p => {
-        if (_ghSelfIdx === null || !p.parsed || p.parsed.index !== _ghSelfIdx) return;
-        const key = p.parsed.x + ',' + p.parsed.y;
+        if (_ghSelfIdx === null || !p.parsed) return;
+        const self = p.parsed.updates.find(function(u) { return u.index === _ghSelfIdx; });
+        if (!self) return;
+        const key = self.x + ',' + self.y;
         if (!_ghInGame) {
-          if (_running && p.parsed.x === GH_CENTER[0] && p.parsed.y === GH_CENTER[1]) {
+          if (_running && self.x === GH_CENTER[0] && self.y === GH_CENTER[1]) {
             _ghInGame    = true;
             _ghFirstTile = true;
           }
@@ -585,14 +587,16 @@
       window.onPacket('UserObject', () => { _ghFindSelf(); });
 
       window.onPacket('UserUpdate', p => {
-        if (_ghSelfIdx === null || !p.parsed || p.parsed.index !== _ghSelfIdx) return;
-        const key = p.parsed.x + ',' + p.parsed.y;
+        if (_ghSelfIdx === null || !p.parsed) return;
+        const self = p.parsed.updates.find(function(u) { return u.index === _ghSelfIdx; });
+        if (!self) return;
+        const key = self.x + ',' + self.y;
         // Confirmed real position, logged every time it changes — this is what actually
         // happened, to compare against the walkTo intent (dispatch) above it in the log
         // when tracking down a bug.
-        if (_running) _ghLog('position', { x: p.parsed.x, y: p.parsed.y });
+        if (_running) _ghLog('position', { x: self.x, y: self.y });
         if (!_ghInGame) {
-          if (_running && p.parsed.x === GH_CENTER[0] && p.parsed.y === GH_CENTER[1]) {
+          if (_running && self.x === GH_CENTER[0] && self.y === GH_CENTER[1]) {
             _ghInGame = true;
             _ghLog('round-start');
             _ghScanInFlight();

@@ -13,18 +13,27 @@
   window.PacketParsers.IN.Shout   = parseChatLike;
   window.PacketParsers.IN.Whisper = parseChatLike;
 
-  // UserUpdate: count, then per entity: index, x, y, z(str), headFacing, bodyFacing, action
+  // UserUpdate: count, then per entity: index, x, y, z(str), headFacing, bodyFacing, action.
+  // The server batches every avatar that moved this tick into ONE packet — confirmed
+  // against the official client's UserUpdateMessageEventParser.as, which loops `count`
+  // times. Must loop here too: with two or more people walking at once (e.g. mid-game in
+  // Color Party), only the first entry in the batch used to get read, silently dropping
+  // every other avatar's — including your own, whenever you weren't first in the batch.
   window.PacketParsers.IN.UserUpdate = raw => {
     const r = window.makeReader(raw); if (!r) return null;
-    const count   = r.int();
-    const index   = r.int();
-    const x       = r.int();
-    const y       = r.int();
-    const z       = parseFloat(r.str());
-    const headDir = r.int();
-    const bodyDir = r.int();
-    const action  = r.str();
-    return { count, index, x, y, z, headDir, bodyDir, action };
+    const count = r.int();
+    const updates = [];
+    for (let i = 0; i < count; i++) {
+      const index   = r.int();
+      const x       = r.int();
+      const y       = r.int();
+      const z       = parseFloat(r.str());
+      const headDir = r.int();
+      const bodyDir = r.int();
+      const action  = r.str();
+      updates.push({ index, x, y, z, headDir, bodyDir, action });
+    }
+    return { count, updates };
   };
 
   // UserChange: index, figure, gender, motto, userId
@@ -647,12 +656,14 @@
 
   window.onPacket('UserUpdate', p => {
     if (!p.parsed) return;
-    const u = window.Room.users[p.parsed.index];
-    if (u) {
-      u.x = p.parsed.x; u.y = p.parsed.y; u.z = p.parsed.z;
-      u.headDir = p.parsed.headDir; u.bodyDir = p.parsed.bodyDir;
-      u.action  = p.parsed.action;
-    }
+    p.parsed.updates.forEach(function(up) {
+      const u = window.Room.users[up.index];
+      if (u) {
+        u.x = up.x; u.y = up.y; u.z = up.z;
+        u.headDir = up.headDir; u.bodyDir = up.bodyDir;
+        u.action  = up.action;
+      }
+    });
   });
 
   window.onPacket('UserChange', p => {
