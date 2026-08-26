@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gheloo",
-  "version": "2.3.3",
+  "version": "2.3.5",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -28,6 +28,7 @@
         "extensions/scripting/multitab.js",
         "extensions/scripting/walk-sync.js",
         "extensions/scripting/room-inspector.js",
+        "extensions/scripting/packet-manipulator.js",
         "extensions/games/colorparty.js",
         "extensions/games/guitarhero.js",
         "extensions/games/bingo.js",

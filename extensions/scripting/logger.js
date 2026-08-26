@@ -117,6 +117,9 @@
       '.__hbl_fi_body{padding:4px 12px 8px;white-space:pre;font:9px/1.6 monospace;background:rgba(255,255,255,0.02);border-top:1px solid rgba(255,255,255,0.04);color:#82849a}',
       '.__hbl_copybtn{font-size:9px;background:none;border:1px solid #23252f;color:#82849a;border-radius:4px;padding:0 6px;cursor:pointer;margin-left:4px}',
       '.__hbl_copybtn:hover{color:#eceefb}',
+      '.__hbl_copyval{cursor:pointer;border-radius:3px;padding:0 2px;margin:0 -2px}',
+      '.__hbl_copyval:hover{background:rgba(255,255,255,0.08)}',
+      '.__hbl_copyval.__hbl_copied{background:rgba(46,204,113,0.35)!important;color:#fff!important}',
     ].join('');
     document.head.appendChild(css);
 
@@ -133,6 +136,7 @@
           '<button id="__hbl_tin"  class="__hbl_btn">IN</button>' +
           '<button id="__hbl_tout" class="__hbl_btn">OUT</button>' +
           '<div class="__hbl_grow"></div>' +
+          '<button id="__hbl_exp"   class="__hbl_btn">Export All</button>' +
           '<button id="__hbl_clr"   class="__hbl_btn">Clear</button>' +
         '</div>' +
         '<div class="__hbl_body">' +
@@ -152,7 +156,16 @@
 
     const listEl   = panel.querySelector('#__hbl_list');
     const detailEl = panel.querySelector('#__hbl_detail');
-    let showIn=false, showOut=false, selRow=null;
+
+    const TOGGLE_KEY = '__ghk_hbl_toggles';
+    function loadToggles() {
+      try { return JSON.parse(localStorage.getItem(TOGGLE_KEY) || '{}'); } catch (_) { return {}; }
+    }
+    function saveToggles() {
+      try { localStorage.setItem(TOGGLE_KEY, JSON.stringify({ in: showIn, out: showOut })); } catch (_) {}
+    }
+    const _savedToggles = loadToggles();
+    let showIn = !!_savedToggles.in, showOut = !!_savedToggles.out, selRow=null;
 
     const tinBtn   = panel.querySelector('#__hbl_tin');
     const toutBtn  = panel.querySelector('#__hbl_tout');
@@ -161,34 +174,73 @@
     tinBtn.addEventListener('click', () => {
       showIn = !showIn;
       tinBtn.classList.toggle('on', showIn);
+      saveToggles();
     });
     toutBtn.addEventListener('click', () => {
       showOut = !showOut;
       toutBtn.classList.toggle('on', showOut);
+      saveToggles();
     });
 
-    // Force both filters off on every login (UserObject fires once per login, including
-    // reconnects) — a fresh session starts quiet regardless of how the toggles were left
-    // last time, not just on first page load.
-    window.onPacket('UserObject', function(p) {
-      if (!p.parsed || !p.parsed.name) return;
-      showIn = false; showOut = false;
-      tinBtn.classList.toggle('on', showIn);
-      toutBtn.classList.toggle('on', showOut);
+    const expBtn = panel.querySelector('#__hbl_exp');
+    expBtn.addEventListener('click', () => {
+      if (!visiblePackets.length) return;
+      const lines = visiblePackets.map(function(p) {
+        const t = new Date(p.timestamp);
+        const ts = t.toTimeString().slice(0,8) + '.' + String(t.getMilliseconds()).padStart(3,'0');
+        const dir = p.direction === 'IN' ? 'in' : 'out';
+        const hdrTag = p.name ? '{' + dir + ':' + p.name + '}' : '{' + dir + ':#' + p.header + '}';
+        return '[' + ts + '] ' + hdrTag + getDecodeTokens(p).map(tokenToPlain).join('');
+      });
+      const text = lines.join('\n');
+      const filename = 'gheloo-packets-' + Date.now() + '.txt';
+
+      // chrome.downloads isn't reachable from a content script here, and an <a download>
+      // click from THIS page's own JS gets silently swallowed (same CSP-shaped problem
+      // room-clone.js hit — see its comment). Opening a separate blob tab is the pattern
+      // that actually works on this hotel page; wrapping it in a tiny page with a visible
+      // Download button beats making the user know to hit Ctrl+S on a raw text view.
+      const textBlobUrl = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+      const pageHtml =
+        '<!doctype html><html><head><title>' + esc(filename) + '</title><meta charset="utf-8"><style>' +
+        'body{background:#12131A;color:#eceefb;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;margin:0;padding:24px;display:flex;flex-direction:column;align-items:center;gap:16px}' +
+        'a.dl{background:#A6B0FF;color:#0A0B10;font-weight:700;padding:10px 22px;border-radius:8px;text-decoration:none;font-size:14px}' +
+        'a.dl:hover{filter:brightness(1.08)}' +
+        'pre{width:90%;max-height:70vh;overflow:auto;background:#0A0B10;border:1px solid #23252f;border-radius:8px;padding:12px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin:0}' +
+        '</style></head><body>' +
+        '<a class="dl" href="' + textBlobUrl + '" download="' + esc(filename) + '">&#8681; Download ' + esc(filename) + '</a>' +
+        '<pre>' + esc(text) + '</pre>' +
+        '</body></html>';
+      const pageUrl = URL.createObjectURL(new Blob([pageHtml], { type: 'text/html' }));
+      const win = window.open(pageUrl, '_blank');
+      if (!win) { URL.revokeObjectURL(pageUrl); URL.revokeObjectURL(textBlobUrl); return; }
+      setTimeout(() => { URL.revokeObjectURL(pageUrl); URL.revokeObjectURL(textBlobUrl); }, 60000);
     });
 
     panel.querySelector('#__hbl_clr').addEventListener('click', () => {
       listEl.innerHTML = '';
       detailEl.innerHTML = '<div class="__hbl_empty">Click a packet</div>';
       selRow = null;
+      visiblePackets.length = 0;
+    });
+
+    // Click any parsed value (string/number/boolean) to copy it to the clipboard —
+    // delegated on detailEl so it keeps working across every re-render.
+    detailEl.addEventListener('click', (e) => {
+      const el = e.target.closest('.__hbl_copyval');
+      if (!el) return;
+      const val = el.getAttribute('data-copy');
+      navigator.clipboard.writeText(val).catch(() => {});
+      el.classList.add('__hbl_copied');
+      setTimeout(() => el.classList.remove('__hbl_copied'), 400);
     });
 
 
     function fmtVal(v, pad) {
       if (v===null||v===undefined) return '<span style="color:#5c5e6b">null</span>';
-      if (typeof v==='boolean') return '<span style="color:#f1c40f">'+v+'</span>';
-      if (typeof v==='number') return '<span style="color:#5b9cf6">'+v+'</span>';
-      if (typeof v==='string') return '<span style="color:#2ecc71">"'+esc(v)+'"</span>';
+      if (typeof v==='boolean') return '<span class="__hbl_copyval" data-copy="'+v+'" style="color:#f1c40f">'+v+'</span>';
+      if (typeof v==='number') return '<span class="__hbl_copyval" data-copy="'+v+'" style="color:#5b9cf6">'+v+'</span>';
+      if (typeof v==='string') return '<span class="__hbl_copyval" data-copy="'+esc(v)+'" style="color:#2ecc71">"'+esc(v)+'"</span>';
       if (Array.isArray(v)) {
         if (!v.length) return '<span style="color:#5c5e6b">[]</span>';
         const inner=pad+'  ';
@@ -306,9 +358,16 @@
       }
     }
 
+    // Mirrors exactly what's on screen — only packets that passed the IN/OUT filter at
+    // the time they arrived, evicted the same way the DOM rows are, and wiped by Clear —
+    // so Export All matches what's actually in the list, not the full underlying log.
+    const visiblePackets = [];
+
     function addRow(p) {
       if (p.direction==='IN' && !showIn) return;
       if (p.direction==='OUT' && !showOut) return;
+      visiblePackets.push(p);
+      if (visiblePackets.length > 300) visiblePackets.shift();
       const t=new Date(p.timestamp);
       const ts=t.toTimeString().slice(0,8);
       const row=document.createElement('div');
