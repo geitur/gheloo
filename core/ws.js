@@ -548,21 +548,28 @@
           parts.push(bytes.buffer);
         }
 
-        const re = /\{([a-zA-Z]+):(.*?)\}/g;
+        // Two alternatives, not one lazy `(.*?)` — a {s:"..."} value can itself contain
+        // literal '{'/'}' (e.g. JSON stuff data on wall items), which desyncs a lazy
+        // match: it stops at the first '}' INSIDE the string instead of the token's real
+        // closing "}", corrupting every token after it. The string branch instead matches
+        // up to an unescaped closing quote (honoring \" and \\), so embedded braces are
+        // just part of the string content. The other token types never contain braces, so
+        // their branch keeps the simple non-string form.
+        const re = /\{s:"((?:\\.|[^"\\])*)"\}|\{([a-zA-Z]+):([^{}]*)\}/g;
         let m;
         while ((m = re.exec(expr)) !== null) {
-          const type = m[1];
-          let value  = m[2];
+          if (m[1] !== undefined) {
+            pushString(m[1].replace(/\\"/g,'"').replace(/\\\\/g,'\\').replace(/\\r/g,'\r').replace(/\\n/g,'\n'));
+            continue;
+          }
+          const type = m[2];
+          const value = m[3];
           switch (type) {
             case 'i': pushInt(parseInt(value)); break;
             case 'u': pushShort(parseInt(value)); break;
             case 'b': pushByte(value === 'true' ? 1 : parseInt(value)); break;
             case 'l': { const ab = new ArrayBuffer(8); new DataView(ab).setBigInt64(0, BigInt(value)); parts.push(ab); break; }
             case 'd': { const ab = new ArrayBuffer(8); new DataView(ab).setFloat64(0, parseFloat(value)); parts.push(ab); break; }
-            case 's':
-              value = value.replace(/^"|"$/g, '').replace(/\\"/g,'"').replace(/\\\\/g,'\\').replace(/\\r/g,'\r').replace(/\\n/g,'\n');
-              pushString(value);
-              break;
           }
         }
 

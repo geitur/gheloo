@@ -358,16 +358,17 @@
       }
     }
 
-    // Mirrors exactly what's on screen — only packets that passed the IN/OUT filter at
-    // the time they arrived, evicted the same way the DOM rows are, and wiped by Clear —
-    // so Export All matches what's actually in the list, not the full underlying log.
+    // Only packets that passed the IN/OUT filter at the time they arrived, and wiped by
+    // Clear — so Export All matches what's actually been logged since the last clear, not
+    // the full underlying store and not stuff captured while a toggle was off. Unlike the
+    // rendered list (capped at 300 rows below, purely for DOM performance), this isn't
+    // capped — Export All should include everything, not just what's still on screen.
     const visiblePackets = [];
 
     function addRow(p) {
       if (p.direction==='IN' && !showIn) return;
       if (p.direction==='OUT' && !showOut) return;
       visiblePackets.push(p);
-      if (visiblePackets.length > 300) visiblePackets.shift();
       const t=new Date(p.timestamp);
       const ts=t.toTimeString().slice(0,8);
       const row=document.createElement('div');

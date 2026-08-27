@@ -154,6 +154,13 @@
     let _cpLastColor    = null;
     let _cpTileTargetId = null;
     let _cpSelectMode   = false;
+    let _cpBestTile     = null; // tile smart-position last picked/walked to
+    let _cpBestTimer    = null; // pending delayed smart-position walk, so it can be cancelled
+    let _cpDiceValue    = null; // raw dice value — smart position only acts while this is 0 (Closed)
+
+    function _cpCancelBestPosition() {
+      if (_cpBestTimer) { clearTimeout(_cpBestTimer); _cpBestTimer = null; }
+    }
 
     // Wire toggle switch
     const _togCheck = rc.querySelector('#__cp_autopos');
@@ -162,6 +169,8 @@
     if (_togCheck) _togCheck.addEventListener('change', function() {
       if (_togTrack) _togTrack.style.background = this.checked ? '#6C7CFF' : '#23252f';
       if (_togThumb) _togThumb.style.transform   = this.checked ? 'translateX(16px)' : '';
+      if (this.checked) { _cpBestTile = null; _cpBestPosition(null); } // fresh full-board scan on enable
+      else _cpCancelBestPosition();
     });
 
     // Select Tile / Use Dice toggle button
@@ -188,6 +197,12 @@
       _cpEnabled = !_cpEnabled;
       this.textContent = _cpEnabled ? 'Stop' : 'Start';
       this.className   = _cpEnabled ? '__cp_btn __cp_btn_danger' : '__cp_btn __cp_btn_success';
+      if (_cpEnabled) {
+        const autoEl = rc.querySelector('#__cp_autopos');
+        if (autoEl && autoEl.checked) { _cpBestTile = null; _cpBestPosition(null); }
+      } else {
+        _cpCancelBestPosition();
+      }
     });
 
     // Intercept OUT #355 (click/use object) to capture tile ID
@@ -241,7 +256,11 @@
       const lbl   = rc.querySelector('#__cp_color_label');
       if (card) card.style.background = hex;
       if (lbl)  lbl.textContent       = label;
-      const intVal   = parseInt(value);
+      const intVal  = parseInt(value);
+      _cpDiceValue  = intVal;
+      // Dice left "Closed" (0) — either rolling (-1) or a result is live (1-6) — so smart
+      // position must stay out of the way: abandon any walk still in flight.
+      if (intVal !== 0) _cpCancelBestPosition();
       const tileState = CP_DICE_TO_TILE[intVal];
       if (tileState !== undefined) { _cpLastColor = tileState; _cpWalk(tileState); }
       else if (intVal === 0 || intVal === -1) _cpLastColor = null;
@@ -273,32 +292,60 @@
       if (u) _cpSelfIdx = u.index;
     }
 
-    function _cpBestPosition() {
+    // Unique color count in a tile's own Moore (3x3) neighborhood — "how many different
+    // tile types would I have near me if I stood here".
+    function _cpScoreAt(tile, allTiles) {
+      const nearby = allTiles.filter(o => Math.abs(o.x - tile.x) <= 1 && Math.abs(o.y - tile.y) <= 1);
+      return new Set(nearby.map(o => o.state)).size;
+    }
+
+    // changedIds: Set of tile ids whose state just changed in this update (or null for a
+    // full bootstrap scan, e.g. right after the toggle is switched on). Re-scoring only the
+    // tiles that changed (plus their neighbors, since a neighbor's own nearby-unique-count
+    // depends on them) is what "kijk naar wat er veranderd is" means here — the old version
+    // recomputed the board-wide max every single update, so an unrelated flip clear across
+    // the map could make some far corner briefly "best" and send the player running there,
+    // which is what looked like walking back and forth.
+    function _cpBestPosition(changedIds) {
       if (!_cpEnabled) return;
+      if (_cpDiceValue !== 0) return; // only reposition while the dice is Closed, not rolling/live
+      if (_cpBestTile && !_cpTiles[_cpBestTile.id]) _cpBestTile = null; // stale ref (room/tiles reloaded)
       const tiles = Object.values(_cpTiles);
       if (!tiles.length) return;
       const self = _cpSelfIdx !== null && window.Room && window.Room.users[_cpSelfIdx];
-      // Pass 1: find max diversity (unique colors in Moore neighborhood)
-      let maxUnique = 0;
-      tiles.forEach(t => {
-        const nearby = tiles.filter(o => Math.abs(o.x - t.x) <= 1 && Math.abs(o.y - t.y) <= 1);
-        const u = new Set(nearby.map(o => o.state)).size;
-        if (u > maxUnique) maxUnique = u;
+
+      let candidates;
+      if (!_cpBestTile) {
+        candidates = tiles; // no current target yet — evaluate everything once
+      } else {
+        const changed = changedIds ? tiles.filter(t => changedIds.has(String(t.id))) : [];
+        if (!changed.length) return; // nothing changed near anything — current target still stands
+        const set = new Map();
+        changed.forEach(c => {
+          tiles.forEach(t => { if (Math.abs(t.x - c.x) <= 1 && Math.abs(t.y - c.y) <= 1) set.set(t.id, t); });
+        });
+        candidates = Array.from(set.values());
+        if (!candidates.length) return;
+      }
+
+      let best      = _cpBestTile;
+      let bestScore = _cpBestTile ? _cpScoreAt(_cpBestTile, tiles) : -1;
+      let bestDist  = (_cpBestTile && self) ? Math.hypot(_cpBestTile.x - self.x, _cpBestTile.y - self.y) : 0;
+      candidates.forEach(t => {
+        const score = _cpScoreAt(t, tiles);
+        const dist  = self ? Math.hypot(t.x - self.x, t.y - self.y) : 0;
+        if (score > bestScore || (score === bestScore && dist < bestDist)) {
+          best = t; bestScore = score; bestDist = dist;
+        }
       });
-      // Pass 2: among tiles with max diversity, pick closest
-      let bestTile = null, bestDist = Infinity;
-      tiles.forEach(t => {
-        const nearby = tiles.filter(o => Math.abs(o.x - t.x) <= 1 && Math.abs(o.y - t.y) <= 1);
-        const u = new Set(nearby.map(o => o.state)).size;
-        if (u < maxUnique) return;
-        const dist = self ? Math.hypot(t.x - self.x, t.y - self.y) : 0;
-        if (dist < bestDist) { bestDist = dist; bestTile = t; }
-      });
-      if (!bestTile) return;
+
+      if (!best || (_cpBestTile && best.id === _cpBestTile.id)) return; // no real improvement — don't re-walk
+      _cpBestTile = best;
+      _cpCancelBestPosition();
       const delayEl = rc.querySelector('#__cp_delay');
       const delay   = delayEl ? Math.max(0, parseInt(delayEl.value) || 0) : 0;
-      if (delay > 0) setTimeout(() => window.Game.walkTo(bestTile.x, bestTile.y), delay);
-      else window.Game.walkTo(bestTile.x, bestTile.y);
+      if (delay > 0) _cpBestTimer = setTimeout(() => { _cpBestTimer = null; window.Game.walkTo(best.x, best.y); }, delay);
+      else window.Game.walkTo(best.x, best.y);
     }
 
     function _cpWalk(colorValue) {
@@ -337,7 +384,31 @@
     window.onPacket('UserObject',  p => {
       _updateCPInfo();
     });
-    window.onPacket('UserUpdate',  _updateCPInfo);
+
+    // UserUpdate can bundle several users' moves in one packet, but the shared parser
+    // (core/parsers.js) only reads the first entity — if self isn't first, our move gets
+    // dropped and the position card goes stale. Read the raw packet ourselves and loop
+    // every entity (same approach as extensions/fun/mimic.js's Follow handler) so self's
+    // x/y updates the instant the packet arrives, regardless of packing order.
+    window.onPacket('UserUpdate', p => {
+      if (!p.raw || _cpSelfIdx === null) return;
+      try {
+        const r = window.makeReader(p.raw);
+        if (!r) return;
+        const count = r.int();
+        for (let i = 0; i < count; i++) {
+          const index = r.int();
+          const x = r.int();
+          const y = r.int();
+          r.str(); r.int(); r.int(); r.str(); // z, headDir, bodyDir, action
+          if (index === _cpSelfIdx) {
+            const posEl = rc.querySelector('#__cp_upos');
+            if (posEl) posEl.textContent = x + ', ' + y;
+            break;
+          }
+        }
+      } catch(_) {}
+    });
 
     // Bulk tile state updates — re-walk if field changes while color is active
     window.onPacket('ObjectsDataUpdate', p => {
@@ -346,15 +417,19 @@
         const r = window.makeReader(p.raw);
         if (!r) return;
         const count = r.int();
+        const changedIds = new Set();
         for (let i = 0; i < count; i++) {
           const id = String(r.int());
           r.int();
           const state = parseInt(r.str());
-          if (_cpTiles[id]) _cpTiles[id].state = state;
+          if (_cpTiles[id]) {
+            if (_cpTiles[id].state !== state) changedIds.add(id);
+            _cpTiles[id].state = state;
+          }
           if (_cpTileTargetId && id === _cpTileTargetId) _cpSetColorFromTileState(state);
         }
         const autoEl = rc.querySelector('#__cp_autopos');
-        if (autoEl && autoEl.checked) _cpBestPosition();
+        if (autoEl && autoEl.checked) _cpBestPosition(changedIds);
       } catch(_) {}
     });
 
@@ -363,6 +438,7 @@
       _cpEnabled = false;
       _cpDiceId = null; _cpTiles = {}; _cpSelfIdx = null; _cpLastColor = null;
       _cpTileTargetId = null; _cpSelectMode = false;
+      _cpBestTile = null; _cpDiceValue = null; _cpCancelBestPosition();
       const ssBtn = rc.querySelector('#__cp_startstop');
       if (ssBtn) { ssBtn.textContent = 'Start'; ssBtn.className = '__cp_btn __cp_btn_success'; }
       const btn = rc.querySelector('#__cp_sel_tile_btn');
@@ -383,7 +459,13 @@
         const objId = r.str();
         r.int();
         const value = r.str();
-        if (_cpDiceId && objId === _cpDiceId && !_cpTileTargetId) _cpSetColor(value);
+        // Track the dice's raw state even while a tile is the active color source, so
+        // smart position still knows whether a round is live and stays gated correctly.
+        if (_cpDiceId && objId === _cpDiceId) {
+          _cpDiceValue = parseInt(value);
+          if (_cpDiceValue !== 0) _cpCancelBestPosition();
+          if (!_cpTileTargetId) _cpSetColor(value);
+        }
         if (_cpTileTargetId && objId === _cpTileTargetId) _cpSetColorFromTileState(parseInt(value));
       } catch(_) {}
     });

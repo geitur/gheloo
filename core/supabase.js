@@ -1,6 +1,20 @@
 (function() {
-  var SUPABASE_URL      = 'https://qwcfsqsrtegyvvwkzcgb.supabase.co';
-  var SUPABASE_ANON_KEY = 'sb_publishable_mi9rS5i9a-xrAWC0lG0TNA_vg903xRL';
+  // Self-hosted Postgres + PostgREST (no Kong/Auth/Realtime/Storage — just the two
+  // containers), replacing Supabase's managed free tier (500MB cap) with a 200GB Oracle
+  // Cloud Always Free VM. Runs on 141.148.224.129, project dir ~/gheloo-db on that VM
+  // (docker-compose.yml + init.sql there define the two services and schema). Caddy
+  // (/etc/caddy/Caddyfile on the VM) terminates TLS and strips the "/rest/v1" prefix
+  // before proxying to PostgREST on :3000 — that's why this still hits /rest/v1/* even
+  // though bare PostgREST itself serves routes at root. SUPABASE_ANON_KEY below is a
+  // hand-minted HS256 JWT ({"role":"anon", exp far in the future}) signed with the
+  // JWT_SECRET in that VM's .env — if the secret ever needs rotating, regenerate with
+  // the same openssl+bash recipe used originally (hash header+payload with
+  // `openssl dgst -sha256 -hmac "$JWT_SECRET"`, base64url all three parts). Schema
+  // changes: `docker exec -it gheloo-db-db-1 psql -U postgres -c "ALTER TABLE ..."`,
+  // then `docker compose restart postgrest` (it caches the schema, won't see new columns
+  // until restarted).
+  var SUPABASE_URL      = 'https://userlogger.databin.uk';
+  var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdoZWxvby1zZWxmaG9zdCIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwfQ.9uAMhqRJOL-m_xtTO5duAUOAw-4pKk4LEENcT47crXU';
 
   if (SUPABASE_URL.indexOf('YOUR_PROJECT') !== -1) {
     console.warn('[Supabase] fill in SUPABASE_URL and SUPABASE_ANON_KEY in supabase.js');
@@ -65,13 +79,10 @@
     // even an explicit guild/relationship lookup shouldn't log them.
     users = users.filter(function(u) { return u.type !== 2 && u.type !== 4; });
 
-    // skipFilter: bypass the score gate for an explicitly opened profile/guild/
-    // relationship list — the gate exists to keep passive room-scanning from flooding
-    // the DB with low-score alts, but deliberately looking someone up is a direct
-    // signal to log them regardless of score.
-    if (!opts.skipFilter) {
-      users = users.filter(function(u) { return (u.achievementScore || 0) >= 2500; });
-    }
+    // No achievement-score gate anymore — everyone gets logged, low-score included.
+    // The panel's own queries are unfiltered by score too, so this shows up exactly
+    // like any other user: absent from the default room-only view until actually
+    // room-encountered, but included in "Load all accounts".
 
     var ids = users.map(function(u) { return u.id; }).filter(Boolean);
     if (!ids.length) return;

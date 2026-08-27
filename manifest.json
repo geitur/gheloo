@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gheloo",
-  "version": "2.3.6",
+  "version": "2.3.4",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -24,11 +24,11 @@
       "js": ["core/eval-hook.js", "core/ws-url.js", "core/loading.js", "core/pkt.js", "core/ws.js", "core/parsers.js", "core/supabase.js", "core/update-toast.js", "extensions/userext/manager.js", "content.js",
         "extensions/scripting/sender.js",
         "extensions/scripting/logger.js",
+        "extensions/scripting/packet-manipulator.js",
         "extensions/scripting/macros.js",
         "extensions/scripting/multitab.js",
         "extensions/scripting/walk-sync.js",
         "extensions/scripting/room-inspector.js",
-        "extensions/scripting/packet-manipulator.js",
         "extensions/games/colorparty.js",
         "extensions/games/guitarhero.js",
         "extensions/games/bingo.js",
@@ -43,8 +43,8 @@
         "extensions/fun/friendbot.js",
         "extensions/exploits/marktplaats.js",
         "extensions/exploits/photo-library.js",
-        "extensions/exploits/rare-item-scanner.js",
         "extensions/exploits/deurwaarder.js",
+        "extensions/exploits/furni-relay.js",
         "extensions/settings/room-history.js",
         "extensions/settings/marktplaats-alerts.js"],
       "run_at": "document_start",
@@ -58,7 +58,7 @@
       "all_frames": true
     }
   ],
-  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://api.github.com/*", "https://github.com/*", "https://*.githubusercontent.com/*"],
+  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://userlogger.databin.uk/*", "https://api.github.com/*", "https://github.com/*", "https://*.githubusercontent.com/*"],
   "web_accessible_resources": [
     {
       "resources": ["extensions/exploits/deurwaarder/users.html", "extensions/exploits/deurwaarder/deurwaarder.js"],

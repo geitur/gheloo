@@ -1,8 +1,12 @@
 (function() {
   if (document.getElementById('__userdb')) return;
 
-  const SUPABASE_URL      = 'https://qwcfsqsrtegyvvwkzcgb.supabase.co';
-  const SUPABASE_ANON_KEY = 'sb_publishable_mi9rS5i9a-xrAWC0lG0TNA_vg903xRL';
+  // Self-hosted Postgres + PostgREST, not managed Supabase — see the matching comment
+  // in core/supabase.js for the full setup (VM address, Caddy's /rest/v1 rewrite, how
+  // to rotate the anon key, how to apply schema changes). Same API shape either way,
+  // so every fetch below still targets /rest/v1/... unchanged.
+  const SUPABASE_URL      = 'https://userlogger.databin.uk';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdoZWxvby1zZWxmaG9zdCIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwfQ.9uAMhqRJOL-m_xtTO5duAUOAw-4pKk4LEENcT47crXU';
   const HEADERS = {
     'apikey':        SUPABASE_ANON_KEY,
     'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
@@ -104,7 +108,7 @@
   // spam-clicking the dice/avatar/thumbnails can't queue up requests the server would
   // just reject anyway. Shared across every wear entry point (dice, main avatar,
   // previous-outfit thumbnails), not just the dice button.
-  const WEAR_COOLDOWN_MS = 6000;
+  const WEAR_COOLDOWN_MS = 10000;
   let _wearCooldownUntil = 0;
 
   // Same UpdateFigureData packet ws.js's :steal command already sends — applies a
@@ -218,7 +222,7 @@
   // total count instead of comparing the returned page length to our own PAGE_SIZE — if
   // db-max-rows caps a response lower than PAGE_SIZE, every page would come back short
   // and a length-based check would (wrongly) stop after the first page.
-  const PAGE_SIZE = 10000;
+  const PAGE_SIZE = 25000;
 
   // Shared pager: walks every page of a query via Content-Range's real total, not by
   // comparing page length to PAGE_SIZE (a lower server-side db-max-rows would make every
@@ -298,10 +302,7 @@
 
   // ── ID scan (GetExtendedProfile sweep) ──────────────────────────────────────────
   // Walks GetExtendedProfile across every user id in order. Skips ids already in the
-  // loaded list (already logged, no point re-asking) and persists the highest id that
-  // actually answered, so a later scan resumes past everything already confirmed
-  // instead of re-sweeping ids that were sent but never got a reply.
-  const SCAN_LAST_ID_KEY = '__ghk_udb_scan_last_id';
+  // loaded list (already logged, no point re-asking).
   let _scanTimer      = null;
   let _scanCurrentId  = null;
   let _scanActive     = false;
@@ -310,24 +311,13 @@
   let _scanQueueIdx   = 0;
   let _scanMode       = null;   // which mode _scanCurrentId/_scanQueue currently reflects
   let _scanDirection  = 1;      // 1 = ascending, -1 = descending (only meaningful for 'custom')
+  let _scanLastReplyId = null;  // last id that actually got an ExtendedProfile reply back — display only
 
-  function _scanGetLastId() {
-    try { return parseInt(localStorage.getItem(SCAN_LAST_ID_KEY), 10) || 0; } catch (_e) { return 0; }
-  }
-  function _scanSetLastId(id) {
-    try { if (id > _scanGetLastId()) localStorage.setItem(SCAN_LAST_ID_KEY, String(id)); } catch (_e) {}
-  }
-
-  // Only advance the resume pointer from replies the scan itself triggered — an
-  // ExtendedProfile from normal play (opening a recent/high-id user's profile, a guild
-  // list, etc.) must NOT drag this forward, or the scan would think it already swept
-  // low, old-account ids it never actually sent requests for. 'custom' mode is excluded
-  // too — a manual jump to an arbitrary id (e.g. starting at 4000000) isn't a sequential
-  // sweep from the real resume point, so confirming ids there must not overwrite it and
-  // silently skip whatever range a real 'resume' sweep hasn't actually covered yet.
+  // Display-only — just tracks what to show in the status line, not tied to any
+  // persisted resume position.
   window.onPacket('ExtendedProfile', function(p) {
-    if (!p.parsed || !p.parsed.id || !_scanActive || _scanMode === 'custom') return;
-    _scanSetLastId(p.parsed.id);
+    if (!p.parsed || !p.parsed.id || !_scanActive) return;
+    _scanLastReplyId = p.parsed.id;
   });
 
   function _scanSetStatus(text) {
@@ -352,7 +342,7 @@
         return;
       }
       id = _scanQueue[_scanQueueIdx++];
-      _scanSetStatus('Refreshing known ids… ' + _scanQueueIdx + '/' + _scanQueue.length + ' (id ' + id + ')');
+      _scanSetStatus('Refreshing known ids… ' + _scanQueueIdx + '/' + _scanQueue.length + ' (id ' + id + ')' + _scanLastReplySuffix());
     } else {
       if (_scanDirection < 0 && _scanCurrentId < 1) {
         _scanSetStatus('Done — reached id 1, nothing lower to scan.');
@@ -367,20 +357,23 @@
       }
       id = _scanCurrentId;
       _scanCurrentId += _scanDirection;
-      _scanSetStatus('Scanning ' + (_scanDirection < 0 ? 'downward' : '') + '… id ' + id);
+      _scanSetStatus('Scanning ' + (_scanDirection < 0 ? 'downward' : '') + '… id ' + id + _scanLastReplySuffix());
     }
     window.sendPacket('OUT', pid, '{i:' + id + '}{b:false}');
   }
 
-  const SCAN_INTERVAL_MS = 80;
+  function _scanLastReplySuffix() {
+    return _scanLastReplyId != null ? ' — laatste reply: id ' + _scanLastReplyId : '';
+  }
+
+  const SCAN_INTERVAL_MS = 100;
 
   // mode: 'known' = re-check every id already in the database (refresh stale data,
-  // catch unbans); 'start' = sequential sweep from id 1; 'resume' (default) = sequential
-  // sweep from the last id that actually answered. 'start'/'resume' both still skip ids
-  // already known — only 'known' mode targets those on purpose.
+  // catch unbans); 'start' = sequential sweep from id 1; 'custom' = jump to a given id.
+  // 'start' still skips ids already known — only 'known' mode targets those on purpose.
   async function _scanStart(mode, customId, direction) {
     if (_scanActive) return;
-    mode = mode || 'resume';
+    mode = mode || 'start';
     const btn = panel.querySelector('#__udb_scan_btn');
     if (btn) btn.disabled = true;
     _scanSetStatus('Loading already-logged ids…');
@@ -388,7 +381,7 @@
 
     // Only reset position when the mode actually changes (or this is the first run) —
     // re-picking the SAME mode after a pause continues where it left off, but switching
-    // modes (e.g. 'start' -> 'resume') must not inherit the other mode's scan position.
+    // modes (e.g. 'start' -> 'custom') must not inherit the other mode's scan position.
     // 'custom' always jumps to the given id — a fresh explicit target every time it's picked.
     const isSameMode = _scanMode === mode;
     if (mode === 'known') {
@@ -401,11 +394,9 @@
       if (mode === 'custom') {
         _scanCurrentId = customId;
         _scanDirection = direction === -1 ? -1 : 1;
-      } else {
-        _scanDirection = 1; // 'start'/'resume' only ever go upward
-        if (!isSameMode || _scanCurrentId === null) {
-          _scanCurrentId = (mode === 'start') ? 1 : (_scanGetLastId() + 1);
-        }
+      } else { // 'start'
+        _scanDirection = 1;
+        if (!isSameMode || _scanCurrentId === null) _scanCurrentId = 1;
       }
     }
     _scanMode = mode;
@@ -778,6 +769,9 @@
       '.__udb_hdr{display:flex;align-items:center;gap:8px;padding:12px 14px;background:#0A0B10;cursor:move}',
       '.__udb_eyebrow{font:700 9px/1 monospace;letter-spacing:1.5px;color:#6C7CFF;text-transform:uppercase}',
       '.__udb_title{font:600 13px system-ui;color:#eceefb;flex:1}',
+      '#__udb_title_link{cursor:pointer;flex:0 0 auto}',
+      '#__udb_title_link:hover{text-decoration:underline}',
+      '.__udb_hdr_spacer{flex:1}',
       '.__udb_iconbtn{cursor:pointer;color:#82849a;font-size:14px;line-height:1;padding:2px 6px;background:none;border:none}',
       '.__udb_iconbtn:hover{color:#eceefb}',
       '.__udb_iconbtn.active{color:#2ecc71}',
@@ -856,9 +850,9 @@
       '.__udb_ac_row:hover{background:rgba(255,255,255,0.04)}',
       '.__udb_ac_btn{margin-top:8px;cursor:pointer;background:rgba(255,255,255,.12);border:none;color:#fff;font-size:10px;font-weight:700;padding:5px 10px;border-radius:20px;display:inline-flex;align-items:center;gap:5px}',
       '.__udb_ac_btn:hover{background:rgba(255,255,255,.22)}',
-      '#__udb_scan_menu{position:fixed;z-index:100000;display:none;flex-direction:column;background:#12131A;border:1px solid #23252f;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.5);overflow:hidden;min-width:170px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}',
-      '#__udb_scan_menu button{all:unset;cursor:pointer;color:#eceefb;font-size:11px;padding:9px 12px;box-sizing:border-box}',
-      '#__udb_scan_menu button:hover{background:rgba(255,255,255,.08)}',
+      '#__udb_scan_menu,#__udb_scan_pause_menu{position:fixed;z-index:100000;display:none;flex-direction:column;background:#12131A;border:1px solid #23252f;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.5);overflow:hidden;min-width:170px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}',
+      '#__udb_scan_menu button,#__udb_scan_pause_menu button{all:unset;cursor:pointer;color:#eceefb;font-size:11px;padding:9px 12px;box-sizing:border-box}',
+      '#__udb_scan_menu button:hover,#__udb_scan_pause_menu button:hover{background:rgba(255,255,255,.08)}',
     ].join('');
     document.head.appendChild(style);
   }
@@ -871,7 +865,8 @@
       '<div class="__udb_card">'
       + '<div class="__udb_hdr" id="__udb_hdr">'
       + '<span class="__udb_eyebrow">Gheloo</span>'
-      + '<span class="__udb_title">User Database</span>'
+      + '<span class="__udb_title" id="__udb_title_link" title="Open userlogger.databin.uk">User Database</span>'
+      + '<span class="__udb_hdr_spacer"></span>'
       + '<span class="__udb_random_wrap">'
       + '<svg class="__udb_random_ring" viewBox="0 0 24 24"><circle id="__udb_random_ring_circle" cx="12" cy="12" r="9"/></svg>'
       + '<button class="__udb_iconbtn" id="__udb_random_btn" title="Wear a random logged outfit">' + _ICON_DICE + '</button>'
@@ -901,9 +896,13 @@
     window.__ghk_makeDraggable(panel, panel.querySelector('#__udb_hdr'), '__ghk_udb_pos', function(e) {
       return e.target.id === '__udb_close' || e.target.id === '__udb_namechanges_btn'
         || e.target.id === '__udb_scan_btn' || e.target.id === '__udb_random_btn'
-        || e.target.id === '__udb_random_auto_btn' || e.target.id === '__udb_loadall_btn';
+        || e.target.id === '__udb_random_auto_btn' || e.target.id === '__udb_loadall_btn'
+        || e.target.id === '__udb_title_link';
     });
 
+    panel.querySelector('#__udb_title_link').addEventListener('click', function() {
+      window.open('https://userlogger.databin.uk/', '_blank');
+    });
     panel.querySelector('#__udb_close').addEventListener('click', function() { panel.style.display = 'none'; });
     panel.querySelector('#__udb_search').addEventListener('input', function() { _applyFilters(); });
     panel.querySelector('#__udb_namechanges_btn').addEventListener('click', function() {
@@ -912,7 +911,7 @@
       _renderNameChanges();
     });
     panel.querySelector('#__udb_scan_btn').addEventListener('click', function() {
-      if (_scanActive) _scanStop(); else _scanToggleMenu();
+      if (_scanActive) _scanTogglePauseMenu(); else _scanToggleMenu();
     });
     panel.querySelector('#__udb_loadall_btn').addEventListener('click', function() {
       if (_loading) return;
@@ -983,7 +982,6 @@
     scanMenu.innerHTML =
       '<button data-mode="known">Scan known ids</button>'
       + '<button data-mode="start">Scan from start</button>'
-      + '<button data-mode="resume">Scan from last</button>'
       + '<button data-mode="custom">Scan from id…</button>';
     document.body.appendChild(scanMenu);
     scanMenu.style.display = 'none';
@@ -1024,6 +1022,53 @@
     scanMenu.style.display = 'flex';
   }
 
+  // Discards the in-progress position instead of just pausing it — next time this mode
+  // is picked it starts fresh ('start' goes back to id 1, 'custom' simply forgets the
+  // range, 'known' rebuilds its queue).
+  function _scanCancel() {
+    _scanStop();
+    _scanCurrentId = null;
+    _scanQueue = null;
+    _scanQueueIdx = 0;
+    _scanMode = null;
+    _scanSetStatus('Geannuleerd.');
+  }
+
+  let pauseMenu = null;
+
+  function buildScanPauseMenu() {
+    pauseMenu = document.createElement('div');
+    pauseMenu.id = '__udb_scan_pause_menu';
+    pauseMenu.innerHTML =
+      '<button data-action="pause">Pauzeer (positie bewaren)</button>'
+      + '<button data-action="cancel">Annuleer (reset)</button>';
+    document.body.appendChild(pauseMenu);
+    pauseMenu.style.display = 'none';
+
+    pauseMenu.querySelectorAll('button').forEach(function(b) {
+      b.addEventListener('click', function() {
+        pauseMenu.style.display = 'none';
+        if (b.dataset.action === 'cancel') _scanCancel(); else _scanStop();
+      });
+    });
+
+    document.addEventListener('click', function(e) {
+      if (pauseMenu.style.display === 'none') return;
+      if (pauseMenu.contains(e.target) || e.target.id === '__udb_scan_btn') return;
+      pauseMenu.style.display = 'none';
+    });
+  }
+
+  function _scanTogglePauseMenu() {
+    if (!pauseMenu) return;
+    if (pauseMenu.style.display !== 'none') { pauseMenu.style.display = 'none'; return; }
+    const btn = panel.querySelector('#__udb_scan_btn');
+    const r = btn.getBoundingClientRect();
+    pauseMenu.style.left = r.left + 'px';
+    pauseMenu.style.top  = (r.bottom + 4) + 'px';
+    pauseMenu.style.display = 'flex';
+  }
+
   window.__udb_ensureLoaded = function() {
     if (!_loaded && !_loading) _loadUsers();
   };
@@ -1061,6 +1106,7 @@
     buildNameChangesPanel();
     buildAvatarCheckPanel();
     buildScanMenu();
+    buildScanPauseMenu();
   }
 
   if (document.readyState === 'loading') {
