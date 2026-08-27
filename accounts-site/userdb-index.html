@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="favicon.png">
+<title>User Database</title>
+<style>
+:root {
+  --bg:       oklch(0.08 0.014 265);
+  --card:     oklch(0.115 0.012 265);
+  --sidebar:  oklch(0.105 0.013 265);
+  --primary:  oklch(0.68 0.19 265);
+  --border:   oklch(0.24 0.013 265);
+  --text:     oklch(0.94 0.006 265);
+  --muted:    oklch(0.56 0.016 265);
+  --accent:   oklch(0.21 0.015 265);
+  --input:    oklch(0.19 0.012 265);
+  --radius:   8px;
+  --green:    oklch(0.65 0.18 160);
+  --red:      oklch(0.65 0.22 25);
+  --gold:     oklch(0.78 0.16 95);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+#shell{display:flex;min-height:100vh}
+#sidebar{width:220px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.sb-header{padding:18px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
+.brand-row{display:flex;align-items:center;gap:10px}
+.brand-mark{width:30px;height:30px;border-radius:8px;background:color-mix(in oklch,var(--primary) 18%,transparent);color:var(--primary);display:flex;align-items:center;justify-content:center;font:800 13px system-ui;flex-shrink:0}
+.eyebrow{font:700 9px/1 monospace;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:3px}
+.title{font:700 15px/1.2 system-ui;color:var(--text)}
+.hub-back{display:flex;align-items:center;gap:6px;margin:14px 0 0 -7px;padding:5px 7px;border-radius:6px;color:var(--muted);font-size:12px;font-weight:600;text-decoration:none;transition:all .12s;width:fit-content}
+.hub-back:hover{background:var(--accent);color:var(--text)}
+.hub-back svg{width:12px;height:12px;flex-shrink:0}
+#sb-nav{padding:14px 12px;display:flex;flex-direction:column;gap:18px;overflow-y:auto;flex:1}
+.nav-section-lbl{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);padding:0 8px 4px;opacity:.7}
+.nav-group{display:flex;flex-direction:column;gap:1px}
+.tab{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;border:none;background:none;width:100%;text-align:left}
+.tab:hover{background:var(--accent);color:var(--text)}
+.tab.active{background:color-mix(in oklch,var(--primary) 15%,transparent);color:var(--primary)}
+.tab .chk{width:13px;height:13px;border-radius:4px;border:1.5px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.tab.active .chk{background:var(--primary);border-color:var(--primary)}
+.tab .chk svg{width:9px;height:9px;color:#fff;display:none}
+.tab.active .chk svg{display:block}
+
+#main{flex:1;padding:24px 28px;min-width:0}
+.page-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.page-title{font-size:20px;font-weight:700}
+.page-sub{font-size:12px;color:var(--muted);margin-top:3px}
+
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:7px;font:600 12px/1 inherit;cursor:pointer;border:1px solid transparent;transition:all .12s;white-space:nowrap}
+.btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+.btn-primary:hover{opacity:.9}
+.btn-outline{background:transparent;border-color:var(--border);color:var(--muted)}
+.btn-outline:hover{border-color:var(--primary);color:var(--primary)}
+button:disabled{opacity:.5;cursor:not-allowed}
+
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px}
+.card-body{padding:16px}
+.filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.search-input{background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:8px 10px;font-size:12px;outline:none}
+.search-input:focus{border-color:var(--primary)}
+#q_name{width:200px}
+#q_id, #q_id_min, #q_id_max{width:110px}
+
+#status{font-size:12px;color:var(--muted);margin-bottom:10px}
+
+.tbl-wrap{border:1px solid var(--border);border-radius:var(--radius);overflow:auto;max-height:64vh}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead th{padding:10px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);background:color-mix(in oklch,var(--card) 50%,var(--bg));border-bottom:1px solid var(--border);white-space:nowrap;position:sticky;top:0}
+tbody td{padding:8px 14px;border-bottom:1px solid color-mix(in oklch,var(--border) 50%,transparent);vertical-align:middle;white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
+.avatar-wrap{position:relative;width:36px;height:36px;overflow:hidden;border-radius:6px;display:inline-block;vertical-align:middle;background:var(--input)}
+.avatar-wrap img{position:absolute;left:-14px;top:-20px;width:62px;height:90px;image-rendering:pixelated}
+
+.pagination{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:14px;flex-wrap:wrap}
+.pagination .page-info{font-size:12px;color:var(--muted);margin:0 6px}
+.page-jump{width:50px;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;text-align:center;outline:none}
+.page-jump:focus{border-color:var(--primary)}
+</style>
+</head>
+<body>
+<div id="shell">
+  <aside id="sidebar">
+    <div class="sb-header">
+      <div class="brand-row">
+        <div class="brand-mark">G</div>
+        <div>
+          <div class="eyebrow">Gheloo</div>
+          <div class="title">User Database</div>
+        </div>
+      </div>
+      <a class="hub-back" href="https://hub.databin.uk/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>Terug naar Hub</a>
+    </div>
+    <nav id="sb-nav">
+      <div>
+        <div class="nav-section-lbl">Sorteren</div>
+        <div class="nav-group" id="sort-tabs"></div>
+      </div>
+
+      <div>
+        <div class="nav-section-lbl">Kolommen</div>
+        <div class="nav-group" id="col-tabs"></div>
+      </div>
+    </nav>
+  </aside>
+
+  <div id="main">
+    <div class="page-hdr">
+      <div>
+        <div class="page-title">Zoeken</div>
+        <div class="page-sub">Alle gescande gebruikers uit de room-logger</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <div class="filter-row">
+          <input class="search-input" id="q_name" placeholder="Naam bevat...">
+          <input class="search-input" id="q_id" placeholder="Exact ID" type="number">
+          <input class="search-input" id="q_id_min" placeholder="ID vanaf" type="number">
+          <input class="search-input" id="q_id_max" placeholder="ID tot" type="number">
+          <button class="btn btn-primary" onclick="search(true)">Zoeken</button>
+          <button class="btn btn-outline" id="exportBtn" onclick="exportTxt()">Exporteer TXT</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="status"></div>
+
+    <div class="tbl-wrap">
+      <table id="mainTable">
+        <thead><tr id="head"></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div class="pagination" id="pagination"></div>
+  </div>
+</div>
+
+<script>
+const BASE = 'https://userlogger.databin.uk/rest/v1/users';
+const LIMIT = 500;
+
+const COLUMNS = [
+  { key: 'figure',             label: 'Avatar',        default: true, isAvatar: true },
+  { key: 'id',                 label: 'ID',            default: true },
+  { key: 'name',                label: 'Naam',          default: true },
+  { key: 'motto',               label: 'Motto',         default: true },
+  { key: 'achievement_score',  label: 'Score',         default: true },
+  { key: 'favorite_group',     label: 'Groep',         default: true },
+  { key: 'last_seen',          label: 'Laatst gezien', default: true },
+];
+
+const SORTS = [
+  { key: 'id.asc',                  label: 'Oudste ID' },
+  { key: 'id.desc',                 label: 'Nieuwste ID' },
+  { key: 'last_seen.desc.nullslast', label: 'Laatst gezien' },
+  { key: 'name.asc',                label: 'Naam A-Z' },
+  { key: 'achievement_score.desc',  label: 'Hoogste score' },
+];
+
+let lastRows = [];
+let currentOffset = 0;
+let totalMatches = 0;
+let currentSort = SORTS[0].key;
+let visibleCols = new Set(COLUMNS.filter(c => c.default).map(c => c.key));
+
+function currentPage() { return Math.floor(currentOffset / LIMIT) + 1; }
+function totalPages() { return totalMatches ? Math.ceil(totalMatches / LIMIT) : 1; }
+
+function gotoPage(n) {
+  const tp = totalPages();
+  n = Math.max(1, Math.min(n, tp));
+  currentOffset = (n - 1) * LIMIT;
+  search(false);
+}
+function skipPages(delta) { gotoPage(currentPage() + delta); }
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function avatarUrl(figure) {
+  return 'https://www.leet.city/leet-imaging/avatarimage?figure=' + encodeURIComponent(figure || '')
+    + '&direction=2&head_direction=3&size=m&gesture=sml&headonly=1&action=wav&img_format=png';
+}
+
+const CHK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
+
+function renderSortTabs() {
+  const el = document.getElementById('sort-tabs');
+  el.innerHTML = SORTS.map(s =>
+    '<button class="tab' + (currentSort === s.key ? ' active' : '') + '" data-sort="' + s.key + '">'
+    + '<span class="chk">' + CHK_SVG + '</span>' + s.label + '</button>'
+  ).join('');
+  el.querySelectorAll('.tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentSort = btn.dataset.sort;
+      renderSortTabs();
+      search(true);
+    });
+  });
+}
+
+function renderColTabs() {
+  const el = document.getElementById('col-tabs');
+  el.innerHTML = COLUMNS.map(c =>
+    '<button class="tab' + (visibleCols.has(c.key) ? ' active' : '') + '" data-col="' + c.key + '">'
+    + '<span class="chk">' + CHK_SVG + '</span>' + c.label + '</button>'
+  ).join('');
+  el.querySelectorAll('.tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.col;
+      visibleCols.has(key) ? visibleCols.delete(key) : visibleCols.add(key);
+      renderColTabs();
+      renderTable();
+    });
+  });
+}
+
+function activeColumns() {
+  return COLUMNS.filter(c => visibleCols.has(c.key));
+}
+
+function renderTable() {
+  const cols = activeColumns();
+  document.getElementById('head').innerHTML = cols.map(c => '<th>' + c.label + '</th>').join('');
+  document.getElementById('rows').innerHTML = lastRows.map(u => (
+    '<tr>' + cols.map(c => {
+      if (c.isAvatar) {
+        return '<td>' + (u.figure ? '<span class="avatar-wrap"><img src="' + esc(avatarUrl(u.figure)) + '" loading="lazy" onerror="this.style.opacity=\'.15\'"></span>' : '') + '</td>';
+      }
+      let v = u[c.key];
+      if (c.key === 'last_seen') v = v ? new Date(v).toLocaleString('nl-BE') : '—';
+      return '<td>' + esc(v) + '</td>';
+    }).join('') + '</tr>'
+  )).join('');
+}
+
+function fmtVal(u, key) {
+  if (key === 'last_seen') return u[key] ? new Date(u[key]).toLocaleString('nl-BE') : null;
+  return u[key];
+}
+
+function renderPagination() {
+  const el = document.getElementById('pagination');
+  if (!totalMatches) { el.innerHTML = ''; return; }
+  const tp = totalPages();
+  const atStart = currentOffset === 0, atEnd = lastRows.length < LIMIT;
+  el.innerHTML =
+    '<button class="btn btn-outline" id="pg-first" title="Eerste pagina"' + (atStart ? ' disabled' : '') + '>&laquo;&laquo;&laquo;</button>'
+    + '<button class="btn btn-outline" id="pg-back10" title="10 pagina\'s terug"' + (atStart ? ' disabled' : '') + '>&laquo;&laquo;</button>'
+    + '<button class="btn btn-outline" id="pg-prev" title="Vorige"' + (atStart ? ' disabled' : '') + '>&laquo;</button>'
+    + '<input class="page-jump" id="pg-jump" type="number" min="1" max="' + tp + '" value="' + currentPage() + '">'
+    + '<span class="page-info">/ ' + tp + ' (' + totalMatches + ' users)</span>'
+    + '<button class="btn btn-outline" id="pg-next" title="Volgende"' + (atEnd ? ' disabled' : '') + '>&raquo;</button>'
+    + '<button class="btn btn-outline" id="pg-fwd10" title="10 pagina\'s vooruit"' + (atEnd ? ' disabled' : '') + '>&raquo;&raquo;</button>'
+    + '<button class="btn btn-outline" id="pg-last" title="Laatste pagina"' + (atEnd ? ' disabled' : '') + '>&raquo;&raquo;&raquo;</button>';
+  el.querySelector('#pg-first') && (el.querySelector('#pg-first').onclick = () => gotoPage(1));
+  el.querySelector('#pg-back10') && (el.querySelector('#pg-back10').onclick = () => skipPages(-10));
+  el.querySelector('#pg-prev') && (el.querySelector('#pg-prev').onclick = () => skipPages(-1));
+  el.querySelector('#pg-next') && (el.querySelector('#pg-next').onclick = () => skipPages(1));
+  el.querySelector('#pg-fwd10') && (el.querySelector('#pg-fwd10').onclick = () => skipPages(10));
+  el.querySelector('#pg-last') && (el.querySelector('#pg-last').onclick = () => gotoPage(tp));
+  const jump = el.querySelector('#pg-jump');
+  jump.addEventListener('keydown', e => { if (e.key === 'Enter') gotoPage(parseInt(e.target.value, 10) || 1); });
+  jump.addEventListener('focusout', e => gotoPage(parseInt(e.target.value, 10) || 1));
+}
+
+async function search(reset) {
+  if (reset) currentOffset = 0;
+  const statusEl = document.getElementById('status');
+  const params = currentFilterParams().concat(['limit=' + LIMIT, 'offset=' + currentOffset]);
+
+  statusEl.textContent = 'Zoeken...';
+  try {
+    const res = await fetch(BASE + '?' + params.join('&'), { headers: { 'Prefer': 'count=exact' } });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const range = res.headers.get('content-range') || '';
+    const total = (range.split('/')[1]) || '?';
+    totalMatches = parseInt(total, 10) || 0;
+    lastRows = await res.json();
+    const from = total !== '?' && total !== '0' ? (currentOffset + 1) : 0;
+    const to = currentOffset + lastRows.length;
+    statusEl.textContent = (lastRows.length ? (from + '–' + to) : '0') + ' van ' + total + ' matches';
+    renderTable();
+    renderPagination();
+  } catch (e) {
+    statusEl.textContent = 'Fout: ' + e.message;
+  }
+}
+
+function currentFilterParams() {
+  const name = document.getElementById('q_name').value.trim();
+  const id = document.getElementById('q_id').value.trim();
+  const idMin = document.getElementById('q_id_min').value.trim();
+  const idMax = document.getElementById('q_id_max').value.trim();
+  const params = ['select=id,name,motto,figure,achievement_score,favorite_group,last_seen'];
+  if (id) params.push('id=eq.' + encodeURIComponent(id));
+  if (idMin) params.push('id=gte.' + encodeURIComponent(idMin));
+  if (idMax) params.push('id=lte.' + encodeURIComponent(idMax));
+  if (name) params.push('name=ilike.*' + encodeURIComponent(name) + '*');
+  params.push('order=' + currentSort);
+  return params;
+}
+
+async function fetchAllMatching(onProgress) {
+  const baseParams = currentFilterParams();
+  const pageSize = 10000;
+  let offset = 0;
+  let all = [];
+  for (;;) {
+    const params = baseParams.concat(['limit=' + pageSize, 'offset=' + offset]);
+    const res = await fetch(BASE + '?' + params.join('&'));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const page = await res.json();
+    all = all.concat(page);
+    if (onProgress) onProgress(all.length);
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+async function exportTxt() {
+  const btn = document.getElementById('exportBtn');
+  const statusEl = document.getElementById('status');
+  btn.disabled = true;
+  try {
+    const all = await fetchAllMatching(n => { statusEl.textContent = 'Exporteren... (' + n + ' opgehaald)'; });
+    if (!all.length) { statusEl.textContent = 'Niks om te exporteren.'; return; }
+    const cols = activeColumns();
+    const lines = [cols.map(c => c.label).join('\t')];
+    all.forEach(u => {
+      lines.push(cols.map(c => {
+        const v = fmtVal(u, c.key);
+        return v == null ? '' : String(v);
+      }).join('\t'));
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'gheloo-users-' + new Date().toISOString().slice(0,19).replace(/[:T]/g,'-') + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    statusEl.textContent = all.length + ' users geëxporteerd.';
+  } catch (e) {
+    statusEl.textContent = 'Export fout: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.querySelectorAll('#q_name, #q_id, #q_id_min, #q_id_max').forEach(el => {
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') search(true); });
+});
+
+renderSortTabs();
+renderColTabs();
+search(true);
+</script>
+</body>
+</html>

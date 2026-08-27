@@ -2,6 +2,7 @@
 <html lang="nl">
 <head>
 <meta charset="utf-8">
+<link rel="icon" type="image/png" href="favicon.png">
 <title>Deurwaarder</title>
 <style>
 :root {
@@ -34,7 +35,15 @@ html,body{height:100%;overflow:hidden;font-family:ui-sans-serif,system-ui,-apple
 #shell{display:flex;height:100vh}
 
 /* — Sidebar — */
-#sidebar{width:240px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column}
+#sidebar{width:220px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.sb-header{padding:18px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
+.brand-row{display:flex;align-items:center;gap:10px}
+.brand-mark{width:30px;height:30px;border-radius:8px;background:color-mix(in oklch,var(--primary) 18%,transparent);color:var(--primary);display:flex;align-items:center;justify-content:center;font:800 13px system-ui;flex-shrink:0}
+.eyebrow{font:700 9px/1 monospace;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:3px}
+.title{font:700 15px/1.2 system-ui;color:var(--text)}
+.hub-back{display:flex;align-items:center;gap:6px;margin:14px 0 0 -7px;padding:5px 7px;border-radius:6px;color:var(--muted);font-size:12px;font-weight:600;text-decoration:none;transition:all .12s;width:fit-content;flex-shrink:0}
+.hub-back:hover{background:var(--accent);color:var(--text)}
+.hub-back svg{width:12px;height:12px;flex-shrink:0}
 #sb-nav{flex:1;padding:12px;overflow-y:auto;display:flex;flex-direction:column;gap:20px}
 .nav-section-lbl{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);padding:0 8px 4px;opacity:.7}
 .nav-group{display:flex;flex-direction:column;gap:1px}
@@ -326,6 +335,16 @@ select{cursor:pointer}
 <body>
 <div id="shell">
   <aside id="sidebar">
+    <div class="sb-header">
+      <div class="brand-row">
+        <div class="brand-mark">G</div>
+        <div>
+          <div class="eyebrow">Gheloo</div>
+          <div class="title">Deurwaarder</div>
+        </div>
+      </div>
+      <a class="hub-back" href="https://hub.databin.uk/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>Terug naar Hub</a>
+    </div>
     <nav id="sb-nav">
       <div>
         <div class="nav-section-lbl">Investigate</div>

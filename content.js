@@ -1,5 +1,17 @@
 (function() {
 
+  // This script runs in the MAIN world and can't call chrome.runtime.getManifest()
+  // directly — core/bridge.js (ISOLATED world) posts the installed version once at
+  // load via '__ghk_update_status'. Cached here so the Proxy tab can show it even if
+  // it's built before that message arrives.
+  let _installedVersion = null;
+  window.addEventListener('message', function(e) {
+    if (e.source !== window || !e.data || e.data.type !== '__ghk_update_status') return;
+    _installedVersion = e.data.installedVersion;
+    const el = document.getElementById('ghl-proxy-version');
+    if (el && _installedVersion) el.textContent = 'v' + _installedVersion;
+  });
+
   function buildGhelooPanel() {
     const ICONS = {
       scripting: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6M12 19h8"/></svg>',
@@ -94,6 +106,12 @@
       .ghl-proxy-url { font:400 11px monospace; color:#82849a; word-break:break-all; margin-top:4px; }
       .ghl-proxy-btn { align-self:stretch; margin-top:10px; background:rgba(108,124,255,0.12); color:#A6B0FF; border:1px solid rgba(166,176,255,0.24); border-radius:8px; padding:7px 10px; font:600 11px system-ui; cursor:pointer; text-align:center; }
       .ghl-proxy-btn:hover { background:rgba(108,124,255,0.2); }
+      .ghl-proxy-btn-danger { background:rgba(231,76,60,0.14); color:#FF8A80; border-color:rgba(255,138,128,0.3); }
+      .ghl-proxy-btn-danger:hover { background:rgba(231,76,60,0.24); }
+      .ghl-proxy-btn-success { background:rgba(46,204,113,0.14); color:#7CF0B0; border-color:rgba(124,240,176,0.3); }
+      .ghl-proxy-btn-success:hover { background:rgba(46,204,113,0.24); }
+      .ghl-proxy-btn-row { display:flex; gap:6px; margin-top:10px; }
+      .ghl-proxy-btn-row .ghl-proxy-btn { margin-top:0; flex:1; }
       .ghl-overlay-row { position:fixed; top:12px; left:12px; z-index:2147483647; display:flex; gap:6px; }
       .ghl-fps-overlay { background:#0A0B10; color:#A6B0FF; font:700 11px monospace; padding:4px 10px; border-radius:8px; border:1px solid #23252f; display:none; cursor:pointer; }
       .ghl-fps-overlay.show { display:block; }
@@ -274,8 +292,8 @@
         sections: [
           { label: '', rows: [
             { id: 'marktplaats', title: 'Marktplaats', subtitle: 'Marktplaats Dupe', icon: ICONS.marktplaats, close: false, onClick: showPanelById('__mb') },
+            { id: 'deurwaarder', title: 'Deurwaarder', subtitle: 'Dupe Dashboard', icon: ICONS.deurwaarder, close: false, onClick: function() { window.open('https://deurwaarder.databin.uk/', '_blank'); } },
             { id: 'photolibrary', title: 'Photo Library', subtitle: 'Save and organize camera photos', icon: ICONS.photolibrary, close: false, onClick: showPanelById('__photolib') },
-            { id: 'deurwaarder', title: 'Deurwaarder', subtitle: 'Dupe Dashboard', icon: ICONS.deurwaarder, close: false, onClick: function() { if (window.__ghk_openDeurwaarder) window.__ghk_openDeurwaarder(); } },
           ]},
         ],
       },
@@ -531,7 +549,7 @@
     proxyContent.className = 'ghl-content';
     proxyContent.innerHTML =
       '<div class="ghl-eyebrow">Gheloo</div>' +
-      '<div class="ghl-heading">Proxy</div>' +
+      '<div class="ghl-heading" style="display:flex;align-items:center;gap:6px">Proxy<span id="ghl-proxy-version" style="font-size:11px;font-weight:600;color:#6b6d7a">' + (_installedVersion ? 'v' + _installedVersion : '') + '</span></div>' +
       '<div class="ghl-me-card ghl-proxy-card">' +
         '<div class="ghl-proxy-status"><span class="ghl-proxy-dot" id="ghl-proxy-dot"></span><span id="ghl-proxy-state">Disconnected</span></div>' +
         '<div>' +
@@ -542,8 +560,12 @@
       '<div class="ghl-me-card ghl-proxy-card" style="margin-top:10px">' +
         '<div class="ghl-proxy-url-lbl">Catalogus Scan</div>' +
         '<div class="ghl-proxy-url" id="ghl-proxy-catalog">—</div>' +
-        '<div class="ghl-proxy-btn" id="ghl-proxy-scan-btn">Scan Again</div>' +
+        '<div id="ghl-proxy-scan-area" style="align-self:stretch"></div>' +
         '<div class="ghl-proxy-btn" id="ghl-proxy-export-btn" style="margin-top:6px">Export JSON</div>' +
+      '</div>' +
+      '<div class="ghl-me-card ghl-proxy-card" style="margin-top:10px">' +
+        '<div class="ghl-proxy-url-lbl">Gheloo Hub</div>' +
+        '<div class="ghl-proxy-btn" id="ghl-proxy-hub-btn" style="margin-top:10px">Open Hub</div>' +
       '</div>';
     panelEl.appendChild(proxyContent);
     contentEls['proxy'] = proxyContent;
@@ -556,6 +578,10 @@
       if (url) proxyContent.querySelector('#ghl-proxy-url').textContent = url.replace(/^wss?:\/\//, '');
     }
 
+    proxyContent.querySelector('#ghl-proxy-hub-btn').addEventListener('click', function() {
+      window.open('https://hub.databin.uk/', '_blank');
+    });
+
     // Room Clone (extensions/room-clone.js) exposes catalog coverage + live scan
     // progress on window.__ghl_rc* so this tab can show it without importing the module.
     let _catalogMsgUntil = 0; // suppresses the 1s auto-refresh below while a one-off status
@@ -566,17 +592,50 @@
       if (!el) return;
       const scan = window.__ghl_rcScanStatus && window.__ghl_rcScanStatus();
       if (scan && scan.scanning) {
-        el.textContent = 'Scanning... ' + scan.found + ' offer(s) found, ' + scan.remaining + ' page(s) left';
+        el.textContent = (scan.paused ? 'Paused... ' : 'Scanning... ') + scan.found + ' offer(s) found, ' + scan.remaining + ' page(s) left';
         return;
       }
       const result = window.__ghl_rcCoverage && window.__ghl_rcCoverage();
       el.textContent = result ? (result.have + '/' + result.total + ' (' + result.pct.toFixed(1) + '%)') : 'no data yet';
     }
-    renderCatalogCoverage();
-    setInterval(renderCatalogCoverage, 1000);
-    proxyContent.querySelector('#ghl-proxy-scan-btn').addEventListener('click', function() {
-      if (window.__ghl_rcStartScan) window.__ghl_rcStartScan();
+
+    // Scan Again -> red Pause (while running) -> splits into green Restart / red Stop
+    // (once paused). Re-rendered on the same 1s tick as the coverage line so it also
+    // flips back to "Scan Again" on its own once a scan finishes naturally.
+    const scanArea = proxyContent.querySelector('#ghl-proxy-scan-area');
+    let _lastScanAreaState = null;
+    function renderScanArea() {
+      const scan = window.__ghl_rcScanStatus && window.__ghl_rcScanStatus();
+      const state = !scan || !scan.scanning ? 'idle' : (scan.paused ? 'paused' : 'scanning');
+      if (state === _lastScanAreaState) return;
+      _lastScanAreaState = state;
+      if (state === 'idle') {
+        scanArea.innerHTML = '<div class="ghl-proxy-btn" data-scan-action="start" style="margin-top:10px">Scan Again</div>';
+      } else if (state === 'scanning') {
+        scanArea.innerHTML = '<div class="ghl-proxy-btn ghl-proxy-btn-danger" data-scan-action="pause" style="margin-top:10px">Pause</div>';
+      } else {
+        scanArea.innerHTML =
+          '<div class="ghl-proxy-btn-row">' +
+            '<div class="ghl-proxy-btn ghl-proxy-btn-success" data-scan-action="restart">Restart</div>' +
+            '<div class="ghl-proxy-btn ghl-proxy-btn-danger" data-scan-action="stop">Stop</div>' +
+          '</div>';
+      }
+    }
+    scanArea.addEventListener('click', function(e) {
+      const btn = e.target.closest('[data-scan-action]');
+      if (!btn) return;
+      const action = btn.dataset.scanAction;
+      if (action === 'start' && window.__ghl_rcStartScan) window.__ghl_rcStartScan();
+      else if (action === 'pause' && window.__ghl_rcPauseScan) window.__ghl_rcPauseScan();
+      else if (action === 'restart' && window.__ghl_rcRestartScan) window.__ghl_rcRestartScan();
+      else if (action === 'stop' && window.__ghl_rcStopScan) window.__ghl_rcStopScan();
+      _lastScanAreaState = null; // force immediate re-render instead of waiting for the next 1s tick
+      renderScanArea();
     });
+
+    renderCatalogCoverage();
+    renderScanArea();
+    setInterval(function() { renderCatalogCoverage(); renderScanArea(); }, 1000);
     proxyContent.querySelector('#ghl-proxy-export-btn').addEventListener('click', function() {
       const catalogEl = proxyContent.querySelector('#ghl-proxy-catalog');
       if (!window.__ghl_rcExportCatalog) { catalogEl.textContent = 'Export niet beschikbaar (Room Clone niet geladen).'; _catalogMsgUntil = Date.now() + 3000; return; }

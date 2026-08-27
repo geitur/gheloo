@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="favicon.png">
+<title>Hub</title>
+<style>
+:root {
+  --bg:       oklch(0.08 0.014 265);
+  --card:     oklch(0.115 0.012 265);
+  --primary:  oklch(0.68 0.19 265);
+  --border:   oklch(0.24 0.013 265);
+  --text:     oklch(0.94 0.006 265);
+  --muted:    oklch(0.56 0.016 265);
+  --accent:   oklch(0.21 0.015 265);
+  --radius:   8px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+body{display:flex;align-items:center;justify-content:center;padding:24px}
+.wrap{width:100%;max-width:720px}
+.eyebrow{font:700 10px/1 monospace;letter-spacing:2px;color:var(--primary);text-transform:uppercase;text-align:center;margin-bottom:8px}
+.title{font-size:26px;font-weight:800;text-align:center;margin-bottom:36px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.site-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;text-decoration:none;color:var(--text);display:flex;flex-direction:column;gap:8px;transition:border-color .15s,transform .15s}
+.site-card:hover{border-color:var(--primary);transform:translateY(-2px)}
+.site-icon{width:34px;height:34px;border-radius:8px;background:color-mix(in oklch,var(--primary) 15%,transparent);color:var(--primary);display:flex;align-items:center;justify-content:center}
+.site-icon svg{width:17px;height:17px}
+.site-name{font-size:15px;font-weight:700}
+.site-desc{font-size:12px;color:var(--muted);line-height:1.4}
+#db-usage{position:fixed;right:14px;bottom:12px;font-size:10px;color:var(--muted);opacity:.55;font-family:ui-monospace,monospace;letter-spacing:.2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Gheloo</div>
+  <div class="title">Hub</div>
+  <div class="grid">
+    <a class="site-card" href="https://accounts.databin.uk/">
+      <span class="site-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="16" r="1.5" fill="currentColor" stroke="none"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+      <span class="site-name">Accounts</span>
+      <span class="site-desc">Database accounts beheren, importeren en sorteren op goud/groen/rood.</span>
+    </a>
+    <a class="site-card" href="https://userlogger.databin.uk/">
+      <span class="site-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg></span>
+      <span class="site-name">User Database</span>
+      <span class="site-desc">Gescande gebruikers doorzoeken, filteren en exporteren.</span>
+    </a>
+    <a class="site-card" href="https://deurwaarder.databin.uk/">
+      <span class="site-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 3 6v6c0 5 4 8 9 10 5-2 9-5 9-10V6l-9-4Z"/></svg></span>
+      <span class="site-name">Deurwaarder</span>
+      <span class="site-desc">SS item case management: inventory, pullbacks, scams, holders.</span>
+    </a>
+    <a class="site-card" href="https://furnis.databin.uk/">
+      <span class="site-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span>
+      <span class="site-name">Furnis</span>
+      <span class="site-desc">Gedeelde catalogus-scan van alle Gheloo-gebruikers doorzoeken.</span>
+    </a>
+  </div>
+</div>
+<div id="db-usage"></div>
+<script>
+(function () {
+  // Whole-disk usage (not just Postgres) — VM's actual boot volume is ~46.6GB
+  // (`df -h /` on the box; Oracle Always Free allows up to 200GB total block
+  // storage, but the default boot volume is 50GB unless manually resized/extra
+  // volumes attached, which hasn't happened here). /usr/local/bin/disk-usage.sh
+  // runs `df /` every 5min via cron and writes this file — a live query isn't
+  // possible from a static site, so this is refreshed on that interval, not live.
+  fetch('/diskusage.json')
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      if (!d) return;
+      var usedGb = d.used_bytes / 1024 / 1024 / 1024;
+      var totalGb = d.total_bytes / 1024 / 1024 / 1024;
+      var pct = (d.used_bytes / d.total_bytes) * 100;
+      document.getElementById('db-usage').textContent =
+        'DB: ' + usedGb.toFixed(1) + ' GB / ' + totalGb.toFixed(1) + ' GB (' + pct.toFixed(1) + '%)';
+    })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>

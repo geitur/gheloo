@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="favicon.png">
+<title>Furnis</title>
+<style>
+:root {
+  --bg:       oklch(0.08 0.014 265);
+  --card:     oklch(0.115 0.012 265);
+  --sidebar:  oklch(0.105 0.013 265);
+  --primary:  oklch(0.68 0.19 265);
+  --border:   oklch(0.24 0.013 265);
+  --text:     oklch(0.94 0.006 265);
+  --muted:    oklch(0.56 0.016 265);
+  --accent:   oklch(0.21 0.015 265);
+  --input:    oklch(0.19 0.012 265);
+  --radius:   8px;
+  --green:    oklch(0.65 0.18 160);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+#shell{display:flex;min-height:100vh}
+#sidebar{width:220px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.sb-header{padding:18px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
+.brand-row{display:flex;align-items:center;gap:10px}
+.brand-mark{width:30px;height:30px;border-radius:8px;background:color-mix(in oklch,var(--primary) 18%,transparent);color:var(--primary);display:flex;align-items:center;justify-content:center;font:800 13px system-ui;flex-shrink:0}
+.eyebrow{font:700 9px/1 monospace;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:3px}
+.title{font:700 15px/1.2 system-ui;color:var(--text)}
+.hub-back{display:flex;align-items:center;gap:6px;margin:14px 0 0 -7px;padding:5px 7px;border-radius:6px;color:var(--muted);font-size:12px;font-weight:600;text-decoration:none;transition:all .12s;width:fit-content}
+.hub-back:hover{background:var(--accent);color:var(--text)}
+.hub-back svg{width:12px;height:12px;flex-shrink:0}
+#sb-body{padding:14px 16px;flex:1;overflow-y:auto}
+.stat-lbl{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);opacity:.7;margin-bottom:6px}
+.stat-val{font-size:28px;font-weight:800;color:var(--text)}
+.stat-sub{font-size:12px;color:var(--muted);margin-top:4px}
+.stat-bar-track{height:5px;border-radius:3px;background:var(--accent);margin-top:12px;overflow:hidden}
+.stat-bar-fill{height:100%;background:var(--primary);border-radius:3px}
+
+#main{flex:1;padding:24px 28px;min-width:0}
+.page-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.page-title{font-size:20px;font-weight:700}
+.page-sub{font-size:12px;color:var(--muted);margin-top:3px}
+
+.search-input{background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-size:12px;outline:none;width:260px}
+.search-input:focus{border-color:var(--primary)}
+
+.mono{font-family:ui-monospace,monospace;font-size:11px}
+.empty-row td{text-align:center;color:var(--muted);padding:48px!important;font-size:13px}
+
+.tbl-wrap{border:1px solid var(--border);border-radius:var(--radius);overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead th{padding:10px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);background:color-mix(in oklch,var(--card) 50%,var(--bg));border-bottom:1px solid var(--border);white-space:nowrap}
+tbody td{padding:9px 14px;border-bottom:1px solid color-mix(in oklch,var(--border) 50%,transparent);vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
+.ints-cell{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hl-match{background:color-mix(in oklch,var(--primary) 35%,transparent);color:var(--text);border-radius:2px;padding:0 1px}
+.copy-btn{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;border:1px solid var(--border);background:var(--input);color:var(--muted);cursor:pointer;transition:all .12s;flex-shrink:0}
+.copy-btn:hover{border-color:var(--primary);color:var(--primary)}
+.copy-btn.copied{border-color:var(--green);color:var(--green)}
+.copy-btn svg{width:13px;height:13px}
+
+.sort-th{cursor:pointer;user-select:none;display:flex;align-items:center;gap:5px}
+.sort-th:hover{color:var(--text)}
+.sort-th svg{width:10px;height:10px;opacity:.35;transition:opacity .1s,transform .1s}
+.sort-th.sort-asc svg{opacity:1;color:var(--primary)}
+.sort-th.sort-desc svg{opacity:1;color:var(--primary);transform:rotate(180deg)}
+
+.pagination{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:14px;flex-wrap:wrap}
+.pagination .page-info{font-size:12px;color:var(--muted);margin:0 6px}
+.page-jump{width:50px;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;text-align:center;outline:none}
+.page-jump:focus{border-color:var(--primary)}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:7px;font:600 12px/1 inherit;cursor:pointer;border:1px solid transparent;transition:all .12s;white-space:nowrap}
+.btn-outline{background:transparent;border-color:var(--border);color:var(--muted)}
+.btn-outline:hover{border-color:var(--primary);color:var(--primary)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.nav-section-lbl{font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);padding:14px 16px 4px;opacity:.7}
+.tab{display:flex;align-items:center;gap:8px;padding:8px 16px;cursor:pointer;color:var(--muted);font-size:12px;font-weight:600;border:none;background:none;width:100%;text-align:left}
+.tab:hover{background:var(--accent);color:var(--text)}
+.tab.active{background:color-mix(in oklch,var(--primary) 15%,transparent);color:var(--primary)}
+.loading-note{font-size:11px;color:var(--muted);margin-top:8px;opacity:.8}
+</style>
+</head>
+<body>
+<div id="shell">
+  <aside id="sidebar">
+    <div class="sb-header">
+      <div class="brand-row">
+        <div class="brand-mark">G</div>
+        <div>
+          <div class="eyebrow">Gheloo</div>
+          <div class="title">Furnis</div>
+        </div>
+      </div>
+      <a class="hub-back" href="https://hub.databin.uk/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>Terug naar Hub</a>
+    </div>
+    <div class="nav-section-lbl">Datasets</div>
+    <button class="tab active" id="tab-furnis" data-tab="furnis">Koopbaar (catalogus)</button>
+    <button class="tab" id="tab-master" data-tab="master">Alle Furni (compleet)</button>
+    <div id="sb-body">
+      <div class="stat-lbl" id="stat-lbl">Unieke offers bekend</div>
+      <div class="stat-val" id="stat-count">—</div>
+    </div>
+  </aside>
+
+  <div id="main">
+    <div class="page-hdr">
+      <div>
+        <div class="page-title" id="page-title">Catalogus</div>
+        <div class="page-sub" id="page-sub">Gescande offers uit de Room Clone-extensie, samengevoegd van alle gebruikers</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <input class="search-input" id="search" placeholder="Zoek...">
+        <button class="btn btn-outline" id="export-btn">Export TXT</button>
+      </div>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead id="thead-row"></thead>
+        <tbody id="tbl-body">
+          <tr class="empty-row"><td colspan="7">Laden…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination" id="pagination"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

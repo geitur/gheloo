@@ -16,13 +16,6 @@
     }, '*');
   });
 
-  // MAIN world can't call chrome.runtime.getURL directly — relay it here so a content
-  // script UI button can window.open() a bundled extension page (e.g. Deurwaarder).
-  window.addEventListener('message', function(e) {
-    if (e.source !== window || !e.data || e.data.type !== '__ghk_get_ext_url') return;
-    window.postMessage({ type: '__ghk_ext_url', reqId: e.data.reqId, url: chrome.runtime.getURL(e.data.path) }, '*');
-  });
-
   // Room Viewer's renderer bundle: MAIN world asks here, this relays to background.js
   // (the actual fetch+IndexedDB-cache logic lives there, not here — a content script's
   // fetch is bound by the page's CORS policy same as the page's own JS, so it can't reach

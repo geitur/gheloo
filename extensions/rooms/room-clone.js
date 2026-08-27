@@ -4,6 +4,116 @@
   const BLUEPRINTS_KEY = '__ghk_rc_blueprints';
   const CATALOG_KEY     = '__ghk_rc_catalog';
 
+  // Shared catalog DB (furnis.databin.uk) — same self-hosted Postgres+PostgREST as
+  // core/supabase.js, reusing its anon key. Every Gheloo user's scanned offers land
+  // here so the catalog scan is crowdsourced: a fresh install pulls whatever the
+  // community already found instead of re-walking 5500 pages from zero, and every
+  // newly-discovered page here gets pushed back for everyone else.
+  const FURNIS_URL = 'https://furnis.databin.uk/rest/v1/furnis';
+  const FURNIS_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdoZWxvby1zZWxmaG9zdCIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwfQ.9uAMhqRJOL-m_xtTO5duAUOAw-4pKk4LEENcT47crXU';
+  function _furnisHeaders(extra) {
+    return Object.assign({
+      apikey: FURNIS_KEY,
+      Authorization: 'Bearer ' + FURNIS_KEY,
+      'Content-Type': 'application/json',
+    }, extra || {});
+  }
+  // The offer's own "name" field (raw localizationId from the catalog page packet)
+  // turns out to actually BE the furni's classname, not a locale key — so matching it
+  // straight against window.FurniData's classname is exact, unlike the ints[]-based
+  // lookup below, which is only ~92% right (furniClassId == offerId for most items,
+  // per the comment near _parseCatalogPageOffers, but not all). ints[] stays as a
+  // fallback for the rare offer whose name doesn't match any known classname.
+  let _classnameIndexBuilt = false;
+  let _classnameToFurniName = {};
+  function _ensureClassnameIndex() {
+    if (_classnameIndexBuilt) return;
+    const fd = window.FurniData;
+    if (!fd || !fd.ready) return;
+    Object.keys(fd.floor || {}).forEach(function(id) { const e = fd.floor[id]; if (e && e.classname) _classnameToFurniName[e.classname] = e.name; });
+    Object.keys(fd.wall || {}).forEach(function(id) { const e = fd.wall[id]; if (e && e.classname) _classnameToFurniName[e.classname] = e.name; });
+    _classnameIndexBuilt = true;
+  }
+  function _resolveFurniName(offerName, ints) {
+    _ensureClassnameIndex();
+    if (offerName && _classnameToFurniName[offerName]) return _classnameToFurniName[offerName];
+    const fd = window.FurniData;
+    if (!fd) return null;
+    for (let i = 0; i < (ints || []).length; i++) {
+      const entry = (fd.floor && fd.floor[ints[i]]) || (fd.wall && fd.wall[ints[i]]);
+      if (entry && entry.name) return entry.name;
+    }
+    return null;
+  }
+  function _pushOffersToFurnis(offers) {
+    if (!offers.length) return;
+    fetch(FURNIS_URL + '?on_conflict=offer_id', {
+      method: 'POST',
+      headers: _furnisHeaders({ Prefer: 'resolution=merge-duplicates' }),
+      body: JSON.stringify(offers.map(function(o) {
+        return { offer_id: o.offerId, name: o.name, furni_name: _resolveFurniName(o.name, o.ints), page_id: o.pageId, page_title: o.pageTitle, ints: o.ints, updated_at: new Date().toISOString() };
+      })),
+    }).catch(function(e) { _log('Furnis sync mislukt: ' + e.message); });
+  }
+
+  // furni_master mirrors window.FurniData in full (buyable or not — event/quest/wired
+  // types never show up in a catalog scan) so furnis.databin.uk can show "every furni
+  // in the hotel" separately from "furni actually seen in the catalog". FurniData loads
+  // async in core/parsers.js, so this polls briefly for .ready instead of assuming
+  // load order between that script and this one.
+  const FURNI_MASTER_URL = 'https://furnis.databin.uk/rest/v1/furni_master';
+  function _pushMasterFurniData(triesLeft) {
+    const fd = window.FurniData;
+    if (!fd || !fd.ready) {
+      if (triesLeft > 0) setTimeout(function() { _pushMasterFurniData(triesLeft - 1); }, 2000);
+      return;
+    }
+    const rows = [];
+    Object.keys(fd.floor || {}).forEach(function(id) {
+      const f = fd.floor[id];
+      rows.push({ type_id: parseInt(id, 10), name: f.name, description: f.description, classname: f.classname, is_wall: false, updated_at: new Date().toISOString() });
+    });
+    Object.keys(fd.wall || {}).forEach(function(id) {
+      const f = fd.wall[id];
+      rows.push({ type_id: parseInt(id, 10), name: f.name, description: f.description, classname: f.classname, is_wall: true, updated_at: new Date().toISOString() });
+    });
+    if (!rows.length) return;
+    // Batched (500/req) — a 40k+ row single POST body is unnecessarily heavy and this
+    // only needs to run once per session anyway.
+    const BATCH = 500;
+    function sendBatch(i) {
+      if (i >= rows.length) return;
+      fetch(FURNI_MASTER_URL + '?on_conflict=type_id,is_wall', {
+        method: 'POST',
+        headers: _furnisHeaders({ Prefer: 'resolution=merge-duplicates' }),
+        body: JSON.stringify(rows.slice(i, i + BATCH)),
+      }).then(function() { sendBatch(i + BATCH); })
+        .catch(function(e) { _log('Furni master sync mislukt: ' + e.message); });
+    }
+    sendBatch(0);
+  }
+  function _pullSharedCatalog() {
+    fetch(FURNIS_URL + '?select=offer_id,name,page_id,page_title,ints', { headers: _furnisHeaders() })
+      .then(function(res) { return res.ok ? res.json() : []; })
+      .then(function(rows) {
+        if (!rows || !rows.length) return;
+        const known = new Set(_catalogItems.map(function(c) { return c.offerId; }));
+        let added = 0;
+        rows.forEach(function(r) {
+          if (known.has(r.offer_id)) return;
+          _catalogItems.push({ offerId: r.offer_id, name: r.name, pageId: r.page_id, pageTitle: r.page_title, ints: r.ints || [] });
+          known.add(r.offer_id);
+          added++;
+        });
+        if (added) {
+          _saveCatalog();
+          _log('Furnis: ' + added + ' offer(s) overgenomen van andere Gheloo-gebruikers (' + _catalogItems.length + ' totaal bekend).');
+          _renderCatalogStatus();
+        }
+      })
+      .catch(function(e) { _log('Furnis pull mislukt: ' + e.message); });
+  }
+
   let _blueprints  = [];
   let _catalogItems = [];
   let _scanning     = false;
@@ -158,30 +268,65 @@
     _renderCatalogStatus();
   }
 
+  let _scanPaused = false;
+
+  // Checked against furnis.databin.uk fresh on every scan start/restart rather than
+  // this session's own _catalogItems — other Gheloo users may have scanned pages this
+  // browser never saw, and relying on local state alone would re-walk pages that are
+  // already known community-wide. Falls back to local knowledge only if the DB is
+  // unreachable, so a network hiccup doesn't block scanning entirely.
+  function _fetchKnownPageIdsFromFurnis() {
+    return fetch(FURNIS_URL + '?select=page_id', { headers: _furnisHeaders() })
+      .then(function(res) { return res.ok ? res.json() : null; })
+      .then(function(rows) { return rows ? new Set(rows.map(function(r) { return r.page_id; })) : null; })
+      .catch(function() { return null; });
+  }
+
   // Brute-force page walk, now that the parser is actually correct (schema-driven, not
   // heuristic-guessed) so it's worth exhaustively covering. The always-on CatalogPage
   // listener below does the actual saving — this just fires the requests.
   function startFullPageScan(fromId, toId) {
-    if (_scanning) return;
+    if (_scanning && !_scanPaused) return;
     _scanning = true;
-    _scanQueue = [];
-    for (let i = fromId; i >= toId; i--) _scanQueue.push(i);
-    _log('Full scan started — walking pages ' + fromId + ' down to ' + toId + '...');
+    _scanPaused = false;
+    _log('Checking furnis.databin.uk for already-known pages...');
     _renderCatalogStatus();
-    _scanTick();
+    _fetchKnownPageIdsFromFurnis().then(function(dbKnown) {
+      if (!_scanning || _scanPaused) return; // stopped/paused again before this resolved
+      const known = dbKnown || new Set(_catalogItems.map(function(c) { return c.pageId; }));
+      _scanQueue = [];
+      for (let i = fromId; i >= toId; i--) if (!known.has(i)) _scanQueue.push(i);
+      const skipped = (fromId - toId + 1) - _scanQueue.length;
+      _log('Full scan started — walking pages ' + fromId + ' down to ' + toId + ' (' + _scanQueue.length + ' unknown, ' + skipped + ' already known & skipped'
+        + (dbKnown ? ', checked against furnis.databin.uk' : ', furnis.databin.uk unreachable — used local data only') + ')...');
+      _renderCatalogStatus();
+      _scanTick();
+    });
+  }
+
+  function pauseCatalogScan() {
+    if (!_scanning || _scanPaused) return;
+    _scanPaused = true;
+    clearTimeout(_scanTimer);
+    _log('Catalog scan paused (' + _scanQueue.length + ' page(s) left).');
+    _renderCatalogStatus();
   }
 
   function stopCatalogScan() {
     _scanning = false;
+    _scanPaused = false;
     _scanQueue = [];
     clearTimeout(_scanTimer);
     _log('Catalog scan stopped.');
     _renderCatalogStatus();
   }
 
-  // Exposed so the Gheloo Proxy tab's "Scan Again" button can kick off a Full Scan
-  // without reaching into this module's private state.
+  // Exposed so the Gheloo Proxy tab's scan controls can drive a Full Scan without
+  // reaching into this module's private state.
   window.__ghl_rcStartScan = function() { startFullPageScan(5500, 0); };
+  window.__ghl_rcPauseScan = pauseCatalogScan;
+  window.__ghl_rcRestartScan = function() { startFullPageScan(5500, 0); };
+  window.__ghl_rcStopScan = stopCatalogScan;
 
   // Exposed so the Gheloo Proxy tab's "Export" button can get the scanned catalog out of
   // localStorage — that alone is lost if the user ever clears browsing data, and is stuck
@@ -212,7 +357,7 @@
   // Exposed so the Proxy tab can show live scan progress (pages left, offers found)
   // while a Full Scan is running, instead of just the static coverage percentage.
   window.__ghl_rcScanStatus = function() {
-    return { scanning: _scanning, remaining: _scanQueue.length, found: _catalogItems.length };
+    return { scanning: _scanning, paused: _scanPaused, remaining: _scanQueue.length, found: _catalogItems.length };
   };
 
   function _scanTick() {
@@ -309,10 +454,12 @@
     const page = _parseCatalogPageOffers(p.raw);
     if (!page || !page.offers.length) return;
     if (_catalogItems.some(function(c) { return c.pageId === page.pageId; })) return;
-    page.offers.forEach(function(o) {
-      _catalogItems.push({ offerId: o.offerId, name: o.name, pageId: page.pageId, pageTitle: page.pageTitle, ints: o.ints });
+    const newItems = page.offers.map(function(o) {
+      return { offerId: o.offerId, name: o.name, pageId: page.pageId, pageTitle: page.pageTitle, ints: o.ints };
     });
+    newItems.forEach(function(o) { _catalogItems.push(o); });
     _saveCatalog();
+    _pushOffersToFurnis(newItems);
     _log('Saved ' + page.offers.length + ' item(s) from page ' + page.pageId + ' (' + (_catalogItems.length) + ' total known).');
     _renderCatalogStatus();
   });
@@ -2001,6 +2148,8 @@
   function init() {
     _loadBlueprints();
     _loadCatalog();
+    _pullSharedCatalog();
+    _pushMasterFurniData(15); // ~30s of retries — FurniData usually loads within a few seconds
     buildPanel();
     _loadAllThumbsFromDb().then(_renderBlueprints);
   }
