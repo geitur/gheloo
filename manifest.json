@@ -38,6 +38,7 @@
         "extensions/rooms/floor-editor.js",
         "extensions/rooms/room-viewer-loader.js",
         "extensions/rooms/poster-mover.js",
+        "extensions/rooms/room-deleter.js",
         "extensions/fun/user-database.js",
         "extensions/fun/mimic.js",
         "extensions/fun/friendbot.js",

@@ -19,6 +19,7 @@
       roomclone: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 16v3a2 2 0 002 2h9a2 2 0 002-2v-9a2 2 0 00-2-2h-3"/></svg>',
       areamover: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M19 9l3 3-3 3M9 19l3 3 3-3"/><path d="M2 12h20M12 2v20"/></svg>',
       postermover: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none"/><path d="M21 15l-5-5L5 21"/></svg>',
+      roomdeleter: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a1 1 0 01-1 1H7a1 1 0 01-1-1L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
       photolibrary: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 4h-5L7 7H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="4"/></svg>',
       userdatabase: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>',
       fun: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 13.5c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2"/><circle cx="9" cy="9.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1" fill="currentColor" stroke="none"/></svg>',
@@ -252,6 +253,7 @@
             } },
             { id: 'areamover', title: 'Area Mover', subtitle: 'Shift a rectangular area of furni, stack by stack', icon: ICONS.areamover, close: false, onClick: showPanelById('__am_panel') },
             { id: 'postermover', title: 'Poster Mover', subtitle: 'Move wall items everywhere', icon: ICONS.postermover, close: false, onClick: showPanelById('__pm_panel') },
+            { id: 'roomdeleter', title: 'Room Deleter', subtitle: 'Permanently delete every room you own', icon: ICONS.roomdeleter, close: false, onClick: showPanelById('__rd_panel') },
           ]},
         ],
       },
@@ -1284,7 +1286,7 @@
 
   // Bring-to-front on click: clicking any panel raises it above the others.
   (function() {
-    var _IDS = ['__hbl','__snd','__mac','__rc','__fb','__mb','__mpa_panel','__mimic','__tst','__ext','__fh_panel','__rclone','__photolib','__ins_panel','__am_panel','__userdb','__udb_nc','__rv_panel','__wc_panel','__bg','__pm_panel','__ws_panel'];
+    var _IDS = ['__hbl','__snd','__mac','__rc','__fb','__mb','__mpa_panel','__mimic','__tst','__ext','__fh_panel','__rclone','__photolib','__ins_panel','__am_panel','__userdb','__udb_nc','__rv_panel','__wc_panel','__bg','__pm_panel','__ws_panel','__rd_panel'];
     var _gameStack = []; // back = bottom, front = top
 
     // Find the stacking host for a game panel.

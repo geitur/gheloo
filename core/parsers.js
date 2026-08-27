@@ -909,8 +909,19 @@
 
   // --- Inventory ---
 
+  // dataTypeRaw's low byte is the real category (same 0/1/2/3/5 switch below); bit 0x100
+  // is a separate flag meaning "this item also carries a unique edition number/size pair"
+  // (limited editions, e.g. "37/100") — same flag convention already confirmed and used
+  // for room floor items in the Objects/ObjectAdd parsers above (dataTypeRaw & 0x100).
+  // Before this, an LTD item's raw cat (0-255 range plus the 0x100 bit, e.g. 256) fell
+  // through the switch's default with no case matching, and — worse — left the two
+  // trailing ints unread, misaligning every item after it in the same FurniList packet,
+  // which threw on the next item's field reads and silently truncated window.Inventory to
+  // whatever had parsed before the LTD item (confirmed byte-exact against a live capture,
+  // zero leftover bytes once the flag is handled).
   function parseInventoryStuff(r) {
-    const cat = r.int();
+    const dataTypeRaw = r.int();
+    const cat = dataTypeRaw & 0xFF;
     let data = null;
     switch (cat) {
       case 0: data = { state: r.str() }; break;
@@ -920,7 +931,9 @@
       case 5: { const c=r.int(); const arr=[]; for(let i=0;i<c;i++) arr.push(r.int()); data={intArray:arr}; break; }
       default: data = null; break;
     }
-    return { category: cat, data };
+    const result = { category: cat, data };
+    if (dataTypeRaw & 0x100) { result.uniqueSerial = r.int(); result.uniqueSerialSize = r.int(); }
+    return result;
   }
 
   function parseInventoryItem(r) {
