@@ -425,8 +425,14 @@
       });
     } catch (e) { /* best-effort — a missed poll just gets caught on the next one */ }
   }
-  function _scanSyncStart() {
-    _scanSyncSince = new Date().toISOString();
+  function _scanSyncStart(since) {
+    // Defaults to now, but _scanStart passes a timestamp captured BEFORE
+    // _fetchAllKnownIds() — that fetch can take several seconds for hundreds of
+    // thousands of rows, and anything another account scans DURING that window would
+    // otherwise fall in the gap between the snapshot (already taken) and the poll
+    // (which used to only start watching from after the snapshot finished) and get
+    // re-probed here anyway.
+    _scanSyncSince = since || new Date().toISOString();
     if (_scanSyncTimer) clearInterval(_scanSyncTimer);
     _scanSyncTimer = setInterval(_scanPollNewIds, SCAN_SYNC_INTERVAL_MS);
   }
@@ -544,6 +550,7 @@
     const btn = panel.querySelector('#__udb_scan_btn');
     if (btn) btn.disabled = true;
     _scanSetStatus('Loading already-logged ids…');
+    const fetchStartedAt = new Date().toISOString();
     const known = await _fetchAllKnownIds();
     _scanKnownIds = known.all;
 
@@ -580,7 +587,7 @@
     _scanActive = true;
     if (btn) { btn.innerHTML = '&#9208;'; btn.title = 'Pause user-id scan'; }
     _logEvent('scan_start', mode + (window._selfName ? ' (' + window._selfName + ')' : ''));
-    _scanSyncStart();
+    _scanSyncStart(fetchStartedAt);
     _scanTick();
     _scanTimer = setInterval(_scanTick, _scanIntervalMs);
   }
