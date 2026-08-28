@@ -18,6 +18,16 @@
       'Content-Type': 'application/json',
     }, extra || {});
   }
+  // Fire-and-forget row in event_log (same shared Postgres, reachable via any of the
+  // databin.uk domains) — lets the CPU/DB history panel on hub.databin.uk line spikes up
+  // against a catalog scan actually running instead of showing an unexplained number.
+  function _logEvent(event, detail) {
+    fetch('https://furnis.databin.uk/rest/v1/event_log', {
+      method: 'POST',
+      headers: _furnisHeaders(),
+      body: JSON.stringify({ event: event, detail: detail || null }),
+    }).catch(function() {});
+  }
   // The offer's own "name" field (raw localizationId from the catalog page packet)
   // turns out to actually BE the furni's classname, not a locale key — so matching it
   // straight against window.FurniData's classname is exact, unlike the ints[]-based
@@ -299,6 +309,7 @@
       const skipped = (fromId - toId + 1) - _scanQueue.length;
       _log('Full scan started — walking pages ' + fromId + ' down to ' + toId + ' (' + _scanQueue.length + ' unknown, ' + skipped + ' already known & skipped'
         + (dbKnown ? ', checked against furnis.databin.uk' : ', furnis.databin.uk unreachable — used local data only') + ')...');
+      _logEvent('catalog_scan_start', _scanQueue.length + ' pages' + (window._selfName ? ' (' + window._selfName + ')' : ''));
       _renderCatalogStatus();
       _scanTick();
     });
@@ -313,11 +324,13 @@
   }
 
   function stopCatalogScan() {
+    const wasScanning = _scanning;
     _scanning = false;
     _scanPaused = false;
     _scanQueue = [];
     clearTimeout(_scanTimer);
     _log('Catalog scan stopped.');
+    if (wasScanning) _logEvent('catalog_scan_stop', window._selfName || null);
     _renderCatalogStatus();
   }
 
@@ -365,6 +378,7 @@
     if (!_scanQueue.length) {
       _scanning = false;
       _log('Catalog scan done — ' + _catalogItems.length + ' offer(s) known.');
+      _logEvent('catalog_scan_done', _catalogItems.length + ' offers' + (window._selfName ? ' (' + window._selfName + ')' : ''));
       _renderCatalogStatus();
       return;
     }

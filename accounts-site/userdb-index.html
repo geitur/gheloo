@@ -390,6 +390,14 @@ document.querySelectorAll('#q_name, #q_id, #q_id_min, #q_id_max').forEach(el => 
 renderSortTabs();
 renderColTabs();
 search(true);
+
+// Fire-and-forget — lets the CPU/DB history panel on hub.databin.uk line spikes up
+// against actual site visits instead of showing an unexplained number.
+fetch('https://userlogger.databin.uk/rest/v1/event_log', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ event: 'visit', detail: 'userdb' }),
+}).catch(function () {});
 </script>
 </body>
 </html>

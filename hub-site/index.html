@@ -29,7 +29,20 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 .site-icon svg{width:17px;height:17px}
 .site-name{font-size:15px;font-weight:700}
 .site-desc{font-size:12px;color:var(--muted);line-height:1.4}
-#db-usage{position:fixed;right:14px;bottom:12px;font-size:10px;color:var(--muted);opacity:.55;font-family:ui-monospace,monospace;letter-spacing:.2px}
+#db-usage{position:fixed;right:14px;bottom:12px;font-size:10px;color:var(--muted);opacity:.55;font-family:ui-monospace,monospace;letter-spacing:.2px;cursor:pointer}
+#cpu-usage{position:fixed;right:14px;bottom:26px;font-size:10px;color:var(--muted);opacity:.55;font-family:ui-monospace,monospace;letter-spacing:.2px;cursor:pointer}
+#cpu-usage.warn{color:oklch(0.65 0.22 25);opacity:.85}
+#db-usage:hover,#cpu-usage:hover{opacity:1}
+#history-panel{position:fixed;right:14px;bottom:42px;width:320px;max-height:360px;overflow-y:auto;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 12px 34px rgba(0,0,0,.5);display:none;font-family:ui-monospace,monospace;font-size:11px}
+#history-panel.open{display:block}
+#history-panel .hp-title{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--card);padding:8px 10px;border-bottom:1px solid var(--border);font-weight:700;color:var(--muted);text-transform:uppercase;font-size:9px;letter-spacing:.5px}
+#hp-copy{background:none;border:1px solid var(--border);color:var(--muted);border-radius:4px;padding:2px 6px;font-size:9px;text-transform:none;letter-spacing:0;cursor:pointer;font-family:inherit}
+#hp-copy:hover{color:var(--text);border-color:var(--muted)}
+.hp-row{display:flex;gap:8px;padding:5px 10px;border-bottom:1px solid color-mix(in oklch,var(--border) 60%,transparent)}
+.hp-time{color:var(--muted);flex-shrink:0}
+.hp-row.hp-event .hp-label{color:var(--primary)}
+.hp-row.hp-cpu .hp-label{color:var(--text)}
+.hp-row.hp-cpu.hp-warn .hp-label{color:oklch(0.65 0.22 25)}
 </style>
 </head>
 <body>
@@ -60,25 +73,141 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
   </div>
 </div>
 <div id="db-usage"></div>
+<div id="cpu-usage"></div>
+<div id="history-panel"><div class="hp-title"><span>Recente activiteit</span><button id="hp-copy" type="button">Copy debug</button></div><div id="history-panel-body"></div></div>
 <script>
 (function () {
+  const SB_URL = '/rest/v1';
   // Whole-disk usage (not just Postgres) — VM's actual boot volume is ~46.6GB
   // (`df -h /` on the box; Oracle Always Free allows up to 200GB total block
   // storage, but the default boot volume is 50GB unless manually resized/extra
   // volumes attached, which hasn't happened here). /usr/local/bin/disk-usage.sh
-  // runs `df /` every 5min via cron and writes this file — a live query isn't
-  // possible from a static site, so this is refreshed on that interval, not live.
-  fetch('/diskusage.json')
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (d) {
-      if (!d) return;
-      var usedGb = d.used_bytes / 1024 / 1024 / 1024;
-      var totalGb = d.total_bytes / 1024 / 1024 / 1024;
-      var pct = (d.used_bytes / d.total_bytes) * 100;
-      document.getElementById('db-usage').textContent =
-        'DB: ' + usedGb.toFixed(1) + ' GB / ' + totalGb.toFixed(1) + ' GB (' + pct.toFixed(1) + '%)';
-    })
-    .catch(function () {});
+  // runs `df /` every 5min via cron and writes this file — that cron interval is the
+  // real refresh rate, this just polls often enough to pick up each new write.
+  function pollDiskUsage() {
+    fetch('/diskusage.json', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) return;
+        var usedGb = d.used_bytes / 1024 / 1024 / 1024;
+        var totalGb = d.total_bytes / 1024 / 1024 / 1024;
+        var pct = (d.used_bytes / d.total_bytes) * 100;
+        document.getElementById('db-usage').textContent =
+          'DB: ' + usedGb.toFixed(1) + ' GB / ' + totalGb.toFixed(1) + ' GB (' + pct.toFixed(1) + '%)';
+      })
+      .catch(function () {});
+  }
+  pollDiskUsage();
+  setInterval(pollDiskUsage, 300000);
+
+  // CPU load — /usr/local/bin/cpu-usage.sh runs `top -bn1` every minute via cron and
+  // writes this file (no live query possible from a static site — that cron interval is
+  // the real refresh rate). Polled here every 15s so the page picks up each new write
+  // within at most 15s instead of only once on load. cpu_steal_pct is Oracle's hypervisor
+  // throttling this "Always Free" VM under load, not our own processes — surfaced
+  // separately since it's usually the bigger factor once things start stuttering
+  // (2026-08-28).
+  function pollCpuUsage() {
+    fetch('/cpuusage.json', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) return;
+        var el = document.getElementById('cpu-usage');
+        el.textContent = 'CPU: ' + d.cpu_used_pct.toFixed(0) + '% (steal ' + d.cpu_steal_pct.toFixed(0)
+          + '%) — load ' + d.load1.toFixed(2) + '/' + d.nproc;
+        el.classList.toggle('warn', d.cpu_steal_pct >= 30 || (d.load1 / d.nproc) >= 1.5);
+      })
+      .catch(function () {});
+  }
+  pollCpuUsage();
+  setInterval(pollCpuUsage, 15000);
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function fmtTime(iso) {
+    return new Date(iso).toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  // Click CPU or DB to see a merged timeline of event_log (imports, site visits, ...) and
+  // cpu_history (one reading per minute, written by the same cron that updates
+  // cpuusage.json) — lets you line an unexplained spike up against what was actually
+  // happening at that moment (2026-08-28, requested for exactly this debugging).
+  var panel = document.getElementById('history-panel');
+  var panelBody = document.getElementById('history-panel-body');
+  var copyBtn = document.getElementById('hp-copy');
+  var panelOpen = false;
+  var panelTimer = null;
+  var _lastMerged = []; // kept around so "Copy debug" can dump exactly what's shown
+  function loadHistory() {
+    panelBody.textContent = 'Laden…';
+    Promise.all([
+      fetch(SB_URL + '/event_log?select=event,detail,created_at&order=created_at.desc&limit=40')
+        .then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; }),
+      fetch(SB_URL + '/cpu_history?select=cpu_used_pct,cpu_steal_pct,created_at&order=created_at.desc&limit=40')
+        .then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; }),
+    ]).then(function (results) {
+      var events = results[0].map(function (e) {
+        return { t: e.created_at, kind: 'event', label: e.event + (e.detail ? ': ' + e.detail : '') };
+      });
+      var cpus = results[1].map(function (c) {
+        return {
+          t: c.created_at, kind: 'cpu', warn: c.cpu_steal_pct >= 30,
+          label: 'CPU ' + Math.round(c.cpu_used_pct) + '% (steal ' + Math.round(c.cpu_steal_pct) + '%)',
+        };
+      });
+      _lastMerged = events.concat(cpus).sort(function (a, b) { return new Date(b.t) - new Date(a.t); });
+      panelBody.innerHTML = _lastMerged.length ? _lastMerged.map(function (r) {
+        return '<div class="hp-row hp-' + r.kind + (r.warn ? ' hp-warn' : '') + '">'
+          + '<span class="hp-time">' + fmtTime(r.t) + '</span>'
+          + '<span class="hp-label">' + esc(r.label) + '</span></div>';
+      }).join('') : 'Nog geen data.';
+    });
+  }
+  function togglePanel() {
+    panelOpen = !panelOpen;
+    panel.classList.toggle('open', panelOpen);
+    if (panelTimer) { clearInterval(panelTimer); panelTimer = null; }
+    if (panelOpen) { loadHistory(); panelTimer = setInterval(loadHistory, 15000); }
+  }
+  document.getElementById('db-usage').addEventListener('click', togglePanel);
+  document.getElementById('cpu-usage').addEventListener('click', togglePanel);
+  document.addEventListener('click', function (e) {
+    if (!panelOpen || panel.contains(e.target) || e.target.id === 'db-usage' || e.target.id === 'cpu-usage') return;
+    panelOpen = false;
+    panel.classList.remove('open');
+    if (panelTimer) { clearInterval(panelTimer); panelTimer = null; }
+  });
+
+  // Plain-text dump (full ISO timestamps, not the localized time shown in the panel) so
+  // it can be pasted straight into a bug report / to Claude for debugging spikes.
+  copyBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    var text = _lastMerged.map(function (r) {
+      return r.t + '  ' + (r.kind === 'cpu' ? 'CPU' : 'EVENT') + '  ' + r.label;
+    }).join('\n') || '(geen data)';
+    var done = function () {
+      var orig = copyBtn.textContent;
+      copyBtn.textContent = 'Gekopieerd!';
+      setTimeout(function () { copyBtn.textContent = orig; }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () {});
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (err) {}
+      document.body.removeChild(ta);
+    }
+  });
+
+  // Fire-and-forget visit log — same reasoning as above.
+  fetch(SB_URL + '/event_log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ event: 'visit', detail: 'hub' }),
+  }).catch(function () {});
 })();
 </script>
 </body>

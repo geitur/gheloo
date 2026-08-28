@@ -12,6 +12,17 @@
     'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
   };
 
+  // Fire-and-forget row in event_log — lets the CPU/DB history panel on hub.databin.uk
+  // line spikes up against what was actually running (the scanner is one of the biggest
+  // CPU drivers on that shared VM) instead of showing an unexplained number.
+  function _logEvent(event, detail) {
+    fetch(SUPABASE_URL + '/rest/v1/event_log', {
+      method: 'POST',
+      headers: Object.assign({}, HEADERS, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ event: event, detail: detail || null }),
+    }).catch(function() {});
+  }
+
   let _all = [];
   let _selId = null;
   let _loaded = false;
@@ -550,6 +561,7 @@
 
     _scanActive = true;
     if (btn) { btn.innerHTML = '&#9208;'; btn.title = 'Pause user-id scan'; }
+    _logEvent('scan_start', mode + (window._selfName ? ' (' + window._selfName + ')' : ''));
     _scanSyncStart();
     _scanTick();
     _scanTimer = setInterval(_scanTick, SCAN_INTERVAL_MS);
@@ -558,6 +570,7 @@
   function _scanStop() {
     if (_scanTimer) clearInterval(_scanTimer);
     _scanTimer = null;
+    if (_scanActive) _logEvent('scan_stop', window._selfName || null);
     _scanActive = false;
     _scanSyncStop();
     const btn = panel && panel.querySelector('#__udb_scan_btn');

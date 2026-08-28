@@ -384,4 +384,11 @@
 
   setupEvents();
   loadTab('furnis');
+
+  // Fire-and-forget — lets the CPU/DB history panel on hub.databin.uk line spikes up
+  // against actual site visits instead of showing an unexplained number.
+  fetch(SB_URL + '/event_log', {
+    method: 'POST', headers: HEADERS,
+    body: JSON.stringify({ event: 'visit', detail: 'furnis' }),
+  }).catch(() => {});
 })();

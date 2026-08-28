@@ -3,9 +3,6 @@
   // Same-origin under Caddy on accounts.databin.uk (proxied to /rest/v1), so no CORS
   // header is needed as long as this site and the API share that domain.
   const SB_URL = '/rest/v1';
-  // Cross-origin to the other Gheloo site — its PostgREST already sends
-  // Access-Control-Allow-Origin: * so no CORS setup needed on either side.
-  const USERDB_URL = 'https://userlogger.databin.uk/rest/v1';
   const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdoZWxvby1zZWxmaG9zdCIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwfQ.9uAMhqRJOL-m_xtTO5duAUOAw-4pKk4LEENcT47crXU';
 
   const HEADERS = {
@@ -24,7 +21,13 @@
   let _sortDir = 'asc';
   let _page = 0;
   let _totalPages = 1;
-  const PAGE_SIZE = 25;
+  const PAGE_SIZE_OPTIONS = [15, 25, 50];
+  const PAGE_SIZE_KEY = 'gheloo_accounts_page_size';
+  let _pageSize = 25;
+  try {
+    const saved = parseInt(localStorage.getItem(PAGE_SIZE_KEY), 10);
+    if (PAGE_SIZE_OPTIONS.includes(saved)) _pageSize = saved;
+  } catch (e) {}
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -70,6 +73,17 @@
     return res.json();
   }
 
+  // Fire-and-forget row in event_log — lets the CPU/DB history panel on hub.databin.uk
+  // line spikes up against what actually happened (an import, a page visit, ...) instead
+  // of just showing an unexplained number. Never blocks/throws on the caller.
+  function logEvent(event, detail) {
+    fetch(SB_URL + '/event_log', {
+      method: 'POST',
+      headers: HEADERS,
+      body: JSON.stringify({ event: event, detail: detail || null }),
+    }).catch(function () {});
+  }
+
   // ── Load ─────────────────────────────────────────────────────────────────────
   async function loadAll() {
     const tbody = document.getElementById('tbl-body');
@@ -84,87 +98,6 @@
       const notes = await sbGet('/category_notes?select=*');
       _catNotes = new Map(notes.map((n) => [n.category, n.note]));
     } catch (e) { /* table may not exist yet */ }
-  }
-
-  // ── Link to User Database (userlogger.databin.uk) ───────────────────────────
-  // Resolved once per account and written back to bot_accounts.game_id — persisted,
-  // so an already-checked account is never looked up again, ever (loadAll's select=*
-  // just reads the stored value straight from the row).
-  //
-  // IMPORTANT: an earlier version matched via or=(name.ilike.x,...) for every unchecked
-  // account in one request — an unindexed, case-insensitive OR-scan over a 500k+ row
-  // table on a single-core VM, which took the whole box down twice (2026-08-28). Fixed
-  // now: one account at a time, once per second, indexed exact match (`eq.`, cheap) —
-  // gentle enough to never be the thing that overloads that tiny VM again. New imports
-  // get picked up automatically since this just keeps re-scanning _all for whatever's
-  // still unchecked, no separate trigger needed.
-  let _linkTimer = null;
-  function startLinkGameIdsLoop() {
-    if (_linkTimer) return;
-    // Still one account per tick (never concurrent/batched) — just ticking faster.
-    // 40ms ≈ 25/sec. Safe because each lookup is a single indexed eq. match (not the
-    // unindexed OR-ILIKE scan that caused the outage), and _linking now guards against
-    // overlapping ticks so this never fires concurrent requests either.
-    _linkTimer = setInterval(linkNextGameId, 40);
-  }
-
-  // At 25/sec, calling render() every tick was re-sorting/re-paginating the whole
-  // table 25x/sec whenever sorted by ID — rows would visibly jump in and out as their
-  // game_id resolved mid-sort. Coalesce into at most 2 re-renders/sec instead.
-  let _renderScheduled = false;
-  function scheduleRender() {
-    if (_renderScheduled) return;
-    _renderScheduled = true;
-    setTimeout(function() { _renderScheduled = false; render(); }, 500);
-  }
-
-  // Without this guard, a tick could start before the previous one's GET+PATCH
-  // finished — since _all only gets updated with game_id_checked=true AFTER that
-  // completes, an overlapping tick would pick the SAME still-unchecked account again.
-  // If that second lookup came back empty (a network hiccup), it would overwrite the
-  // just-set game_id back to null — the "connects then un-connects" bug.
-  //
-  // A miss (no game_id found) used to set game_id_checked=true permanently — so an
-  // account whose player only showed up in userlogger.databin.uk's `users` table AFTER
-  // this ran once (e.g. logged in later, or only just got room-encountered/scanned) stayed
-  // "linked to nothing" forever, even though a fresh lookup would now succeed (2026-08-28,
-  // reported: "yoppie" existed in the user db but never got linked). A real match still
-  // locks in permanently (no reason to ever recheck those), but a miss now gets retried
-  // after RECHECK_MS instead of being treated as final.
-  // Was 6h — way too slow while the room scanner is actively adding new users at ~25/sec
-  // in parallel: several accounts got checked mere seconds before their player showed up
-  // in userlogger.databin.uk, then sat "linked to nothing" for hours despite a real match
-  // existing moments later (2026-08-28). 5 min still keeps this to one cheap indexed
-  // lookup per unlinked account every 5 min, nowhere near what caused the past outages.
-  const RECHECK_MS = 5 * 60 * 1000;
-  let _linking = false;
-  async function linkNextGameId() {
-    if (_linking) return;
-    const now = Date.now();
-    const next = Array.from(_all.entries()).find(([, row]) => {
-      if (!row.game_id_checked) return true;
-      if (row.game_id != null) return false; // real match — never recheck
-      const checkedAt = row.game_id_checked_at ? new Date(row.game_id_checked_at).getTime() : 0;
-      return now - checkedAt >= RECHECK_MS;
-    });
-    if (!next) return;
-    _linking = true;
-    const [username, row] = next;
-    try {
-      // ilike (case-insensitive), not eq. — bot_accounts.username's casing comes from
-      // wherever the credentials were imported from, which doesn't necessarily match the
-      // in-game name's casing exactly (2026-08-28, reported: "kimberley" never linked
-      // despite "Kimberly" existing in the user db). No wildcards in the value, so this is
-      // still an exact match, just case-insensitive.
-      const res = await fetch(USERDB_URL + '/users?select=id&name=ilike.' + encodeURIComponent(username));
-      const matches = res.ok ? await res.json() : [];
-      const id = matches.length ? matches[0].id : null;
-      const saved = await sbPatch('/bot_accounts?username=eq.' + encodeURIComponent(username),
-        { game_id: id, game_id_checked: true, game_id_checked_at: new Date().toISOString() });
-      if (saved[0]) _all.set(username, Object.assign({}, row, saved[0]));
-      scheduleRender();
-    } catch (e) { /* leave as-is, a later tick will retry this same account */ }
-    finally { _linking = false; }
   }
 
   // ── Category note ────────────────────────────────────────────────────────────
@@ -194,21 +127,26 @@
 
   // ── Import ───────────────────────────────────────────────────────────────────
   function parseList(text) {
-    const rows = [];
+    // Deduped by username, last occurrence wins — a single upsert batch containing the
+    // same on_conflict key twice makes Postgres reject the whole thing ("ON CONFLICT DO
+    // UPDATE command cannot affect row a second time"), which combo/scraped lists trigger
+    // often since the same account can legitimately appear more than once in one paste.
+    const byUsername = new Map();
     text.split('\n').forEach((line) => {
       line = line.trim();
       if (!line) return;
       const m = LINE_RE.exec(line);
       if (!m) return;
-      rows.push({
-        username: m.groups.user.trim(),
+      const username = m.groups.user.trim();
+      byUsername.set(username, {
+        username: username,
         password: m.groups.pass.trim(),
         account: parseInt(m.groups.account, 10),
         vrienden: parseInt(m.groups.vrienden, 10),
         rank: parseInt(m.groups.rank, 10),
       });
     });
-    return rows;
+    return Array.from(byUsername.values());
   }
 
   async function importText(text) {
@@ -229,6 +167,7 @@
         _all.set(r.username, existing ? Object.assign({}, existing, r) : r);
       });
       statusEl.textContent = rows.length + ' account(s) verwerkt (dubbele automatisch samengevoegd).';
+      logEvent('import', rows.length + ' accounts');
       document.getElementById('import-text').value = '';
       render();
     } catch (e) {
@@ -364,17 +303,17 @@
     const titles = { all: 'Alle accounts', goud: 'Goud', groen: 'Groen', rood: 'Rood', paars: 'Paars', none: 'Ongesorteerd' };
     document.getElementById('page-title').textContent = titles[_tab];
 
-    const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    const totalPages = Math.max(1, Math.ceil(filtered.length / _pageSize));
     if (_page >= totalPages) _page = totalPages - 1;
     if (_page < 0) _page = 0;
     _totalPages = totalPages;
-    const pageRows = filtered.slice(_page * PAGE_SIZE, _page * PAGE_SIZE + PAGE_SIZE);
+    const pageRows = filtered.slice(_page * _pageSize, _page * _pageSize + _pageSize);
 
     renderPagination(filtered.length, totalPages);
 
     const tbody = document.getElementById('tbl-body');
     if (!filtered.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">' + (rows.length ? 'Geen resultaten.' : 'Nog geen accounts geïmporteerd.') + '</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">' + (rows.length ? 'Geen resultaten.' : 'Nog geen accounts geïmporteerd.') + '</td></tr>';
       return;
     }
     tbody.innerHTML = pageRows.map((r) => (
@@ -384,7 +323,6 @@
       + '<td>' + copyText(r.password) + '</td>'
       + '<td class="plain-cell">' + (r.account != null ? r.account.toLocaleString() : '—') + '</td>'
       + '<td class="plain-cell">' + (r.vrienden ?? '—') + '</td>'
-      + '<td class="plain-cell">' + (r.game_id ?? '—') + '</td>'
       + '<td class="plain-cell">' + (r.rank ?? '—') + '</td>'
       + '<td><input class="note-input" data-username="' + esc(r.username) + '" value="' + esc(r.note || '') + '" placeholder="…"></td>'
       + '</tr>'
@@ -394,8 +332,7 @@
   function renderPagination(total, totalPages) {
     const el = document.getElementById('pagination');
     if (!total) { el.innerHTML = ''; return; }
-    // The background game-id-link loop re-renders every ~500ms (scheduleRender) — a full
-    // rebuild while the user is mid-type in the page-jump box would wipe out what they
+    // A rebuild while the user is mid-type in the page-jump box would wipe out what they
     // just typed and drop focus. Skip the rebuild while it's focused; it catches up on
     // the next render once they blur/submit.
     if (document.activeElement && document.activeElement.id === 'pg-jump') return;
@@ -408,7 +345,10 @@
       + '<span class="page-info">/ ' + totalPages + ' (' + total + ' accounts)</span>'
       + '<button class="btn btn-outline" id="pg-next" title="Volgende"' + (atEnd ? ' disabled' : '') + '>&raquo;</button>'
       + '<button class="btn btn-outline" id="pg-fwd10" title="10 pagina\'s vooruit"' + (atEnd ? ' disabled' : '') + '>&raquo;&raquo;</button>'
-      + '<button class="btn btn-outline" id="pg-last" title="Laatste pagina"' + (atEnd ? ' disabled' : '') + '>&raquo;&raquo;&raquo;</button>';
+      + '<button class="btn btn-outline" id="pg-last" title="Laatste pagina"' + (atEnd ? ' disabled' : '') + '>&raquo;&raquo;&raquo;</button>'
+      + '<select class="page-size-select" id="pg-size" title="Accounts per pagina">'
+      + PAGE_SIZE_OPTIONS.map((n) => '<option value="' + n + '"' + (n === _pageSize ? ' selected' : '') + '>' + n + '</option>').join('')
+      + '</select>';
   }
 
   function gotoPage(n, totalPages) {
@@ -472,6 +412,13 @@
     document.getElementById('pagination').addEventListener('focusout', (e) => {
       if (e.target.id === 'pg-jump') gotoPage(parseInt(e.target.value, 10) - 1 || 0, _totalPages);
     });
+    document.getElementById('pagination').addEventListener('change', (e) => {
+      if (e.target.id !== 'pg-size') return;
+      _pageSize = parseInt(e.target.value, 10);
+      try { localStorage.setItem(PAGE_SIZE_KEY, String(_pageSize)); } catch (err) {}
+      _page = 0;
+      render();
+    });
 
     document.getElementById('import-btn').addEventListener('click', () => {
       importText(document.getElementById('import-text').value);
@@ -511,5 +458,5 @@
 
   setupEvents();
   loadAll();
-  startLinkGameIdsLoop();
+  logEvent('visit', 'accounts');
 })();

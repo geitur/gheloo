@@ -96,12 +96,16 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
 .sort-th.sort-asc svg{opacity:1;color:var(--primary)}
 .sort-th.sort-desc svg{opacity:1;color:var(--primary);transform:rotate(180deg)}
 
-.pagination{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:14px;flex-wrap:wrap}
+.pagination{position:relative;display:flex;align-items:center;justify-content:center;gap:6px;margin-top:14px;flex-wrap:wrap}
 .pagination .page-info{font-size:12px;color:var(--muted);margin:0 6px}
 .page-jump{width:50px;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;text-align:center;outline:none}
 .page-jump:focus{border-color:var(--primary)}
 .page-jump::-webkit-outer-spin-button,.page-jump::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .page-jump{-moz-appearance:textfield}
+/* Taken out of the centered flex flow (position:absolute) so it doesn't skew where the
+   button group centers — it just pins to the bar's right edge on its own. */
+.page-size-select{position:absolute;right:0;top:50%;transform:translateY(-50%);background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;outline:none;cursor:pointer}
+.page-size-select:focus{border-color:var(--primary)}
 
 .mark-row{display:inline-flex;gap:6px}
 .mark-btn{width:24px;height:24px;border-radius:6px;border:1.5px solid var(--border);background:var(--input);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;transition:all .1s;color:#111}
@@ -182,7 +186,6 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
             <th>Wachtwoord</th>
             <th><span class="sort-th" data-sort="account">Credits<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th><span class="sort-th" data-sort="vrienden">BelCredits<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
-            <th><span class="sort-th" data-sort="game_id">ID<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th><span class="sort-th" data-sort="rank">Rank<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th>Notitie</th>
           </tr>

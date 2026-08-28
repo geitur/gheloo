@@ -52,9 +52,6 @@ html,body{height:100%;overflow:hidden;font-family:ui-sans-serif,system-ui,-apple
 .nav-item:hover{background:var(--accent);color:var(--text)}
 .nav-item.active{background:color-mix(in oklch,var(--primary) 15%,transparent);color:var(--primary);font-weight:600}
 .nav-item .dot{width:6px;height:6px;border-radius:50%;background:var(--primary);margin-left:auto;flex-shrink:0}
-#sb-footer{padding:10px 12px;border-top:1px solid var(--border);flex-shrink:0}
-.sb-status{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;font-size:11px;color:var(--muted)}
-.sb-status-dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0;box-shadow:0 0 6px color-mix(in oklch,var(--green) 50%,transparent)}
 
 /* — Main — */
 #main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
@@ -394,12 +391,6 @@ select{cursor:pointer}
         </div>
       </div>
     </nav>
-    <div id="sb-footer">
-      <div class="sb-status">
-        <div class="sb-status-dot"></div>
-        <span>System online</span>
-      </div>
-    </div>
   </aside>
 
   <div id="main">
