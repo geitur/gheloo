@@ -37,7 +37,11 @@
     886731939, 886731937, 886731938, 886735309, 886735310,
     886729317, 886729316, 886729318, 886729948,
   ]);
+  // False positives — type_id happens to share its floor variant's "(...)" tag in the name
+  // (e.g. 4074 "Paarse Machine (Rare)") but isn't an item that should get auto-placed.
+  const EXCLUDE_RARE_TYPE_IDS = new Set([4074]);
   function _isRareItem(typeId) {
+    if (EXCLUDE_RARE_TYPE_IDS.has(typeId)) return false;
     return RARE_TAG_RE.test(_typeName(typeId)) || EXTRA_RARE_TYPE_IDS.has(typeId);
   }
 

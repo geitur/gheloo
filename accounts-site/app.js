@@ -100,6 +100,34 @@
     } catch (e) { /* table may not exist yet */ }
   }
 
+  // ── Live category sync ──────────────────────────────────────────────────────
+  // No realtime/websocket service on this self-hosted stack (just Postgres+PostgREST,
+  // no Supabase Realtime) — so "live" here means polling for rows this browser hasn't
+  // seen yet. bot_accounts.updated_at now auto-bumps on every UPDATE via a DB trigger
+  // (it previously only had an INSERT default, so a plain category PATCH never actually
+  // changed it — polling on it would have silently caught nothing). Scoped to
+  // username+category+updated_at only, not a full row re-fetch, so this stays cheap at
+  // 9000+ accounts even polled every few seconds.
+  let _lastCategorySync = null;
+  async function pollCategoryChanges() {
+    if (_lastCategorySync == null) return;
+    try {
+      const rows = await sbGet('/bot_accounts?select=username,category,updated_at&updated_at=gt.'
+        + encodeURIComponent(_lastCategorySync) + '&order=updated_at.asc');
+      if (!rows.length) return;
+      let changed = false;
+      rows.forEach((r) => {
+        const existing = _all.get(r.username);
+        if (existing && existing.category !== r.category) {
+          _all.set(r.username, Object.assign({}, existing, { category: r.category }));
+          changed = true;
+        }
+        if (r.updated_at > _lastCategorySync) _lastCategorySync = r.updated_at;
+      });
+      if (changed) render();
+    } catch (e) { /* best-effort — a missed poll just gets caught on the next one */ }
+  }
+
   // ── Category note ────────────────────────────────────────────────────────────
   async function saveCategoryNote(category, note) {
     const statusEl = document.getElementById('catnote-status');
@@ -200,7 +228,12 @@
     if (!row) return false;
     try {
       const saved = await sbPatch('/bot_accounts?username=eq.' + encodeURIComponent(username), { category: cat });
-      if (saved[0]) _all.set(username, Object.assign({}, row, saved[0]));
+      if (saved[0]) {
+        _all.set(username, Object.assign({}, row, saved[0]));
+        // Advance the poll watermark past our own change so pollCategoryChanges doesn't
+        // immediately re-fetch (and redundantly re-render) the edit we just made locally.
+        if (_lastCategorySync != null && saved[0].updated_at > _lastCategorySync) _lastCategorySync = saved[0].updated_at;
+      }
       render();
       return true;
     } catch (e) {
@@ -253,20 +286,10 @@
     return '<button class="copy-txt" data-action="copy" data-copy="' + esc(text) + '" title="Klik om te kopiëren">' + esc(text) + '</button>';
   }
 
-  function render() {
+  // Same filter+sort logic render() uses for the table — pulled out so Export can dump
+  // the exact set/order currently on screen (minus pagination) without duplicating it.
+  function getFilteredSorted() {
     const rows = Array.from(_all.values());
-    const counts = { all: rows.length, goud: 0, groen: 0, rood: 0, paars: 0, none: 0 };
-    rows.forEach((r) => {
-      if (r.category === 'goud') counts.goud++;
-      else if (r.category === 'groen') counts.groen++;
-      else if (r.category === 'rood') counts.rood++;
-      else if (r.category === 'paars') counts.paars++;
-      else counts.none++;
-    });
-    ['all', 'goud', 'groen', 'rood', 'paars', 'none'].forEach((k) => {
-      document.getElementById('cnt-' + k).textContent = counts[k];
-    });
-
     let filtered = rows.filter((r) => {
       if (_tab === 'goud' || _tab === 'groen' || _tab === 'rood' || _tab === 'paars') return r.category === _tab;
       if (_tab === 'none') return !r.category;
@@ -288,12 +311,109 @@
         return 2;
       };
       filtered.sort((a, b) => score(a) - score(b) || a.username.localeCompare(b.username));
+    } else if (_sortKey === 'note') {
+      // Text field, not numeric — "up" means accounts WITH a note first, same up/down
+      // convention as the numeric columns, just keyed on presence instead of magnitude.
+      const dir = _sortDir === 'desc' ? -1 : 1;
+      filtered.sort((a, b) => ((((b.note ? 1 : 0)) - (a.note ? 1 : 0)) * dir) || a.username.localeCompare(b.username));
     } else if (_sortKey) {
       const dir = _sortDir === 'desc' ? -1 : 1;
       filtered.sort((a, b) => (((a[_sortKey] ?? -Infinity) - (b[_sortKey] ?? -Infinity)) * dir) || a.username.localeCompare(b.username));
     } else {
       filtered.sort((a, b) => a.username.localeCompare(b.username));
     }
+    return filtered;
+  }
+
+  function openModal(title, bodyHtml) {
+    document.getElementById('modal-title').innerHTML = title;
+    document.getElementById('modal-body').innerHTML = bodyHtml;
+    document.getElementById('modal-overlay').classList.add('open');
+  }
+  function closeModal() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  }
+
+  const EXPORT_FIELDS = [
+    { key: 'username', label: 'Naam' },
+    { key: 'password', label: 'Wachtwoord' },
+    { key: 'account', label: 'Credits' },
+    { key: 'vrienden', label: 'BelCredits' },
+    { key: 'rank', label: 'Rank' },
+    { key: 'note', label: 'Notitie' },
+  ];
+
+  function openExportModal() {
+    openModal(
+      'Exporteren',
+      '<div class="desc" style="margin-bottom:12px">Kies welke velden je wil exporteren.</div>'
+      + '<div class="row" id="export-fields">'
+      + EXPORT_FIELDS.map((f) => (
+        '<label style="display:inline-flex;align-items:center;gap:6px;background:var(--input);border:1px solid var(--border);border-radius:20px;padding:6px 12px;cursor:pointer;font-size:12px">'
+        + '<input type="checkbox" value="' + f.key + '" checked style="width:auto"> ' + f.label + '</label>'
+      )).join('')
+      + '</div>'
+      + '<div class="row" style="margin-top:16px">'
+      + '<button class="btn btn-blue" id="export-confirm-btn">Exporteer</button>'
+      + '<button class="btn btn-outline" id="export-cancel-btn">Annuleren</button>'
+      + '</div>'
+      + '<div id="export-modal-status" style="font-size:12px;margin-top:8px"></div>'
+    );
+    document.getElementById('export-cancel-btn').addEventListener('click', closeModal);
+    document.getElementById('export-confirm-btn').addEventListener('click', () => {
+      const checked = Array.from(document.querySelectorAll('#export-fields input:checked')).map((el) => el.value);
+      const statusEl = document.getElementById('export-modal-status');
+      if (!checked.length) {
+        statusEl.className = 'err';
+        statusEl.textContent = 'Kies minstens 1 veld.';
+        return;
+      }
+      exportCurrentView(checked);
+      closeModal();
+    });
+  }
+
+  function exportCurrentView(fields) {
+    const filtered = getFilteredSorted();
+    const hasUser = fields.includes('username');
+    const hasPass = fields.includes('password');
+    const lines = filtered.map((r) => {
+      const parts = [];
+      if (hasUser && hasPass) parts.push(r.username + ':' + (r.password || ''));
+      else if (hasUser) parts.push(r.username);
+      else if (hasPass) parts.push(r.password || '');
+      if (fields.includes('account')) parts.push('Credits: ' + (r.account ?? 0));
+      if (fields.includes('vrienden')) parts.push('BelCredits: ' + (r.vrienden ?? 0));
+      if (fields.includes('rank')) parts.push('Rank: ' + (r.rank ?? 0));
+      if (fields.includes('note')) parts.push('Notitie: ' + (r.note || ''));
+      return parts.join(' | ');
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'gheloo-accounts-' + _tab + '-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function render() {
+    const rows = Array.from(_all.values());
+    const counts = { all: rows.length, goud: 0, groen: 0, rood: 0, paars: 0, none: 0 };
+    rows.forEach((r) => {
+      if (r.category === 'goud') counts.goud++;
+      else if (r.category === 'groen') counts.groen++;
+      else if (r.category === 'rood') counts.rood++;
+      else if (r.category === 'paars') counts.paars++;
+      else counts.none++;
+    });
+    ['all', 'goud', 'groen', 'rood', 'paars', 'none'].forEach((k) => {
+      document.getElementById('cnt-' + k).textContent = counts[k];
+    });
+
+    const filtered = getFilteredSorted();
 
     document.querySelectorAll('.sort-th').forEach((el) => {
       el.classList.toggle('sort-asc', _sortKey === el.dataset.sort && _sortDir === 'asc');
@@ -384,6 +504,12 @@
       render();
     });
 
+    document.getElementById('export-btn').addEventListener('click', openExportModal);
+    document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+    document.getElementById('modal-overlay').addEventListener('click', (e) => {
+      if (e.target.id === 'modal-overlay') closeModal();
+    });
+
     document.querySelector('thead').addEventListener('click', (e) => {
       const th = e.target.closest('.sort-th');
       if (!th) return;
@@ -457,6 +583,12 @@
   }
 
   setupEvents();
-  loadAll();
+  loadAll().then(function () {
+    // Baseline set only after the initial load resolves — we already have everyone's
+    // current category from loadAll itself, so the poller only needs to catch changes
+    // from THIS point forward, not re-fetch history.
+    _lastCategorySync = new Date().toISOString();
+    setInterval(pollCategoryChanges, 3000);
+  });
   logEvent('visit', 'accounts');
 })();

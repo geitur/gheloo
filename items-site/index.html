@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="stylesheet" href="design.css?v=8">
+<title>Item Overview</title>
+<style>
+/* Page-specific only — shared tokens/shell/buttons/cards/tables/pagination/forms/modal/
+   cat-grid live in design.css. Only this page's own bits stay here. */
+.search-input{width:100%;margin-bottom:8px}
+/* Only Settings' text-heavy cards/forms benefit from a narrower measure — Inventory/Users
+   should use the full width so the grid/table isn't squeezed with empty space beside it. */
+.page[data-page="settings"]{max-width:900px}
+textarea{min-height:120px;font-family:ui-monospace,monospace;font-size:12px}
+/* This page's cards hold loose form content (inputs/textareas/rows) with no .card-body
+   wrapper, unlike deurwaarder's — so padding has to live on .card itself, not on h3/.desc
+   alone (which is all the shared default gives them). */
+.card{padding:18px}
+.card h3{padding:0;margin-bottom:4px}
+.card .desc{margin:0 0 12px}
+input[type=file]{font-size:12px;color:var(--muted)}
+#scan-tabs label{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;background:var(--input);border:1px solid var(--border);border-radius:20px;padding:7px 14px;transition:all .12s}
+#scan-tabs label:hover{border-color:var(--muted);color:var(--text)}
+#scan-tabs label:has(input:checked){background:color-mix(in oklch,var(--primary) 18%,transparent);border-color:var(--primary);color:var(--primary)}
+#scan-tabs input[type=checkbox]{accent-color:var(--primary);cursor:pointer;width:auto}
+#scan-status{font-size:12px;color:var(--muted);margin-top:10px}
+#scan-status.ok{color:var(--green)}
+#scan-status.err{color:var(--red)}
+
+#import-status{font-size:12px;color:var(--muted);margin-top:10px}
+#import-status.err{color:var(--red)}
+#import-status.ok{color:var(--green)}
+#results-count{font-size:11px;color:var(--muted);margin-bottom:8px}
+#saved-count{font-size:11px;color:var(--muted);margin-bottom:8px}
+
+.page{display:none}
+.page.active{display:block}
+
+.owner-list{display:flex;flex-direction:column;gap:6px}
+.owner-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid var(--border)}
+.owner-row:first-child{border-top:none}
+.owner-row-hdr{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%}
+.owner-detail{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;max-width:60%}
+.edition-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(58px,1fr));gap:6px;margin-top:10px}
+.edition-badge{justify-content:center;font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;padding:4px 6px}
+.modal-total{font-size:11px;color:var(--muted);margin-top:12px;padding-top:10px;border-top:1px solid var(--border)}
+.modal-tag{color:var(--muted);font-weight:500;font-size:12px}
+</style>
+</head>
+<body>
+<div id="shell">
+  <aside id="sidebar">
+    <div class="sb-header">
+      <div class="brand-row">
+        <div class="brand-mark">G</div>
+        <div>
+          <div class="eyebrow">Gheloo</div>
+          <div class="title">Item Overview</div>
+        </div>
+      </div>
+      <a class="hub-back" href="https://hub.databin.uk/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>Terug naar Hub</a>
+    </div>
+    <nav id="tabs">
+      <button class="tab active" data-tab="inventory">Inventory<span class="nav-dot"></span></button>
+      <button class="tab" data-tab="users">Users<span class="nav-dot"></span></button>
+      <button class="tab" data-tab="settings">Settings<span class="nav-dot"></span></button>
+    </nav>
+  </aside>
+
+  <div id="main">
+    <div class="page active" data-page="inventory">
+      <div class="page-hdr">
+        <div>
+          <div class="page-title">Inventory</div>
+          <div class="page-sub" id="inv-sub">Alle geïmporteerde items, gegroepeerd per furni. Klik op een furni voor de eigenaars-verdeling (en editienummers bij LTD's).</div>
+        </div>
+        <button class="btn btn-green" id="inv-goto-import-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Import Items
+        </button>
+      </div>
+      <input class="search-input" id="inv-search" placeholder="Zoek op naam...">
+      <div class="filter-row" id="inv-filter-row"></div>
+      <div class="cat-grid" id="inv-grid"></div>
+    </div>
+
+    <div class="page" data-page="users">
+      <div class="page-hdr">
+        <div class="page-title">Users</div>
+        <div class="page-sub" id="users-sub"></div>
+      </div>
+      <input class="search-input" id="user-search" placeholder="Zoek op gebruiker..." style="margin-bottom:8px">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Gebruiker</th><th style="text-align:right">Items</th></tr></thead>
+          <tbody id="users-body"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="users-pagination"></div>
+    </div>
+
+    <div class="page" data-page="settings">
+    <div class="page-hdr">
+      <div class="page-title">Settings</div>
+      <div class="page-sub">Importeer een gescande item-lijst (naam + icoon) — wordt automatisch gelinkt aan de furnis-catalogus voor het type ID.</div>
+    </div>
+
+    <div class="card">
+      <h3>Scan Ruilwaarde Site</h3>
+      <div class="desc">Kopieert het scan-script (met jouw tab-keuze) naar je klembord en opent leet.city/ruilwaarde in een nieuwe tab. Open daar de Console (F12) en plak (Ctrl+V) om te starten — na afloop download het script automatisch een <code>items.json</code>, die je hierboven kan importeren.</div>
+      <div class="row" id="scan-tabs">
+        <label><input type="checkbox" value="Club Cadeau" checked> Club Cadeau</label>
+        <label><input type="checkbox" value="Limited Edition (LTD)" checked> LTD</label>
+        <label><input type="checkbox" value="Rares" checked> Rares</label>
+        <label><input type="checkbox" value="Super Zeldzaam (SS)" checked> SS</label>
+        <label><input type="checkbox" value="Pokémon"> Pokémon</label>
+        <label><input type="checkbox" value="Ecotron"> Ecotron</label>
+      </div>
+      <div class="row">
+        <button class="btn btn-blue" id="scan-btn">Kopieer script &amp; open site</button>
+      </div>
+      <div id="scan-status"></div>
+    </div>
+
+    <div class="card">
+      <h3>Scan BC Shop (Hall of Fame)</h3>
+      <div class="desc">Kopieert een apart scan-script naar je klembord voor de Hall of Fame-pagina — die tegels hebben geen naam in de HTML, alleen een icoontje, dus dit script matcht op het echte interne ID en zet een klein blokje rechtsboven neer. Browse zelf door de pagina's; het blokje telt vanzelf op. Klik het blokje om de JSON naar je klembord te kopiëren, en plak die hieronder bij "Importeer items.json".</div>
+      <div class="row">
+        <button class="btn btn-blue" id="bc-scan-btn">Kopieer script</button>
+      </div>
+      <div id="bc-scan-status"></div>
+    </div>
+
+    <div class="card">
+      <h3>Importeer items.json</h3>
+      <div class="desc">Plak de JSON hieronder, of kies een bestand. Verwacht formaat: array van <code>{"name": "...", "icon": "..."}</code>.</div>
+      <input type="file" id="file-input" accept=".json">
+      <textarea id="paste-input" placeholder="[&#10;  { &quot;name&quot;: &quot;Bubbelbad (Club Cadeau)&quot;, &quot;icon&quot;: &quot;https://...&quot; },&#10;  ...&#10;]"></textarea>
+      <div class="row">
+        <button class="btn btn-blue" id="import-btn">Importeer en link</button>
+        <button class="btn btn-outline" id="clear-btn">Wissen</button>
+      </div>
+      <div id="import-status"></div>
+    </div>
+
+    <div class="card" id="results-card" style="display:none">
+      <h3>Resultaat</h3>
+      <div id="results-count"></div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Icoon</th><th>Naam</th><th>Categorie</th><th>Type ID</th><th>Status</th></tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+        <h3>Opgeslagen items</h3>
+        <button class="btn btn-green" id="saved-new-btn" style="margin-top:18px;flex-shrink:0">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Nieuw item
+        </button>
+      </div>
+      <div class="desc">Klik op een item om het handmatig aan te passen.</div>
+      <input class="search-input" id="saved-search" placeholder="Zoek op naam...">
+      <div id="saved-count"></div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Icoon</th><th>Naam</th><th>Categorie</th><th>Type ID</th></tr>
+          </thead>
+          <tbody id="saved-body"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="saved-pagination"></div>
+    </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-overlay">
+  <div id="modal-box">
+    <div class="modal-hdr">
+      <h3 id="modal-title"></h3>
+      <button class="modal-close" id="modal-close-btn">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script src="app.js?v=30"></script>
+</body>
+</html>

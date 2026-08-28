@@ -515,7 +515,25 @@
     return _scanLastReplyId != null ? ' — laatste reply: id ' + _scanLastReplyId : '';
   }
 
-  const SCAN_INTERVAL_MS = 40; // 25/sec — drives both the GetExtendedProfile probe and the scanned_ids link upload
+  // 25/sec by default — drives both the GetExtendedProfile probe and the scanned_ids link
+  // upload. Kept in localStorage (not a const) so it can be tuned live from the scan menu
+  // instead of requiring a code edit.
+  const SCAN_INTERVAL_KEY = 'gheloo_udb_scan_interval_ms';
+  const SCAN_INTERVAL_MIN_MS = 10; // hard floor — below this it's just hammering the server
+  let _scanIntervalMs = parseInt(localStorage.getItem(SCAN_INTERVAL_KEY), 10) || 40;
+  if (_scanIntervalMs < SCAN_INTERVAL_MIN_MS) _scanIntervalMs = SCAN_INTERVAL_MIN_MS;
+
+  function _setScanIntervalMs(ms) {
+    ms = parseInt(ms, 10);
+    if (!ms || ms < SCAN_INTERVAL_MIN_MS) ms = SCAN_INTERVAL_MIN_MS;
+    _scanIntervalMs = ms;
+    localStorage.setItem(SCAN_INTERVAL_KEY, String(ms));
+    // Live-apply — a scan already running keeps going, just on the new cadence from here on.
+    if (_scanTimer) {
+      clearInterval(_scanTimer);
+      _scanTimer = setInterval(_scanTick, _scanIntervalMs);
+    }
+  }
 
   // mode: 'known' = re-check every id already in the database (refresh stale data,
   // catch unbans); 'start' = sequential sweep from id 1; 'custom' = jump to a given id.
@@ -564,7 +582,7 @@
     _logEvent('scan_start', mode + (window._selfName ? ' (' + window._selfName + ')' : ''));
     _scanSyncStart();
     _scanTick();
-    _scanTimer = setInterval(_scanTick, SCAN_INTERVAL_MS);
+    _scanTimer = setInterval(_scanTick, _scanIntervalMs);
   }
 
   function _scanStop() {
@@ -1143,12 +1161,25 @@
     scanMenu.innerHTML =
       '<button data-mode="known">Scan known ids</button>'
       + '<button data-mode="start">Scan from start</button>'
-      + '<button data-mode="custom">Scan from id…</button>';
+      + '<button data-mode="custom">Scan from id…</button>'
+      + '<button data-action="cooldown">Cooldown…</button>';
     document.body.appendChild(scanMenu);
     scanMenu.style.display = 'none';
 
     scanMenu.querySelectorAll('button').forEach(function(b) {
       b.addEventListener('click', function() {
+        if (b.dataset.action === 'cooldown') {
+          const val = window.prompt(
+            'Cooldown tussen scans in ms (huidig: ' + _scanIntervalMs + 'ms — lager = sneller, minimum ' + SCAN_INTERVAL_MIN_MS + 'ms):',
+            String(_scanIntervalMs)
+          );
+          if (val === null) return;
+          const ms = parseInt(val, 10);
+          if (!ms) return;
+          _setScanIntervalMs(ms);
+          scanMenu.style.display = 'none';
+          return;
+        }
         if (b.dataset.mode === 'custom') {
           const val = window.prompt('Start scanning from which id?', '1');
           if (val === null) return;

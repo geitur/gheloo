@@ -4,81 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="favicon.png">
+<link rel="stylesheet" href="design.css?v=8">
 <title>Accounts</title>
 <style>
-:root {
-  --bg:       oklch(0.08 0.014 265);
-  --card:     oklch(0.115 0.012 265);
-  --sidebar:  oklch(0.105 0.013 265);
-  --primary:  oklch(0.68 0.19 265);
-  --border:   oklch(0.24 0.013 265);
-  --text:     oklch(0.94 0.006 265);
-  --muted:    oklch(0.56 0.016 265);
-  --accent:   oklch(0.21 0.015 265);
-  --input:    oklch(0.19 0.012 265);
-  --radius:   8px;
-  --green:    oklch(0.65 0.18 160);
-  --red:      oklch(0.65 0.22 25);
-  --gold:     oklch(0.78 0.16 95);
-  --purple:   oklch(0.65 0.20 310);
-}
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
-::-webkit-scrollbar{width:5px;height:5px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-
-#shell{display:flex;min-height:100vh}
-#sidebar{width:220px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column}
-.sb-header{padding:18px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
-.brand-row{display:flex;align-items:center;gap:10px}
-.brand-mark{width:30px;height:30px;border-radius:8px;background:color-mix(in oklch,var(--primary) 18%,transparent);color:var(--primary);display:flex;align-items:center;justify-content:center;font:800 13px system-ui;flex-shrink:0}
-.eyebrow{font:700 9px/1 monospace;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:3px}
-.title{font:700 15px/1.2 system-ui;color:var(--text)}
-.hub-back{display:flex;align-items:center;gap:6px;margin:14px 0 0 -7px;padding:5px 7px;border-radius:6px;color:var(--muted);font-size:12px;font-weight:600;text-decoration:none;transition:all .12s;width:fit-content}
-.hub-back:hover{background:var(--accent);color:var(--text)}
-.hub-back svg{width:12px;height:12px;flex-shrink:0}
-#tabs{padding:12px;display:flex;flex-direction:column;gap:1px;overflow-y:auto;flex:1}
-.tab{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:8px;cursor:pointer;color:var(--muted);font-size:13px;font-weight:600;border:none;background:none;width:100%;text-align:left}
-.tab:hover{background:var(--accent);color:var(--text)}
-.tab.active{background:color-mix(in oklch,var(--primary) 15%,transparent);color:var(--primary)}
-.tab .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.tab .count{margin-left:auto;font-size:11px;color:var(--muted);font-weight:700}
-
-#main{flex:1;padding:24px 28px;min-width:0}
-.page-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
-.page-title{font-size:20px;font-weight:700}
-.page-sub{font-size:12px;color:var(--muted);margin-top:3px}
-
-.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:7px;font:600 12px/1 inherit;cursor:pointer;border:1px solid transparent;transition:all .12s;white-space:nowrap}
-.btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
-.btn-primary:hover{opacity:.9}
-.btn-outline{background:transparent;border-color:var(--border);color:var(--muted)}
-.btn-outline:hover{border-color:var(--primary);color:var(--primary)}
-button:disabled{opacity:.5;cursor:not-allowed}
-
-.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px}
-.card-body{padding:16px}
-textarea{width:100%;min-height:120px;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:10px;font:12px ui-monospace,monospace;outline:none;resize:vertical}
-textarea:focus{border-color:var(--primary)}
+/* Page-specific only — shared tokens/shell/buttons/cards/tables/pagination/forms live in
+   design.css so every databin.uk site stays visually identical. Only what's genuinely
+   unique to this page (category-mark buttons, inline note editing, the credits table's
+   column dividers) stays here. */
 .import-row{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
 .import-status{font-size:12px;color:var(--muted)}
 
-.search-input{background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-size:12px;outline:none;width:220px}
-.search-input:focus{border-color:var(--primary)}
-
-.mono{font-family:ui-monospace,monospace;font-size:11px}
-.empty-row td{text-align:center;color:var(--muted);padding:48px!important;font-size:13px}
-
-.tbl-wrap{border:1px solid var(--border);border-radius:var(--radius);overflow:auto}
-table{width:100%;border-collapse:collapse;font-size:12px}
-thead th{padding:10px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);background:color-mix(in oklch,var(--card) 50%,var(--bg));border-bottom:1px solid var(--border);border-right:1px solid var(--border);white-space:nowrap}
+thead th{border-right:1px solid var(--border)}
 thead th:last-child{border-right:none}
 thead th:first-child, tbody td:first-child{width:1%}
-tbody td{padding:0;border-bottom:1px solid color-mix(in oklch,var(--border) 50%,transparent);border-right:1px solid color-mix(in oklch,var(--border) 50%,transparent);vertical-align:middle;white-space:nowrap}
+tbody td{padding:0;border-right:1px solid color-mix(in oklch,var(--border) 50%,transparent);white-space:nowrap}
 tbody td:last-child{border-right:none}
-tbody tr:last-child td{border-bottom:none}
-tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
 .plain-cell{padding:10px 14px}
 
 .copy-txt{display:block;width:100%;height:100%;padding:10px 14px;background:none;border:none;color:var(--text);cursor:pointer;font:inherit;font-family:ui-monospace,monospace;font-size:11px;text-align:left;transition:color .1s}
@@ -89,23 +29,6 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
 .note-input:hover{background:color-mix(in oklch,var(--accent) 40%,transparent)}
 .note-input:focus{border-color:var(--primary);background:var(--input)}
 .note-saved{border-color:var(--green)!important}
-
-.sort-th{cursor:pointer;user-select:none;display:flex;align-items:center;gap:5px}
-.sort-th:hover{color:var(--text)}
-.sort-th svg{width:10px;height:10px;opacity:.35;transition:opacity .1s,transform .1s}
-.sort-th.sort-asc svg{opacity:1;color:var(--primary)}
-.sort-th.sort-desc svg{opacity:1;color:var(--primary);transform:rotate(180deg)}
-
-.pagination{position:relative;display:flex;align-items:center;justify-content:center;gap:6px;margin-top:14px;flex-wrap:wrap}
-.pagination .page-info{font-size:12px;color:var(--muted);margin:0 6px}
-.page-jump{width:50px;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;text-align:center;outline:none}
-.page-jump:focus{border-color:var(--primary)}
-.page-jump::-webkit-outer-spin-button,.page-jump::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-.page-jump{-moz-appearance:textfield}
-/* Taken out of the centered flex flow (position:absolute) so it doesn't skew where the
-   button group centers — it just pins to the bar's right edge on its own. */
-.page-size-select{position:absolute;right:0;top:50%;transform:translateY(-50%);background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;outline:none;cursor:pointer}
-.page-size-select:focus{border-color:var(--primary)}
 
 .mark-row{display:inline-flex;gap:6px}
 .mark-btn{width:24px;height:24px;border-radius:6px;border:1.5px solid var(--border);background:var(--input);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;transition:all .1s;color:#111}
@@ -137,6 +60,12 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
       </div>
       <a class="hub-back" href="https://hub.databin.uk/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>Terug naar Hub</a>
     </div>
+    <div class="sb-action">
+      <a class="sb-action-link" href="https://items.databin.uk/" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        View Item Overview
+      </a>
+    </div>
     <nav id="tabs">
       <button class="tab active" data-tab="all">Alle <span class="count" id="cnt-all">0</span></button>
       <button class="tab" data-tab="paars"><span class="dot" style="background:var(--purple)"></span>Paars <span class="count" id="cnt-paars">0</span></button>
@@ -153,14 +82,23 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
         <div class="page-title" id="page-title">Alle accounts</div>
         <div class="page-sub">Upload lijsten, filter dubbele accounts, sorteer per categorie</div>
       </div>
-      <input class="search-input" id="search" placeholder="Zoek op naam...">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input class="search-input" id="search" placeholder="Zoek op naam...">
+        <button class="btn btn-blue" id="export-btn" title="Exporteert exact de lijst die nu op het scherm zou staan — huidige categorie, zoekterm en sortering">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Exporteer
+        </button>
+      </div>
     </div>
 
     <div class="card" id="import-card">
       <div class="card-body">
         <textarea id="import-text" placeholder="Plak hier een lijst, bv:&#10;klokkie:klokkie | Credits: 10002405 | BelCredits: 0 | Rank: 1"></textarea>
         <div class="import-row">
-          <button class="btn btn-primary" id="import-btn">Importeer lijst</button>
+          <button class="btn btn-blue" id="import-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Importeer lijst
+          </button>
           <input type="file" id="import-file" accept=".txt" style="display:none">
           <button class="btn btn-outline" id="import-file-btn">Upload .txt</button>
           <span class="import-status" id="import-status"></span>
@@ -187,7 +125,7 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
             <th><span class="sort-th" data-sort="account">Credits<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th><span class="sort-th" data-sort="vrienden">BelCredits<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th><span class="sort-th" data-sort="rank">Rank<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
-            <th>Notitie</th>
+            <th><span class="sort-th" data-sort="note">Notitie<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
           </tr>
         </thead>
         <tbody id="tbl-body">
@@ -199,6 +137,16 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
   </div>
 </div>
 
-<script src="app.js"></script>
+<div id="modal-overlay">
+  <div id="modal-box">
+    <div class="modal-hdr">
+      <h3 id="modal-title"></h3>
+      <button class="modal-close" id="modal-close-btn">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script src="app.js?v=3"></script>
 </body>
 </html>
