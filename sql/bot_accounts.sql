@@ -16,5 +16,12 @@ create table if not exists bot_accounts (
   note        text,
   source_list text,
   created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  updated_at  timestamptz not null default now(),
+  -- Resolved id in userlogger.databin.uk's `users` table, see app.js's linkNextGameId.
+  -- game_id_checked_at drives a retry: a miss (game_id null) gets re-looked-up after a
+  -- while instead of staying permanently unlinked, since the player may simply not have
+  -- existed in that database yet on the first check.
+  game_id             bigint,
+  game_id_checked     boolean not null default false,
+  game_id_checked_at  timestamptz
 );

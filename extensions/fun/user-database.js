@@ -227,12 +227,12 @@
   // Shared pager: walks every page of a query via Content-Range's real total, not by
   // comparing page length to PAGE_SIZE (a lower server-side db-max-rows would make every
   // page come back short, and a length-based check would wrongly stop after page 1).
-  async function _fetchAllPages(query, onProgress) {
+  async function _fetchAllPages(table, query, onProgress) {
     let all = [];
     let offset = 0;
     for (;;) {
       const res = await fetch(
-        SUPABASE_URL + '/rest/v1/users?' + query + '&limit=' + PAGE_SIZE + '&offset=' + offset,
+        SUPABASE_URL + '/rest/v1/' + table + '?' + query + '&limit=' + PAGE_SIZE + '&offset=' + offset,
         { headers: Object.assign({}, HEADERS, { 'Prefer': 'count=exact' }) }
       );
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -272,7 +272,7 @@
     try {
       const filter = _showAll ? '' : '&last_room_id=not.is.null';
       _all = await _fetchAllPages(
-        'select=*&type=eq.1' + filter + '&order=last_seen.desc.nullslast',
+        'users', 'select=*&type=eq.1' + filter + '&order=last_seen.desc.nullslast',
         function(n) { if (countEl) countEl.textContent = 'Loading… (' + n + ')'; }
       );
       _loaded = true;
@@ -294,10 +294,135 @@
 
   // Scanner's "skip already-known ids" set must always cover EVERY logged id regardless
   // of the UI's room-only filter — otherwise ids only known via a group/profile view
-  // would look unscanned and get redundantly re-probed.
+  // would look unscanned and get redundantly re-probed. Unioned with scanned_ids (every
+  // id ever PROBED, hit or miss) so an id that turned out to be invalid/deleted — and so
+  // never got a `users` row — still isn't re-probed on the next scan. See scanned_ids
+  // outbox below for how that table gets filled.
+  // Returns both: `all` (users ∪ scanned_ids — everything to SKIP in start/custom mode)
+  // and `users` (real accounts only — what 'known' mode should actually walk; it has no
+  // business re-probing scanned_ids misses, those were never real accounts).
   async function _fetchAllKnownIds() {
-    const rows = await _fetchAllPages('select=id&type=eq.1');
+    const [userRows, scannedRows] = await Promise.all([
+      _fetchAllPages('users', 'select=id&type=eq.1'),
+      _fetchAllPages('scanned_ids', 'select=id'),
+    ]);
+    const users = new Set(userRows.map(function(r) { return r.id; }));
+    const all = new Set(users);
+    scannedRows.forEach(function(r) { all.add(r.id); });
+    return { all: all, users: users };
+  }
+
+  // How recently an id must have been refreshed (by ANY account's 'known'-mode scan) to
+  // skip it when building a new refresh queue — coordination for the same overlap problem
+  // start/custom mode already solves, but for the "refresh every known account" sweep.
+  // At 622k+ known accounts a full pass takes hours, so two accounts starting one within
+  // the same window would otherwise redo most of the same work.
+  const KNOWN_REFRESH_STALE_MS = 15 * 60 * 1000; // 15 min
+  async function _fetchRecentlyTouchedIds(sinceMs) {
+    const sinceIso = new Date(Date.now() - sinceMs).toISOString();
+    const rows = await _fetchAllPages('scanned_ids', 'select=id&scanned_at=gt.' + encodeURIComponent(sinceIso));
     return new Set(rows.map(function(r) { return r.id; }));
+  }
+
+  // ── scanned_ids outbox — records every id the scanner has ever sent a
+  // GetExtendedProfile probe for, whether or not it turned out to be a real user. Kept as
+  // its own {id, scanned_at} table (see core/supabase.js's schema-change recipe for how to
+  // add it) instead of piggybacking on `users`, since a miss never gets a `users` row.
+  // Batched + queued through localStorage exactly like core/supabase.js's own outbox, so a
+  // page reload mid-scan doesn't lose already-attempted ids and a struggling DB gets
+  // backoff room instead of getting hammered.
+  const SCANNED_IDS_OUTBOX_KEY = 'gheloo_scanned_ids_outbox_v1';
+  const SCANNED_IDS_BATCH_SIZE = 200;
+  const SCANNED_IDS_DRAIN_MS   = 1000;
+  const SCANNED_IDS_BACKOFF_MS = 5000;
+  let _scannedIdsBackoffUntil = 0;
+  let _scannedIdsDraining = false;
+
+  function _loadScannedIdsOutbox() {
+    try { return JSON.parse(localStorage.getItem(SCANNED_IDS_OUTBOX_KEY) || '[]'); } catch (e) { return []; }
+  }
+  function _saveScannedIdsOutbox(ids) {
+    try { localStorage.setItem(SCANNED_IDS_OUTBOX_KEY, JSON.stringify(ids)); } catch (e) {}
+  }
+  function _enqueueScannedId(id) {
+    const items = _loadScannedIdsOutbox();
+    items.push(id);
+    _saveScannedIdsOutbox(items);
+  }
+
+  // core/supabase.js calls this after every upsert (room encounters, profile/guild/
+  // relationship views — any source, not just this file's own sweep) so those ids land
+  // in scanned_ids too. Without this, an id you just walk past in a room gets written to
+  // `users` but never to scanned_ids, so an in-progress scan (whose live-sync only polls
+  // scanned_ids) never learns about it and probes it again later anyway.
+  window.__udb_markIdsScanned = function(ids) {
+    (ids || []).forEach(function(id) { if (id != null) _enqueueScannedId(id); });
+  };
+  async function _scannedIdsDrainTick() {
+    if (_scannedIdsDraining || Date.now() < _scannedIdsBackoffUntil) return;
+    const items = _loadScannedIdsOutbox();
+    if (!items.length) return;
+    const batch = items.slice(0, SCANNED_IDS_BATCH_SIZE);
+    _scannedIdsDraining = true;
+    try {
+      // merge-duplicates (not ignore-duplicates) so scanned_at gets bumped to now on every
+      // touch, not just the first — that's what lets a 'known'-mode queue-build (below)
+      // treat "touched in the last 15 min" as "someone else already just refreshed this."
+      const nowIso = new Date().toISOString();
+      const res = await fetch(SUPABASE_URL + '/rest/v1/scanned_ids?on_conflict=id', {
+        method:  'POST',
+        headers: Object.assign({}, HEADERS, { 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' }),
+        body:    JSON.stringify(batch.map(function(id) { return { id: id, scanned_at: nowIso }; })),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const current = _loadScannedIdsOutbox();
+      _saveScannedIdsOutbox(current.slice(batch.length));
+    } catch (e) {
+      _log('scanned-id sync failed, will retry: ' + e.message);
+      _scannedIdsBackoffUntil = Date.now() + SCANNED_IDS_BACKOFF_MS;
+    } finally {
+      _scannedIdsDraining = false;
+    }
+  }
+  setInterval(_scannedIdsDrainTick, SCANNED_IDS_DRAIN_MS);
+
+  // ── Live cross-tab/cross-account sync while a scan is running — polls for scanned_ids
+  // rows newer than the last poll and folds their ids straight into _scanKnownIds, so a
+  // second account scanning at the same time gets skipped over here within one poll
+  // interval instead of both accounts probing the same ids in parallel. Also feeds
+  // _scanFreshAt (id -> last-touched ms) which 'known' mode's queue walk checks to skip an
+  // entry someone else just refreshed, even mid-queue.
+  const SCAN_SYNC_INTERVAL_MS = 3000;
+  let _scanSyncSince = null;
+  let _scanSyncTimer = null;
+  let _scanFreshAt = new Map();
+
+  async function _scanPollNewIds() {
+    if (!_scanActive || _scanSyncSince == null) return;
+    try {
+      const res = await fetch(
+        SUPABASE_URL + '/rest/v1/scanned_ids?select=id,scanned_at&scanned_at=gt.' + encodeURIComponent(_scanSyncSince) + '&order=scanned_at.asc&limit=5000',
+        { headers: HEADERS }
+      );
+      if (!res.ok) return;
+      const rows = await res.json();
+      if (!rows.length) return;
+      rows.forEach(function(r) {
+        if (_scanKnownIds) _scanKnownIds.add(r.id);
+        _scanFreshAt.set(r.id, Date.parse(r.scanned_at) || Date.now());
+        if (r.scanned_at > _scanSyncSince) _scanSyncSince = r.scanned_at;
+      });
+    } catch (e) { /* best-effort — a missed poll just gets caught on the next one */ }
+  }
+  function _scanSyncStart() {
+    _scanSyncSince = new Date().toISOString();
+    if (_scanSyncTimer) clearInterval(_scanSyncTimer);
+    _scanSyncTimer = setInterval(_scanPollNewIds, SCAN_SYNC_INTERVAL_MS);
+  }
+  function _scanSyncStop() {
+    if (_scanSyncTimer) clearInterval(_scanSyncTimer);
+    _scanSyncTimer = null;
+    _scanSyncSince = null;
   }
 
   // ── ID scan (GetExtendedProfile sweep) ──────────────────────────────────────────
@@ -336,6 +461,13 @@
 
     let id;
     if (_scanQueue) {
+      // Someone else's 'known'-mode scan may have refreshed the next few queue entries
+      // since this queue was built — skip past anything already fresh instead of
+      // re-probing it too.
+      while (_scanQueueIdx < _scanQueue.length && _scanFreshAt.has(_scanQueue[_scanQueueIdx])
+        && (Date.now() - _scanFreshAt.get(_scanQueue[_scanQueueIdx])) < KNOWN_REFRESH_STALE_MS) {
+        _scanQueueIdx++;
+      }
       if (_scanQueueIdx >= _scanQueue.length) {
         _scanSetStatus('Done — refreshed all ' + _scanQueue.length + ' known ids.');
         _scanStop();
@@ -343,6 +475,7 @@
       }
       id = _scanQueue[_scanQueueIdx++];
       _scanSetStatus('Refreshing known ids… ' + _scanQueueIdx + '/' + _scanQueue.length + ' (id ' + id + ')' + _scanLastReplySuffix());
+      _enqueueScannedId(id);
     } else {
       if (_scanDirection < 0 && _scanCurrentId < 1) {
         _scanSetStatus('Done — reached id 1, nothing lower to scan.');
@@ -358,6 +491,11 @@
       id = _scanCurrentId;
       _scanCurrentId += _scanDirection;
       _scanSetStatus('Scanning ' + (_scanDirection < 0 ? 'downward' : '') + '… id ' + id + _scanLastReplySuffix());
+      // Mark immediately (hit or miss) so this id is never re-probed — by this scan on a
+      // future restart, or by another account scanning concurrently once its next sync
+      // poll picks this up.
+      if (_scanKnownIds) _scanKnownIds.add(id);
+      _enqueueScannedId(id);
     }
     window.sendPacket('OUT', pid, '{i:' + id + '}{b:false}');
   }
@@ -366,7 +504,7 @@
     return _scanLastReplyId != null ? ' — laatste reply: id ' + _scanLastReplyId : '';
   }
 
-  const SCAN_INTERVAL_MS = 100;
+  const SCAN_INTERVAL_MS = 40; // 25/sec — drives both the GetExtendedProfile probe and the scanned_ids link upload
 
   // mode: 'known' = re-check every id already in the database (refresh stale data,
   // catch unbans); 'start' = sequential sweep from id 1; 'custom' = jump to a given id.
@@ -377,7 +515,8 @@
     const btn = panel.querySelector('#__udb_scan_btn');
     if (btn) btn.disabled = true;
     _scanSetStatus('Loading already-logged ids…');
-    _scanKnownIds = await _fetchAllKnownIds();
+    const known = await _fetchAllKnownIds();
+    _scanKnownIds = known.all;
 
     // Only reset position when the mode actually changes (or this is the first run) —
     // re-picking the SAME mode after a pause continues where it left off, but switching
@@ -386,7 +525,14 @@
     const isSameMode = _scanMode === mode;
     if (mode === 'known') {
       if (!isSameMode || !_scanQueue) {
-        _scanQueue = Array.from(_scanKnownIds).sort(function(a, b) { return a - b; });
+        _scanSetStatus('Checking which known ids were refreshed recently…');
+        // Real accounts only (never scanned_ids misses — those were never users) minus
+        // anything another account's 'known'-mode scan already refreshed recently, so two
+        // accounts starting a full refresh around the same time don't redo the same work.
+        const recentlyTouched = await _fetchRecentlyTouchedIds(KNOWN_REFRESH_STALE_MS);
+        _scanQueue = Array.from(known.users)
+          .filter(function(id) { return !recentlyTouched.has(id); })
+          .sort(function(a, b) { return a - b; });
         _scanQueueIdx = 0;
       }
     } else {
@@ -404,6 +550,7 @@
 
     _scanActive = true;
     if (btn) { btn.innerHTML = '&#9208;'; btn.title = 'Pause user-id scan'; }
+    _scanSyncStart();
     _scanTick();
     _scanTimer = setInterval(_scanTick, SCAN_INTERVAL_MS);
   }
@@ -412,6 +559,7 @@
     if (_scanTimer) clearInterval(_scanTimer);
     _scanTimer = null;
     _scanActive = false;
+    _scanSyncStop();
     const btn = panel && panel.querySelector('#__udb_scan_btn');
     if (btn) {
       btn.innerHTML = '&#9654;';

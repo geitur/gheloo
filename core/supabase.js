@@ -21,6 +21,55 @@
     return;
   }
 
+  // Persistent local outbox instead of firing straight to the network: every user gets
+  // logged into localStorage immediately (survives a page reload, never lost), then a
+  // drain loop sends them to the DB one at a time at a fixed ~10/sec pace, only removing
+  // an entry once its upsert is *confirmed* successful. A burst of packets (busy room,
+  // fast ID scan, a background tab dumping queued ticks after being foregrounded) used to
+  // fire dozens of concurrent requests at the self-hosted PostgREST's small connection
+  // pool on that tiny 1-core VM — that wedged the API for everyone twice (2026-08-28).
+  // This also means an outage doesn't lose anything: failed sends stay queued and just
+  // wait, with a backoff so a down/recovering DB doesn't get hammered every tick.
+  var OUTBOX_KEY   = 'gheloo_upsert_outbox_v1';
+  var DRAIN_MS     = 100;  // ~10 sends/sec
+  var BACKOFF_MS   = 5000; // pause the whole drain after a failure so a struggling DB gets room to recover
+  var _backoffUntil = 0;
+  var _draining      = false;
+
+  function loadOutbox() {
+    try { return JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]'); } catch (e) { return []; }
+  }
+  function saveOutbox(items) {
+    try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(items)); } catch (e) { console.warn('[Supabase] outbox save failed:', e); }
+  }
+  function enqueueUsers(users, opts) {
+    if (!users || !users.length) return;
+    var items = loadOutbox();
+    users.forEach(function(u) { items.push({ u: u, o: opts || {} }); });
+    saveOutbox(items);
+  }
+
+  async function drainTick() {
+    if (_draining || Date.now() < _backoffUntil) return;
+    var items = loadOutbox();
+    if (!items.length) return;
+    _draining = true;
+    try {
+      await upsertUsers([items[0].u], items[0].o);
+      // Re-read rather than reuse `items` — packet handlers may have pushed more
+      // entries onto the outbox while this send was in flight.
+      var current = loadOutbox();
+      current.shift();
+      saveOutbox(current);
+    } catch (e) {
+      console.warn('[Supabase] outbox send failed, will retry:', e);
+      _backoffUntil = Date.now() + BACKOFF_MS;
+    } finally {
+      _draining = false;
+    }
+  }
+  setInterval(drainTick, DRAIN_MS);
+
   var HEADERS = {
     'apikey':        SUPABASE_ANON_KEY,
     'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
@@ -181,30 +230,32 @@
       return row;
     });
 
-    fetch(SUPABASE_URL + '/rest/v1/users', {
+    // Throws on a failed write (not just a real network error) so the outbox drain loop
+    // above actually sees this as failed and keeps the entry queued for retry — fetch()
+    // only rejects on a network failure, a 400/500 response resolves normally, so res.ok
+    // has to be checked explicitly and turned into a real rejection.
+    var res = await fetch(SUPABASE_URL + '/rest/v1/users', {
       method:  'POST',
       headers: Object.assign({}, HEADERS, { 'Prefer': 'resolution=merge-duplicates' }),
       body:    JSON.stringify(upsertRows),
-    }).then(async function(res) {
-      // fetch() only rejects on a real network failure — a 400/500 response resolves
-      // normally, so this HAS to check res.ok explicitly or a rejected write (e.g. a
-      // malformed batch) fails completely silently with nothing in the console.
-      if (!res.ok) {
-        var body = await res.text().catch(function() { return '(no body)'; });
-        console.warn('[Supabase] upsert rejected:', res.status, body);
-        return;
-      }
-      // Lets an already-open User Database panel merge these rows in live instead of
-      // needing a manual reload to see someone who just got logged.
-      if (window.__udb_onUsersUpserted) window.__udb_onUsersUpserted(upsertRows);
-    }).catch(function(e) {
-      console.warn('[Supabase] upsert failed:', e);
     });
+    if (!res.ok) {
+      var body = await res.text().catch(function() { return '(no body)'; });
+      throw new Error('upsert rejected: ' + res.status + ' ' + body);
+    }
+    // Lets an already-open User Database panel merge these rows in live instead of
+    // needing a manual reload to see someone who just got logged.
+    if (window.__udb_onUsersUpserted) window.__udb_onUsersUpserted(upsertRows);
+    // Any id logged through ANY source (room encounter, profile/guild/relationship view)
+    // also counts as "known" for the id-sweep scanner — not just ids the scanner itself
+    // probed — so a scan running while you play normally doesn't re-probe someone you
+    // just walked past. See extensions/fun/user-database.js's scanned_ids outbox.
+    if (window.__udb_markIdsScanned) window.__udb_markIdsScanned(ids);
   }
 
   window.onPacket('Users', function(p) {
     if (!p.parsed || !p.parsed.users || !p.parsed.users.length) return;
-    upsertUsers(p.parsed.users);
+    enqueueUsers(p.parsed.users);
   });
 
   // UserChange (outfit/motto edited live in a room you're already in) — parsers.js's own
@@ -218,7 +269,7 @@
     // Auto-random-outfit (user-database.js) fires a UserChange for yourself every
     // cooldown tick — don't log your own account while that's cycling looks.
     if (window.__udb_autoRandomActive && window._selfName && u.name === window._selfName) return;
-    upsertUsers([u]);
+    enqueueUsers([u]);
   });
 
   // ExtendedProfile (profile card opened — either by clicking an avatar in-room, or via
@@ -233,7 +284,7 @@
         if (roomUsers[idx].id === p.parsed.id) { cached = roomUsers[idx]; break; }
       }
     }
-    upsertUsers([Object.assign({}, cached, p.parsed)], { skipFilter: true, source: 'profile' });
+    enqueueUsers([Object.assign({}, cached, p.parsed)], { skipFilter: true, source: 'profile' });
   });
 
   // GuildMembers (group's member list opened) — logs every member on the page received.
@@ -241,7 +292,7 @@
   // known for each id instead of blanking those fields.
   window.onPacket('GuildMembers', function(p) {
     if (!p.parsed || !p.parsed.members || !p.parsed.members.length) return;
-    upsertUsers(p.parsed.members, { skipFilter: true, source: 'guild' });
+    enqueueUsers(p.parsed.members, { skipFilter: true, source: 'guild' });
   });
 
   // RelationshipStatusInfo (someone's relationships list opened) — same reasoning as
@@ -249,7 +300,7 @@
   // whatever's already known.
   window.onPacket('RelationshipStatusInfo', function(p) {
     if (!p.parsed || !p.parsed.users || !p.parsed.users.length) return;
-    upsertUsers(p.parsed.users, { skipFilter: true, source: 'relationship' });
+    enqueueUsers(p.parsed.users, { skipFilter: true, source: 'relationship' });
   });
 
   console.log('[Supabase] user logger active');

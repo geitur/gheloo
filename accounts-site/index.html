@@ -20,6 +20,7 @@
   --green:    oklch(0.65 0.18 160);
   --red:      oklch(0.65 0.22 25);
   --gold:     oklch(0.78 0.16 95);
+  --purple:   oklch(0.65 0.20 310);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
@@ -73,6 +74,7 @@ textarea:focus{border-color:var(--primary)}
 table{width:100%;border-collapse:collapse;font-size:12px}
 thead th{padding:10px 14px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);background:color-mix(in oklch,var(--card) 50%,var(--bg));border-bottom:1px solid var(--border);border-right:1px solid var(--border);white-space:nowrap}
 thead th:last-child{border-right:none}
+thead th:first-child, tbody td:first-child{width:1%}
 tbody td{padding:0;border-bottom:1px solid color-mix(in oklch,var(--border) 50%,transparent);border-right:1px solid color-mix(in oklch,var(--border) 50%,transparent);vertical-align:middle;white-space:nowrap}
 tbody td:last-child{border-right:none}
 tbody tr:last-child td{border-bottom:none}
@@ -98,13 +100,20 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
 .pagination .page-info{font-size:12px;color:var(--muted);margin:0 6px}
 .page-jump{width:50px;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;text-align:center;outline:none}
 .page-jump:focus{border-color:var(--primary)}
+.page-jump::-webkit-outer-spin-button,.page-jump::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.page-jump{-moz-appearance:textfield}
 
 .mark-row{display:inline-flex;gap:6px}
-.mark-btn{width:24px;height:24px;border-radius:6px;border:1.5px solid var(--border);background:var(--input);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;transition:all .1s}
+.mark-btn{width:24px;height:24px;border-radius:6px;border:1.5px solid var(--border);background:var(--input);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;transition:all .1s;color:#111}
 .mark-btn:hover{border-color:var(--muted)}
-.mark-btn.on-goud{background:color-mix(in oklch,var(--gold) 25%,transparent);border-color:var(--gold)}
-.mark-btn.on-groen{background:color-mix(in oklch,var(--green) 25%,transparent);border-color:var(--green)}
-.mark-btn.on-rood{background:color-mix(in oklch,var(--red) 25%,transparent);border-color:var(--red)}
+.mark-btn[data-cat="goud"]:hover{border-color:var(--gold)}
+.mark-btn[data-cat="groen"]:hover{border-color:var(--green)}
+.mark-btn[data-cat="rood"]:hover{border-color:var(--red)}
+.mark-btn[data-cat="paars"]:hover{border-color:var(--purple)}
+.mark-btn.on-goud{background:var(--gold);border-color:var(--gold)}
+.mark-btn.on-groen{background:var(--green);border-color:var(--green)}
+.mark-btn.on-rood{background:var(--red);border-color:var(--red)}
+.mark-btn.on-paars{background:var(--purple);border-color:var(--purple)}
 .mark-btn svg{width:12px;height:12px;pointer-events:none}
 
 .loading{color:var(--muted);font-size:13px;padding:48px;text-align:center}
@@ -126,6 +135,7 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
     </div>
     <nav id="tabs">
       <button class="tab active" data-tab="all">Alle <span class="count" id="cnt-all">0</span></button>
+      <button class="tab" data-tab="paars"><span class="dot" style="background:var(--purple)"></span>Paars <span class="count" id="cnt-paars">0</span></button>
       <button class="tab" data-tab="goud"><span class="dot" style="background:var(--gold)"></span>Goud <span class="count" id="cnt-goud">0</span></button>
       <button class="tab" data-tab="groen"><span class="dot" style="background:var(--green)"></span>Groen <span class="count" id="cnt-groen">0</span></button>
       <button class="tab" data-tab="rood"><span class="dot" style="background:var(--red)"></span>Rood <span class="count" id="cnt-rood">0</span></button>
@@ -142,7 +152,7 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
       <input class="search-input" id="search" placeholder="Zoek op naam...">
     </div>
 
-    <div class="card">
+    <div class="card" id="import-card">
       <div class="card-body">
         <textarea id="import-text" placeholder="Plak hier een lijst, bv:&#10;klokkie:klokkie | Credits: 10002405 | BelCredits: 0 | Rank: 1"></textarea>
         <div class="import-row">
@@ -150,6 +160,15 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
           <input type="file" id="import-file" accept=".txt" style="display:none">
           <button class="btn btn-outline" id="import-file-btn">Upload .txt</button>
           <span class="import-status" id="import-status"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="catnote-card" style="display:none">
+      <div class="card-body">
+        <textarea id="catnote-text" placeholder="Waarvoor dienen deze accounts?"></textarea>
+        <div class="import-row">
+          <span class="import-status" id="catnote-status"></span>
         </div>
       </div>
     </div>
@@ -163,6 +182,7 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
             <th>Wachtwoord</th>
             <th><span class="sort-th" data-sort="account">Credits<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th><span class="sort-th" data-sort="vrienden">BelCredits<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
+            <th><span class="sort-th" data-sort="game_id">ID<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th><span class="sort-th" data-sort="rank">Rank<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th>Notitie</th>
           </tr>

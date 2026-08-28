@@ -3,6 +3,9 @@
   // Same-origin under Caddy on accounts.databin.uk (proxied to /rest/v1), so no CORS
   // header is needed as long as this site and the API share that domain.
   const SB_URL = '/rest/v1';
+  // Cross-origin to the other Gheloo site — its PostgREST already sends
+  // Access-Control-Allow-Origin: * so no CORS setup needed on either side.
+  const USERDB_URL = 'https://userlogger.databin.uk/rest/v1';
   const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdoZWxvby1zZWxmaG9zdCIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjo0MTAyNDQ0ODAwfQ.9uAMhqRJOL-m_xtTO5duAUOAw-4pKk4LEENcT47crXU';
 
   const HEADERS = {
@@ -14,6 +17,7 @@
   const LINE_RE = /^(?<user>[^:]+):(?<pass>[^|]+?)\s*\|\s*Credits:\s*(?<account>\d+)\s*\|\s*BelCredits:\s*(?<vrienden>\d+)\s*\|\s*Rank:\s*(?<rank>\d+)/i;
 
   let _all = new Map();   // username -> row
+  let _catNotes = new Map(); // category key -> note text
   let _tab = 'all';
   let _query = '';
   let _sortKey = null;    // 'account' | 'vrienden' | 'rank' | null (default: username asc)
@@ -74,7 +78,117 @@
       _all = new Map(rows.map((r) => [r.username, r]));
       render();
     } catch (e) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="6">Fout bij laden: ' + esc(e.message) + '</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Fout bij laden: ' + esc(e.message) + '</td></tr>';
+    }
+    try {
+      const notes = await sbGet('/category_notes?select=*');
+      _catNotes = new Map(notes.map((n) => [n.category, n.note]));
+    } catch (e) { /* table may not exist yet */ }
+  }
+
+  // ── Link to User Database (userlogger.databin.uk) ───────────────────────────
+  // Resolved once per account and written back to bot_accounts.game_id — persisted,
+  // so an already-checked account is never looked up again, ever (loadAll's select=*
+  // just reads the stored value straight from the row).
+  //
+  // IMPORTANT: an earlier version matched via or=(name.ilike.x,...) for every unchecked
+  // account in one request — an unindexed, case-insensitive OR-scan over a 500k+ row
+  // table on a single-core VM, which took the whole box down twice (2026-08-28). Fixed
+  // now: one account at a time, once per second, indexed exact match (`eq.`, cheap) —
+  // gentle enough to never be the thing that overloads that tiny VM again. New imports
+  // get picked up automatically since this just keeps re-scanning _all for whatever's
+  // still unchecked, no separate trigger needed.
+  let _linkTimer = null;
+  function startLinkGameIdsLoop() {
+    if (_linkTimer) return;
+    // Still one account per tick (never concurrent/batched) — just ticking faster.
+    // 40ms ≈ 25/sec. Safe because each lookup is a single indexed eq. match (not the
+    // unindexed OR-ILIKE scan that caused the outage), and _linking now guards against
+    // overlapping ticks so this never fires concurrent requests either.
+    _linkTimer = setInterval(linkNextGameId, 40);
+  }
+
+  // At 25/sec, calling render() every tick was re-sorting/re-paginating the whole
+  // table 25x/sec whenever sorted by ID — rows would visibly jump in and out as their
+  // game_id resolved mid-sort. Coalesce into at most 2 re-renders/sec instead.
+  let _renderScheduled = false;
+  function scheduleRender() {
+    if (_renderScheduled) return;
+    _renderScheduled = true;
+    setTimeout(function() { _renderScheduled = false; render(); }, 500);
+  }
+
+  // Without this guard, a tick could start before the previous one's GET+PATCH
+  // finished — since _all only gets updated with game_id_checked=true AFTER that
+  // completes, an overlapping tick would pick the SAME still-unchecked account again.
+  // If that second lookup came back empty (a network hiccup), it would overwrite the
+  // just-set game_id back to null — the "connects then un-connects" bug.
+  //
+  // A miss (no game_id found) used to set game_id_checked=true permanently — so an
+  // account whose player only showed up in userlogger.databin.uk's `users` table AFTER
+  // this ran once (e.g. logged in later, or only just got room-encountered/scanned) stayed
+  // "linked to nothing" forever, even though a fresh lookup would now succeed (2026-08-28,
+  // reported: "yoppie" existed in the user db but never got linked). A real match still
+  // locks in permanently (no reason to ever recheck those), but a miss now gets retried
+  // after RECHECK_MS instead of being treated as final.
+  // Was 6h — way too slow while the room scanner is actively adding new users at ~25/sec
+  // in parallel: several accounts got checked mere seconds before their player showed up
+  // in userlogger.databin.uk, then sat "linked to nothing" for hours despite a real match
+  // existing moments later (2026-08-28). 5 min still keeps this to one cheap indexed
+  // lookup per unlinked account every 5 min, nowhere near what caused the past outages.
+  const RECHECK_MS = 5 * 60 * 1000;
+  let _linking = false;
+  async function linkNextGameId() {
+    if (_linking) return;
+    const now = Date.now();
+    const next = Array.from(_all.entries()).find(([, row]) => {
+      if (!row.game_id_checked) return true;
+      if (row.game_id != null) return false; // real match — never recheck
+      const checkedAt = row.game_id_checked_at ? new Date(row.game_id_checked_at).getTime() : 0;
+      return now - checkedAt >= RECHECK_MS;
+    });
+    if (!next) return;
+    _linking = true;
+    const [username, row] = next;
+    try {
+      // ilike (case-insensitive), not eq. — bot_accounts.username's casing comes from
+      // wherever the credentials were imported from, which doesn't necessarily match the
+      // in-game name's casing exactly (2026-08-28, reported: "kimberley" never linked
+      // despite "Kimberly" existing in the user db). No wildcards in the value, so this is
+      // still an exact match, just case-insensitive.
+      const res = await fetch(USERDB_URL + '/users?select=id&name=ilike.' + encodeURIComponent(username));
+      const matches = res.ok ? await res.json() : [];
+      const id = matches.length ? matches[0].id : null;
+      const saved = await sbPatch('/bot_accounts?username=eq.' + encodeURIComponent(username),
+        { game_id: id, game_id_checked: true, game_id_checked_at: new Date().toISOString() });
+      if (saved[0]) _all.set(username, Object.assign({}, row, saved[0]));
+      scheduleRender();
+    } catch (e) { /* leave as-is, a later tick will retry this same account */ }
+    finally { _linking = false; }
+  }
+
+  // ── Category note ────────────────────────────────────────────────────────────
+  async function saveCategoryNote(category, note) {
+    const statusEl = document.getElementById('catnote-status');
+    try {
+      await sbUpsert('/category_notes?on_conflict=category', [{ category, note }]);
+      _catNotes.set(category, note);
+      if (statusEl) {
+        statusEl.textContent = 'Opgeslagen.';
+        setTimeout(() => { if (statusEl.textContent === 'Opgeslagen.') statusEl.textContent = ''; }, 1500);
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = 'Fout: ' + e.message;
+    }
+  }
+
+  function showTopCard(tab) {
+    const isAll = tab === 'all';
+    document.getElementById('import-card').style.display = isAll ? '' : 'none';
+    document.getElementById('catnote-card').style.display = isAll ? 'none' : '';
+    if (!isAll) {
+      document.getElementById('catnote-text').value = _catNotes.get(tab) || '';
+      document.getElementById('catnote-status').textContent = '';
     }
   }
 
@@ -138,22 +252,50 @@
     }
   }
 
-  // ── Category toggle ──────────────────────────────────────────────────────────
+  // ── Category toggle (with undo/redo) ────────────────────────────────────────
+  let _undoStack = [];
+  let _redoStack = [];
+
+  async function applyCategory(username, cat) {
+    const row = _all.get(username);
+    if (!row) return false;
+    try {
+      const saved = await sbPatch('/bot_accounts?username=eq.' + encodeURIComponent(username), { category: cat });
+      if (saved[0]) _all.set(username, Object.assign({}, row, saved[0]));
+      render();
+      return true;
+    } catch (e) {
+      alert('Kon categorie niet opslaan: ' + e.message);
+      return false;
+    }
+  }
+
   async function setCategory(username, cat) {
     const row = _all.get(username);
     if (!row) return;
-    const next = row.category === cat ? null : cat; // click again to unset
-    try {
-      const saved = await sbPatch('/bot_accounts?username=eq.' + encodeURIComponent(username), { category: next });
-      if (saved[0]) _all.set(username, Object.assign({}, row, saved[0]));
-      render();
-    } catch (e) {
-      alert('Kon categorie niet opslaan: ' + e.message);
+    const prev = row.category;
+    const next = prev === cat ? null : cat; // click again to unset
+    if (await applyCategory(username, next)) {
+      _undoStack.push({ username, prev, next });
+      _redoStack = [];
     }
+  }
+
+  async function undoCategory() {
+    const action = _undoStack.pop();
+    if (!action) return;
+    if (await applyCategory(action.username, action.prev)) _redoStack.push(action);
+  }
+
+  async function redoCategory() {
+    const action = _redoStack.pop();
+    if (!action) return;
+    if (await applyCategory(action.username, action.next)) _undoStack.push(action);
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
   const MARKS = [
+    { key: 'paars', title: 'Paars' },
     { key: 'goud', title: 'Goud' },
     { key: 'groen', title: 'Groen' },
     { key: 'rood', title: 'Rood' },
@@ -174,19 +316,20 @@
 
   function render() {
     const rows = Array.from(_all.values());
-    const counts = { all: rows.length, goud: 0, groen: 0, rood: 0, none: 0 };
+    const counts = { all: rows.length, goud: 0, groen: 0, rood: 0, paars: 0, none: 0 };
     rows.forEach((r) => {
       if (r.category === 'goud') counts.goud++;
       else if (r.category === 'groen') counts.groen++;
       else if (r.category === 'rood') counts.rood++;
+      else if (r.category === 'paars') counts.paars++;
       else counts.none++;
     });
-    ['all', 'goud', 'groen', 'rood', 'none'].forEach((k) => {
+    ['all', 'goud', 'groen', 'rood', 'paars', 'none'].forEach((k) => {
       document.getElementById('cnt-' + k).textContent = counts[k];
     });
 
     let filtered = rows.filter((r) => {
-      if (_tab === 'goud' || _tab === 'groen' || _tab === 'rood') return r.category === _tab;
+      if (_tab === 'goud' || _tab === 'groen' || _tab === 'rood' || _tab === 'paars') return r.category === _tab;
       if (_tab === 'none') return !r.category;
       return true;
     });
@@ -195,7 +338,18 @@
       filtered = filtered.filter((r) => r.username.toLowerCase().includes(q));
     }
 
-    if (_sortKey) {
+    if (_query) {
+      // Searching: closest match first (exact, then starts-with, then contains),
+      // column sort takes a back seat while a query is active.
+      const q = _query.toLowerCase();
+      const score = (r) => {
+        const name = r.username.toLowerCase();
+        if (name === q) return 0;
+        if (name.indexOf(q) === 0) return 1;
+        return 2;
+      };
+      filtered.sort((a, b) => score(a) - score(b) || a.username.localeCompare(b.username));
+    } else if (_sortKey) {
       const dir = _sortDir === 'desc' ? -1 : 1;
       filtered.sort((a, b) => (((a[_sortKey] ?? -Infinity) - (b[_sortKey] ?? -Infinity)) * dir) || a.username.localeCompare(b.username));
     } else {
@@ -207,7 +361,7 @@
       el.classList.toggle('sort-desc', _sortKey === el.dataset.sort && _sortDir === 'desc');
     });
 
-    const titles = { all: 'Alle accounts', goud: 'Goud', groen: 'Groen', rood: 'Rood', none: 'Ongesorteerd' };
+    const titles = { all: 'Alle accounts', goud: 'Goud', groen: 'Groen', rood: 'Rood', paars: 'Paars', none: 'Ongesorteerd' };
     document.getElementById('page-title').textContent = titles[_tab];
 
     const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -220,7 +374,7 @@
 
     const tbody = document.getElementById('tbl-body');
     if (!filtered.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">' + (rows.length ? 'Geen resultaten.' : 'Nog geen accounts geïmporteerd.') + '</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">' + (rows.length ? 'Geen resultaten.' : 'Nog geen accounts geïmporteerd.') + '</td></tr>';
       return;
     }
     tbody.innerHTML = pageRows.map((r) => (
@@ -230,6 +384,7 @@
       + '<td>' + copyText(r.password) + '</td>'
       + '<td class="plain-cell">' + (r.account != null ? r.account.toLocaleString() : '—') + '</td>'
       + '<td class="plain-cell">' + (r.vrienden ?? '—') + '</td>'
+      + '<td class="plain-cell">' + (r.game_id ?? '—') + '</td>'
       + '<td class="plain-cell">' + (r.rank ?? '—') + '</td>'
       + '<td><input class="note-input" data-username="' + esc(r.username) + '" value="' + esc(r.note || '') + '" placeholder="…"></td>'
       + '</tr>'
@@ -239,6 +394,11 @@
   function renderPagination(total, totalPages) {
     const el = document.getElementById('pagination');
     if (!total) { el.innerHTML = ''; return; }
+    // The background game-id-link loop re-renders every ~500ms (scheduleRender) — a full
+    // rebuild while the user is mid-type in the page-jump box would wipe out what they
+    // just typed and drop focus. Skip the rebuild while it's focused; it catches up on
+    // the next render once they blur/submit.
+    if (document.activeElement && document.activeElement.id === 'pg-jump') return;
     const atStart = _page <= 0, atEnd = _page >= totalPages - 1;
     el.innerHTML =
       '<button class="btn btn-outline" id="pg-first" title="Eerste pagina"' + (atStart ? ' disabled' : '') + '>&laquo;&laquo;&laquo;</button>'
@@ -258,12 +418,23 @@
 
   // ── Events ───────────────────────────────────────────────────────────────────
   function setupEvents() {
+    // Only handles goud/groen/rood/paars undo — text fields (notes, search, import)
+    // keep the browser's own native undo, so skip when focus is in an editable field.
+    document.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea') return;
+      if (e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undoCategory(); }
+      else if (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey)) { e.preventDefault(); redoCategory(); }
+    });
+
     document.getElementById('tabs').addEventListener('click', (e) => {
       const btn = e.target.closest('.tab');
       if (!btn) return;
       _tab = btn.dataset.tab;
       _page = 0;
       document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === btn));
+      showTopCard(_tab);
       render();
     });
 
@@ -316,6 +487,11 @@
       e.target.value = '';
     });
 
+    document.getElementById('catnote-text').addEventListener('focusout', (e) => {
+      if (_tab === 'all') return;
+      saveCategoryNote(_tab, e.target.value);
+    });
+
     document.getElementById('tbl-body').addEventListener('click', (e) => {
       const markEl = e.target.closest('[data-action="mark"]');
       if (markEl) { setCategory(markEl.dataset.username, markEl.dataset.cat); return; }
@@ -335,4 +511,5 @@
 
   setupEvents();
   loadAll();
+  startLinkGameIdsLoop();
 })();

@@ -83,6 +83,8 @@ tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
 .pagination .page-info{font-size:12px;color:var(--muted);margin:0 6px}
 .page-jump{width:50px;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;text-align:center;outline:none}
 .page-jump:focus{border-color:var(--primary)}
+.page-jump::-webkit-outer-spin-button,.page-jump::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.page-jump{-moz-appearance:textfield}
 </style>
 </head>
 <body>
@@ -253,6 +255,9 @@ function fmtVal(u, key) {
 function renderPagination() {
   const el = document.getElementById('pagination');
   if (!totalMatches) { el.innerHTML = ''; return; }
+  // Skip the rebuild while the page-jump box is focused — a refresh mid-type would wipe
+  // out what's typed and drop focus. Catches up on the next render after blur/submit.
+  if (document.activeElement && document.activeElement.id === 'pg-jump') return;
   const tp = totalPages();
   const atStart = currentOffset === 0, atEnd = lastRows.length < LIMIT;
   el.innerHTML =
@@ -275,6 +280,21 @@ function renderPagination() {
   jump.addEventListener('focusout', e => gotoPage(parseInt(e.target.value, 10) || 1));
 }
 
+// While a name filter is active, put the closest match first within the current
+// page (exact match, then starts-with, then plain contains) instead of leaving
+// server order (id/last_seen/etc.) — the chosen sort still applies when not searching.
+function sortByRelevance() {
+  const q = document.getElementById('q_name').value.trim().toLowerCase();
+  if (!q) return;
+  const score = u => {
+    const name = (u.name || '').toLowerCase();
+    if (name === q) return 0;
+    if (name.indexOf(q) === 0) return 1;
+    return 2;
+  };
+  lastRows.sort((a, b) => score(a) - score(b));
+}
+
 async function search(reset) {
   if (reset) currentOffset = 0;
   const statusEl = document.getElementById('status');
@@ -288,6 +308,7 @@ async function search(reset) {
     const total = (range.split('/')[1]) || '?';
     totalMatches = parseInt(total, 10) || 0;
     lastRows = await res.json();
+    sortByRelevance();
     const from = total !== '?' && total !== '0' ? (currentOffset + 1) : 0;
     const to = currentOffset + lastRows.length;
     statusEl.textContent = (lastRows.length ? (from + '–' + to) : '0') + ' van ' + total + ' matches';
