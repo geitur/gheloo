@@ -375,9 +375,17 @@
         const extra       = r.int();
         const dataTypeRaw = r.int();
         const stuff       = parseItemData(r, dataTypeRaw & 0xFF);
+        // Unique edition number/size pair (flag 0x100) comes right after the stuff body,
+        // BEFORE expires/usagePolicy — confirmed byte-exact against a real capture of a
+        // known item (Hippo der Anubis (LTD), real in-game edition 277/500): the previous
+        // order (reading this pair AFTER expires/usagePolicy) was landing on the wrong
+        // bytes, producing a bogus uniqueSerial of -1 on every real LTD room item while
+        // corrupting expires/usagePolicy into nonsense too. Zero leftover bytes once
+        // reordered, and expires/usagePolicy come out sane (-1 / small enum) across every
+        // item in that capture, flagged or not.
+        if (dataTypeRaw & 0x100) { stuff.uniqueSerial=r.int(); stuff.uniqueSerialSize=r.int(); }
         const expires     = r.int();
         const usagePolicy = r.int();
-        if (dataTypeRaw & 0x100) { stuff.uniqueSerial=r.int(); stuff.uniqueSerialSize=r.int(); }
         const ownerId     = r.int();
         const ownerName   = owners[ownerId] || '';
         if (typeId < 0) r.str(); // identifier for negative kind
@@ -392,7 +400,8 @@
   // as Objects' inner loop, but exactly one item and no owners table — the owner name is
   // inlined right after ownerId instead of being looked up. Confirmed field-for-field
   // against a real capture: {i:id}{i:typeId}{i:x}{i:y}{i:facing}{s:z}{s:sizeZ}{i:extra}
-  // {i:dataTypeRaw}{...stuff...}{i:expires}{i:usagePolicy}{i:ownerId}{s:ownerName}.
+  // {i:dataTypeRaw}{...stuff...}[{i:uniqueSerial}{i:uniqueSerialSize} if flag 0x100]
+  // {i:expires}{i:usagePolicy}{i:ownerId}{s:ownerName}.
   window.PacketParsers.IN.ObjectAdd = raw => {
     const r = window.makeReader(raw); if (!r) return null;
     const id          = r.int();
@@ -404,9 +413,9 @@
     const extra       = r.int();
     const dataTypeRaw = r.int();
     const stuff       = parseItemData(r, dataTypeRaw & 0xFF);
+    if (dataTypeRaw & 0x100) { stuff.uniqueSerial=r.int(); stuff.uniqueSerialSize=r.int(); }
     const expires     = r.int();
     const usagePolicy = r.int();
-    if (dataTypeRaw & 0x100) { stuff.uniqueSerial=r.int(); stuff.uniqueSerialSize=r.int(); }
     const ownerId     = r.int();
     const ownerName   = r.str();
     if (typeId < 0) r.str(); // identifier for negative kind
