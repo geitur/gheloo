@@ -303,6 +303,35 @@
     while (_loading) await new Promise(function(r) { setTimeout(r, 100); });
   }
 
+  // Keyset (cursor) pagination by id — used for every "must not miss a single row" fetch
+  // below. Offset/limit pagination (still fine for _loadUsers's display list) is only
+  // correct on a table nobody else is writing to while you paginate it: OFFSET counts
+  // ROW POSITIONS, and with several accounts inserting into `users`/`scanned_ids` at the
+  // same time this function itself is running, a row inserted before the current offset
+  // shifts every later page's window — silently skipping whatever used to sit at that
+  // position. That's exactly how an id that's genuinely been in the table for a day could
+  // still be missing from the "already known" set built moments ago. Keyset pagination
+  // asks "next N rows with id greater than the last one I actually saw" — a real value,
+  // not a position — so it can't be shifted out from under itself by concurrent writes.
+  async function _fetchAllIds(table, extraFilter) {
+    const ids = [];
+    let lastId = -1;
+    for (;;) {
+      const filter = (extraFilter ? extraFilter + '&' : '') + 'id=gt.' + lastId;
+      const res = await fetch(
+        SUPABASE_URL + '/rest/v1/' + table + '?select=id&' + filter + '&order=id.asc&limit=' + PAGE_SIZE,
+        { headers: HEADERS }
+      );
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const page = await res.json();
+      if (!page.length) break;
+      for (let i = 0; i < page.length; i++) ids.push(page[i].id);
+      lastId = page[page.length - 1].id;
+      if (page.length < PAGE_SIZE) break;
+    }
+    return ids;
+  }
+
   // Scanner's "skip already-known ids" set must always cover EVERY logged id regardless
   // of the UI's room-only filter — otherwise ids only known via a group/profile view
   // would look unscanned and get redundantly re-probed. Unioned with scanned_ids (every
@@ -313,13 +342,13 @@
   // and `users` (real accounts only — what 'known' mode should actually walk; it has no
   // business re-probing scanned_ids misses, those were never real accounts).
   async function _fetchAllKnownIds() {
-    const [userRows, scannedRows] = await Promise.all([
-      _fetchAllPages('users', 'select=id&type=eq.1'),
-      _fetchAllPages('scanned_ids', 'select=id'),
+    const [userIds, scannedIds] = await Promise.all([
+      _fetchAllIds('users', 'type=eq.1'),
+      _fetchAllIds('scanned_ids'),
     ]);
-    const users = new Set(userRows.map(function(r) { return r.id; }));
+    const users = new Set(userIds);
     const all = new Set(users);
-    scannedRows.forEach(function(r) { all.add(r.id); });
+    scannedIds.forEach(function(id) { all.add(id); });
     return { all: all, users: users };
   }
 
@@ -331,8 +360,8 @@
   const KNOWN_REFRESH_STALE_MS = 15 * 60 * 1000; // 15 min
   async function _fetchRecentlyTouchedIds(sinceMs) {
     const sinceIso = new Date(Date.now() - sinceMs).toISOString();
-    const rows = await _fetchAllPages('scanned_ids', 'select=id&scanned_at=gt.' + encodeURIComponent(sinceIso));
-    return new Set(rows.map(function(r) { return r.id; }));
+    const ids = await _fetchAllIds('scanned_ids', 'scanned_at=gt.' + encodeURIComponent(sinceIso));
+    return new Set(ids);
   }
 
   // ── scanned_ids outbox — records every id the scanner has ever sent a
@@ -344,7 +373,7 @@
   // backoff room instead of getting hammered.
   const SCANNED_IDS_OUTBOX_KEY = 'gheloo_scanned_ids_outbox_v1';
   const SCANNED_IDS_BATCH_SIZE = 200;
-  const SCANNED_IDS_DRAIN_MS   = 1000;
+  const SCANNED_IDS_DRAIN_MS   = 400;
   const SCANNED_IDS_BACKOFF_MS = 5000;
   let _scannedIdsBackoffUntil = 0;
   let _scannedIdsDraining = false;
@@ -403,7 +432,7 @@
   // interval instead of both accounts probing the same ids in parallel. Also feeds
   // _scanFreshAt (id -> last-touched ms) which 'known' mode's queue walk checks to skip an
   // entry someone else just refreshed, even mid-queue.
-  const SCAN_SYNC_INTERVAL_MS = 3000;
+  const SCAN_SYNC_INTERVAL_MS = 1000;
   let _scanSyncSince = null;
   let _scanSyncTimer = null;
   let _scanFreshAt = new Map();
@@ -454,12 +483,17 @@
   let _scanMode       = null;   // which mode _scanCurrentId/_scanQueue currently reflects
   let _scanDirection  = 1;      // 1 = ascending, -1 = descending (only meaningful for 'custom')
   let _scanLastReplyId = null;  // last id that actually got an ExtendedProfile reply back — display only
+  let _scanNewCount = 0;        // real accounts found THIS run — display only, reset on a fresh start/custom run
 
   // Display-only — just tracks what to show in the status line, not tied to any
   // persisted resume position.
   window.onPacket('ExtendedProfile', function(p) {
     if (!p.parsed || !p.parsed.id || !_scanActive) return;
     _scanLastReplyId = p.parsed.id;
+    // 'start'/'custom' only ever probe ids _scanKnownIds didn't already have, so any reply
+    // here is by construction a genuinely new find. 'known' mode is a refresh sweep over
+    // already-known ids — a reply there isn't "new", so it's not counted.
+    if (_scanMode !== 'known') _scanNewCount++;
   });
 
   function _scanSetStatus(text) {
@@ -518,7 +552,9 @@
   }
 
   function _scanLastReplySuffix() {
-    return _scanLastReplyId != null ? ' — laatste reply: id ' + _scanLastReplyId : '';
+    let s = _scanLastReplyId != null ? ' — laatste reply: id ' + _scanLastReplyId : '';
+    if (_scanMode !== 'known') s += ' — ' + _scanNewCount + ' nieuw';
+    return s;
   }
 
   // 25/sec by default — drives both the GetExtendedProfile probe and the scanned_ids link
@@ -576,9 +612,10 @@
       if (mode === 'custom') {
         _scanCurrentId = customId;
         _scanDirection = direction === -1 ? -1 : 1;
+        _scanNewCount = 0;
       } else { // 'start'
         _scanDirection = 1;
-        if (!isSameMode || _scanCurrentId === null) _scanCurrentId = 1;
+        if (!isSameMode || _scanCurrentId === null) { _scanCurrentId = 1; _scanNewCount = 0; }
       }
     }
     _scanMode = mode;
