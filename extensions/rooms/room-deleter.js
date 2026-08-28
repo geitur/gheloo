@@ -29,6 +29,17 @@
   }
   // Same tag set as rare-item-scanner.js's TAG_RE.
   const RARE_TAG_RE = /\((LTD|Rare|SS|Club Cadeau|BC Shop)\)/i;
+  // Some BC Shop items don't carry a "(BC Shop)" tag in the client's own FurniData name —
+  // furnis.databin.uk's catalog has the real tagged name for them, but the tag never made
+  // it into this hotel's local furni data. Included by type_id directly as a fallback for
+  // exactly those, alongside the regex match above.
+  const EXTRA_RARE_TYPE_IDS = new Set([
+    886731939, 886731937, 886731938, 886735309, 886735310,
+    886729317, 886729316, 886729318, 886729948,
+  ]);
+  function _isRareItem(typeId) {
+    return RARE_TAG_RE.test(_typeName(typeId)) || EXTRA_RARE_TYPE_IDS.has(typeId);
+  }
 
   // ── Place every (LTD)/(Rare)/(SS)/(Club Cadeau)/(BC Shop) item from inventory onto a
   // 1..32 x 1..32 grid in the room you're currently standing in, wrapping back to (1,1)
@@ -94,8 +105,8 @@
     _pendingPlacements.delete(p.parsed.itemId);
   });
   const PLACEMENT_CONFIRM_GRACE_MS = 2500; // extra wait after the loop for trailing confirmations
-  const PLACEMENT_RETRY_GRACE_MS   = 1500; // shorter wait after each retry round
-  const PLACEMENT_MAX_RETRIES      = 2;
+  const PLACEMENT_RETRY_GRACE_MS   = 1500; // wait after each retry round
+  const PLACEMENT_MAX_STALE_ROUNDS = 5;    // give up only once retries stop making any progress at all
 
   async function _placeRareItems(onProgress, shouldStop) {
     await _refreshInventory();
@@ -108,10 +119,10 @@
     _pendingPlacements = new Map();
 
     const items = Object.values(window.Inventory.items || {}).filter(function(it) {
-      return it.type === 'S' && RARE_TAG_RE.test(_typeName(it.typeId));
+      return it.type === 'S' && _isRareItem(it.typeId);
     });
     const wallItems = Object.values(window.Inventory.items || {}).filter(function(it) {
-      return it.type !== 'S' && RARE_TAG_RE.test(_typeName(it.typeId));
+      return it.type !== 'S' && _isRareItem(it.typeId);
     });
     if (!items.length && !wallItems.length) {
       return { ok: false, reason: 'No (LTD)/(Rare)/(SS)/(Club Cadeau)/(BC Shop) items found in your inventory.' };
@@ -166,15 +177,27 @@
     if (onProgress) onProgress(placed, total, 'Waiting for placement confirmations…');
     await _sleep(PLACEMENT_CONFIRM_GRACE_MS);
 
-    // Anything still unconfirmed gets resent to the SAME tile it was originally placed on
-    // — a few rounds, spaced out, before giving up on it.
+    // Anything still unconfirmed gets resent to the SAME tile it was originally placed on,
+    // round after round, until every item is confirmed — not capped at a fixed retry count,
+    // since a big inventory can genuinely need more rounds than a small one. Only stops
+    // early if several rounds in a row confirm nothing new at all (truly stuck — e.g. a
+    // full room rejecting the placement server-side, not just a slow confirmation).
     let retryRound = 0;
-    while (_pendingPlacements.size && retryRound < PLACEMENT_MAX_RETRIES) {
+    let staleRounds = 0;
+    let lastPendingSize = _pendingPlacements.size;
+    while (_pendingPlacements.size && !shouldStop()) {
       retryRound++;
       const toRetry = Array.from(_pendingPlacements.values());
-      if (onProgress) onProgress(placed, total, 'Retrying ' + toRetry.length + ' unconfirmed placement(s) (' + retryRound + '/' + PLACEMENT_MAX_RETRIES + ')…');
+      if (onProgress) onProgress(placed, total, 'Retrying ' + toRetry.length + ' unconfirmed placement(s) (round ' + retryRound + ')…');
       toRetry.forEach(function(send) { send(); });
       await _sleep(PLACEMENT_RETRY_GRACE_MS);
+      if (_pendingPlacements.size === lastPendingSize) {
+        staleRounds++;
+        if (staleRounds >= PLACEMENT_MAX_STALE_ROUNDS) break;
+      } else {
+        staleRounds = 0;
+      }
+      lastPendingSize = _pendingPlacements.size;
     }
 
     const unconfirmed = _pendingPlacements.size;
