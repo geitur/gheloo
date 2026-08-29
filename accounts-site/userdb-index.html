@@ -86,6 +86,7 @@ thead th{position:sticky;top:0}
 
 <script>
 const BASE = 'https://userlogger.databin.uk/rest/v1/users';
+const AVATARS_BASE = 'https://userlogger.databin.uk/rest/v1/user_avatars';
 const PAGE_SIZE_OPTIONS = [100, 250, 500];
 const PAGE_SIZE_KEY = 'gheloo_userdb_page_size';
 let LIMIT = PAGE_SIZE_OPTIONS.includes(parseInt(localStorage.getItem(PAGE_SIZE_KEY), 10)) ? parseInt(localStorage.getItem(PAGE_SIZE_KEY), 10) : 500;
@@ -109,7 +110,20 @@ const SORTS = [
 ];
 
 let lastRows = [];
+let avatarByUserId = new Map();
 let currentOffset = 0;
+
+async function loadCachedAvatars(ids) {
+  avatarByUserId = new Map();
+  if (!ids.length) return;
+  try {
+    const res = await fetch(AVATARS_BASE + '?id=in.(' + ids.join(',') + ')&select=id,image_base64');
+    if (res.ok) {
+      const rows = await res.json();
+      rows.forEach(r => { if (r.image_base64) avatarByUserId.set(r.id, 'data:image/png;base64,' + r.image_base64); });
+    }
+  } catch (e) { /* best-effort — falls back to the live leet.city URL per-row */ }
+}
 let totalMatches = 0;
 let currentSort = SORTS[0].key;
 let visibleCols = new Set(COLUMNS.filter(c => c.default).map(c => c.key));
@@ -173,7 +187,15 @@ function renderTable() {
   document.getElementById('rows').innerHTML = lastRows.map(u => (
     '<tr>' + cols.map(c => {
       if (c.isAvatar) {
-        return '<td>' + (u.figure ? '<span class="avatar-wrap"><img src="' + esc(avatarUrl(u.figure)) + '" loading="lazy" onerror="this.style.opacity=\'.15\'"></span>' : '') + '</td>';
+        // leet.city's own avatarimage endpoint now sits behind a Cloudflare CAPTCHA
+        // challenge for cross-site embedding (confirmed live 2026-08-29) — no client-side
+        // fix for that (pacing/retries don't help, and bypassing a CAPTCHA isn't something
+        // to build). user_avatars holds a copy captured by the extension itself while it
+        // was already on leet.city (real logged-in session, never blocked) — use that when
+        // we have it, otherwise fall back to the live leet.city URL for whatever still works.
+        const cached = avatarByUserId.get(u.id);
+        const src = cached || avatarUrl(u.figure);
+        return '<td>' + (u.figure ? '<span class="avatar-wrap"><img src="' + esc(src) + '" loading="lazy" onerror="this.style.opacity=\'.15\'"></span>' : '') + '</td>';
       }
       let v = u[c.key];
       if (c.key === 'last_seen') v = v ? new Date(v).toLocaleString('nl-BE') : '—';
@@ -256,6 +278,7 @@ async function search(reset) {
     const from = total !== '?' && total !== '0' ? (currentOffset + 1) : 0;
     const to = currentOffset + lastRows.length;
     statusEl.textContent = (lastRows.length ? (from + '–' + to) : '0') + ' van ' + total + ' matches';
+    await loadCachedAvatars(lastRows.map(u => u.id));
     renderTable();
     renderPagination();
   } catch (e) {
