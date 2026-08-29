@@ -10,6 +10,7 @@
   const HEADERS = {
     'apikey':        SUPABASE_ANON_KEY,
     'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+    'Content-Type':  'application/json',
   };
 
   // Fire-and-forget row in event_log — lets the CPU/DB history panel on hub.databin.uk
@@ -505,14 +506,21 @@
         SUPABASE_URL + '/rest/v1/users?select=id,created_at&type=eq.1&created_at=gt.' + encodeURIComponent(_scanSyncSince) + '&order=created_at.asc&limit=5000',
         { headers: HEADERS }
       );
-      if (!res.ok) return;
-      const rows = await res.json();
-      if (!rows.length) return;
-      rows.forEach(function(r) {
-        if (_scanKnownIds) _scanKnownIds.add(r.id);
-        if (r.created_at > _scanSyncSince) _scanSyncSince = r.created_at;
-      });
+      if (res.ok) {
+        const rows = await res.json();
+        rows.forEach(function(r) {
+          if (_scanKnownIds) _scanKnownIds.add(r.id);
+          if (r.created_at > _scanSyncSince) _scanSyncSince = r.created_at;
+        });
+      }
     } catch (e) { /* best-effort — a missed poll just gets caught on the next one */ }
+    // Piggybacked on this same 1s tick rather than its own timer — small table, changes
+    // rarely, and this keeps a blackhole another tab just added showing up here quickly
+    // without a second poll loop. Deliberately OUTSIDE the try/if above (an earlier version
+    // had this after an `if (!rows.length) return`, which fires on almost every tick since
+    // new users are rare — that skipped this refresh nearly every time, live 2026-08-30:
+    // a blackhole kept getting re-probed lap after lap because of it).
+    _scanBlackholes = await _fetchBlackholes();
   }
   function _scanSyncStart(since) {
     // Defaults to now, but _scanStart passes a timestamp captured BEFORE
@@ -550,6 +558,29 @@
   let _scanLapHistory  = [];    // new-account count for each COMPLETED lap, oldest first
   let _scanCurrentLapNew = 0;   // new-account count for the lap in progress
   let _scanRangeTotalScanned = 0; // total ids probed this session, all laps combined
+  let _scanBlackholes = [];       // 'range' mode only — [{id, from, to}] id ranges to always skip
+
+  // scan_blackholes: manually-declared id ranges to always skip (e.g. a known bot-farm
+  // block), on top of the normal `users` skip-set. Shared/global table — every scanner
+  // reads the same list, kept live-synced via periodic re-fetch (see _scanPollNewUserIds
+  // and the blackholes panel's own poll) rather than incremental diffing, since this table
+  // is small and changes rarely.
+  async function _fetchBlackholes() {
+    try {
+      const res = await fetch(SUPABASE_URL + '/rest/v1/scan_blackholes?select=id,range_from,range_to', { headers: HEADERS });
+      if (!res.ok) return [];
+      const rows = await res.json();
+      return rows.map(function(r) { return { id: r.id, from: r.range_from, to: r.range_to }; });
+    } catch (e) { return []; }
+  }
+  function _isBlackholed(id) {
+    for (let i = 0; i < _scanBlackholes.length; i++) {
+      const bh = _scanBlackholes[i];
+      const lo = Math.min(bh.from, bh.to), hi = Math.max(bh.from, bh.to);
+      if (id >= lo && id <= hi) return true;
+    }
+    return false;
+  }
 
   // Display-only — just tracks what to show in the status line, not tied to any
   // persisted resume position.
@@ -587,13 +618,14 @@
       // row, permanently skipping a real account. Using `users` means it just gets
       // re-probed on the next lap instead.
       const pastBound = function(v) { return _scanDirection > 0 ? v > _scanRangeTo : v < _scanRangeTo; };
-      while (_scanKnownIds && _scanKnownIds.has(_scanCurrentId) && !pastBound(_scanCurrentId)) _scanCurrentId += _scanDirection;
+      const shouldSkip = function(v) { return (_scanKnownIds && _scanKnownIds.has(v)) || _isBlackholed(v); };
+      while (shouldSkip(_scanCurrentId) && !pastBound(_scanCurrentId)) _scanCurrentId += _scanDirection;
       if (pastBound(_scanCurrentId)) {
         _scanLapCount++;
         _scanLapHistory.push(_scanCurrentLapNew);
         _scanCurrentLapNew = 0;
         _scanCurrentId = _scanRangeFrom;
-        while (_scanKnownIds && _scanKnownIds.has(_scanCurrentId) && !pastBound(_scanCurrentId)) _scanCurrentId += _scanDirection;
+        while (shouldSkip(_scanCurrentId) && !pastBound(_scanCurrentId)) _scanCurrentId += _scanDirection;
         if (pastBound(_scanCurrentId)) {
           // Skip the normal status refresh below — it would just overwrite this with the
           // generic "bezig bij id X" line.
@@ -699,8 +731,9 @@
     if (mode === 'range') {
       // Deliberately `users` only, never the scanned_ids union _fetchAllKnownIds() builds
       // for the other modes — see _scanTick's 'range' branch for why.
-      const userIds = await _fetchAllIds('users', 'type=eq.1');
+      const [userIds, blackholes] = await Promise.all([_fetchAllIds('users', 'type=eq.1'), _fetchBlackholes()]);
       _scanKnownIds = new Set(userIds);
+      _scanBlackholes = blackholes;
       _scanQueue = null;
       if (rangeFrom != null) {
         _scanRangeFrom = rangeFrom;
@@ -1202,8 +1235,8 @@
       '#__udb_range{position:fixed;top:8px;right:664px;width:260px;z-index:1001;user-select:none;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:12px}',
       '#__udb_range *{box-sizing:border-box}',
       '#__udb_range_form{padding:12px 14px;display:flex;flex-direction:column;gap:10px}',
-      '#__udb_range_form label{display:flex;flex-direction:column;gap:4px;font-size:10px;color:#82849a;font-weight:600}',
-      '#__udb_range_form input{background:#0A0B10;border:1px solid #23252f;border-radius:8px;color:#eceefb;padding:7px 9px;font-size:12px;outline:none;box-sizing:border-box}',
+      '#__udb_range_form label,#__udb_range_stats label{display:flex;flex-direction:column;gap:4px;font-size:10px;color:#82849a;font-weight:600}',
+      '#__udb_range_form input,#__udb_range_stats input{background:#0A0B10;border:1px solid #23252f;border-radius:8px;color:#eceefb;padding:7px 9px;font-size:12px;outline:none;box-sizing:border-box}',
       '.__udb_range_start{all:unset;cursor:pointer;text-align:center;background:#A6B0FF;color:#0A0B10;font-size:11px;font-weight:700;padding:8px;border-radius:8px;box-sizing:border-box}',
       '.__udb_range_start:hover{filter:brightness(1.08)}',
       '.__udb_range_known{all:unset;cursor:pointer;text-align:center;font-size:10px;color:#82849a;padding:4px;box-sizing:border-box}',
@@ -1219,6 +1252,19 @@
       '.__udb_range_pause:hover{filter:brightness(1.08)}',
       '.__udb_range_cancel{background:rgba(231,76,60,0.14);color:#e74c3c;border:1px solid rgba(231,76,60,0.3)!important}',
       '.__udb_range_cancel:hover{background:rgba(231,76,60,0.22)}',
+      '#__udb_bh{position:fixed;top:8px;right:936px;width:240px;z-index:1001;user-select:none;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:12px}',
+      '#__udb_bh *{box-sizing:border-box}',
+      '#__udb_bh_sub{padding:10px 14px;font-size:10px;color:#82849a;line-height:1.5;border-bottom:1px solid #23252f}',
+      '#__udb_bh_list{max-height:280px;overflow-y:auto;display:flex;flex-direction:column;padding:10px 14px;gap:8px}',
+      '.__udb_bh_row{display:flex;align-items:center;gap:6px}',
+      '.__udb_bh_row span{color:#5c5e6b;font-size:11px}',
+      '.__udb_bh_row input{width:0;flex:1;background:#0A0B10;border:1px solid #23252f;border-radius:8px;color:#eceefb;padding:6px 8px;font-size:12px;outline:none}',
+      '.__udb_bh_del{all:unset;cursor:pointer;color:#5c5e6b;font-size:15px;line-height:1;padding:2px 4px}',
+      '.__udb_bh_del:hover{color:#e74c3c}',
+      '.__udb_bh_row.__udb_bh_saved input{border-color:#2ecc71!important;transition:border-color .15s}',
+      '.__udb_bh_row.__udb_bh_save_err input{border-color:#e74c3c!important;transition:border-color .15s}',
+      '.__udb_bh_add{all:unset;display:block;cursor:pointer;text-align:center;font-size:11px;font-weight:700;color:#A6B0FF;padding:10px 14px;box-sizing:border-box}',
+      '.__udb_bh_add:hover{background:rgba(255,255,255,.05)}',
     ].join('');
     document.head.appendChild(style);
   }
@@ -1371,11 +1417,13 @@
       + '<div id="__udb_range_last_reply_line"></div>'
       + '<div id="__udb_range_lap_current" class="__udb_range_lap_current"></div>'
       + '<div id="__udb_range_lap_hist" class="__udb_range_lap_hist"></div>'
+      + '<label>Cooldown tussen scans (ms)<input type="number" id="__udb_range_cooldown_live" min="' + SCAN_INTERVAL_MIN_MS + '"></label>'
       + '<div class="__udb_range_actions">'
       + '<button class="__udb_range_pause" id="__udb_range_pause_btn">Pauzeer</button>'
       + '<button class="__udb_range_cancel" id="__udb_range_cancel_btn">Afbreken</button>'
       + '</div>'
       + '</div>'
+      + '<button class="__udb_range_known" id="__udb_range_blackholes_btn">Blackholes</button>'
       + '</div>';
     document.body.appendChild(rangePanel);
     rangePanel.style.display = 'none';
@@ -1386,6 +1434,9 @@
     rangePanel.querySelector('#__udb_range_close').addEventListener('click', function() {
       rangePanel.style.display = 'none';
     });
+    rangePanel.querySelector('#__udb_range_blackholes_btn').addEventListener('click', function() {
+      _toggleBlackholesPanel();
+    });
     rangePanel.querySelector('#__udb_range_start_btn').addEventListener('click', function() {
       const from = parseInt(document.getElementById('__udb_range_from').value, 10);
       const to = parseInt(document.getElementById('__udb_range_to').value, 10);
@@ -1394,6 +1445,10 @@
       if (cooldown) _setScanIntervalMs(cooldown);
       _showRangeLoading();
       _scanStart('range', null, null, from, to).then(_updateRangePanelView);
+    });
+    rangePanel.querySelector('#__udb_range_cooldown_live').addEventListener('change', function(e) {
+      const ms = parseInt(e.target.value, 10);
+      if (ms) _setScanIntervalMs(ms); // live-applies immediately, even while active — see _setScanIntervalMs
     });
     rangePanel.querySelector('#__udb_range_known_btn').addEventListener('click', function() {
       rangePanel.style.display = 'none';
@@ -1443,6 +1498,9 @@
       return '<div>Loop ' + (i + 1) + ': ' + n + ' nieuw</div>';
     }).join('');
     document.getElementById('__udb_range_pause_btn').textContent = _scanActive ? 'Pauzeer' : 'Hervat';
+    // Don't stomp on it while the user is actively typing a new value into it.
+    const cooldownEl = document.getElementById('__udb_range_cooldown_live');
+    if (document.activeElement !== cooldownEl) cooldownEl.value = _scanIntervalMs;
   }
 
   function _scanTogglePanel() {
@@ -1451,6 +1509,162 @@
     if (!(_scanMode === 'range' && _scanCurrentId !== null)) document.getElementById('__udb_range_cooldown').value = _scanIntervalMs;
     _updateRangePanelView();
     rangePanel.style.display = 'flex';
+  }
+
+  // ── Blackholes panel — manually-declared id ranges every scanner always skips, on top
+  // of `users`. Draggable, own panel (matches ncPanel/acPanel), rows are (from, to) pairs
+  // saved on change; a row without a saved id yet becomes a real row the first time both
+  // fields have a value. Polls scan_blackholes every 3s while open so an edit from another
+  // account/tab shows up here too, without stomping a row mid-edit.
+  let bhPanel = null;
+  let _bhPollTimer = null;
+
+  function _renderBlackholeRow(bh) {
+    const row = document.createElement('div');
+    row.className = '__udb_bh_row';
+    if (bh.id != null) row.dataset.id = bh.id;
+    row.innerHTML =
+      '<input type="number" class="__udb_bh_from" placeholder="Van id" value="' + (bh.from != null ? bh.from : '') + '">'
+      + '<span>–</span>'
+      + '<input type="number" class="__udb_bh_to" placeholder="Tot id" value="' + (bh.to != null ? bh.to : '') + '">'
+      + '<button class="__udb_bh_del" title="Verwijder">&times;</button>';
+    document.getElementById('__udb_bh_list').appendChild(row);
+  }
+
+  // Local cache is a display/resilience aid only — the DB is still the one source of
+  // truth every scanner reads from. Lets the panel show something instantly on open (and
+  // on a relog) before the network fetch resolves, instead of a blank list.
+  const BH_CACHE_KEY = 'gheloo_udb_blackholes_cache_v1';
+  function _cacheBlackholesLocally(list) {
+    try { localStorage.setItem(BH_CACHE_KEY, JSON.stringify(list)); } catch (e) {}
+  }
+  function _loadCachedBlackholesLocally() {
+    try { return JSON.parse(localStorage.getItem(BH_CACHE_KEY) || '[]'); } catch (e) { return []; }
+  }
+
+  async function _saveBlackholeRow(row) {
+    const from = parseInt(row.querySelector('.__udb_bh_from').value, 10);
+    const to = parseInt(row.querySelector('.__udb_bh_to').value, 10);
+    if (!from || !to) return;
+    row.classList.remove('__udb_bh_saved', '__udb_bh_save_err');
+    let ok = false;
+    try {
+      if (row.dataset.id) {
+        const res = await fetch(SUPABASE_URL + '/rest/v1/scan_blackholes?id=eq.' + row.dataset.id, {
+          method: 'PATCH', headers: HEADERS, body: JSON.stringify({ range_from: from, range_to: to }),
+        });
+        ok = res.ok;
+        if (!ok) _log('blackhole PATCH failed: HTTP ' + res.status + ' ' + (await res.text().catch(function() { return ''; })));
+      } else {
+        const res = await fetch(SUPABASE_URL + '/rest/v1/scan_blackholes', {
+          method: 'POST', headers: Object.assign({}, HEADERS, { 'Prefer': 'return=representation' }),
+          body: JSON.stringify([{ range_from: from, range_to: to }]),
+        });
+        ok = res.ok;
+        if (ok) {
+          const saved = await res.json();
+          if (saved && saved[0]) row.dataset.id = saved[0].id;
+        } else {
+          _log('blackhole POST failed: HTTP ' + res.status + ' ' + (await res.text().catch(function() { return ''; })));
+        }
+      }
+    } catch (e) { ok = false; _log('blackhole save threw: ' + e.message); }
+    // Visible confirmation either way — silently trusting a save that never actually
+    // landed (found live 2026-08-30: a "saved-looking" row with 0 rows in the real table)
+    // is exactly how this went unnoticed before.
+    row.classList.add(ok ? '__udb_bh_saved' : '__udb_bh_save_err');
+    if (ok) {
+      setTimeout(function() { row.classList.remove('__udb_bh_saved'); }, 1200);
+      _cacheBlackholesLocally(await _fetchBlackholes());
+    }
+  }
+
+  async function _loadBlackholesListUI() {
+    const list = document.getElementById('__udb_bh_list');
+    if (!list || list.contains(document.activeElement)) return; // mid-edit — don't yank focus
+    // Own fetch (not _fetchBlackholes, which swallows failures into []) — a transient
+    // network hiccup on this 3s poll must leave the list untouched, not wipe it to empty.
+    let rows;
+    try {
+      const res = await fetch(SUPABASE_URL + '/rest/v1/scan_blackholes?select=id,range_from,range_to&order=id.asc', { headers: HEADERS });
+      if (!res.ok) return;
+      rows = (await res.json()).map(function(r) { return { id: r.id, from: r.range_from, to: r.range_to }; });
+    } catch (e) { return; }
+    _cacheBlackholesLocally(rows);
+    // A row with no data-id was never actually saved (e.g. only one field filled in so
+    // far) — rebuilding from the DB would otherwise silently discard it mid-entry. Detach
+    // and re-append those instead of losing them.
+    const unsaved = Array.from(list.querySelectorAll('.__udb_bh_row:not([data-id])'));
+    list.innerHTML = '';
+    rows.forEach(function(bh) { _renderBlackholeRow(bh); });
+    unsaved.forEach(function(row) { list.appendChild(row); });
+  }
+
+  function buildBlackholesPanel() {
+    bhPanel = document.createElement('div');
+    bhPanel.id = '__udb_bh';
+    bhPanel.innerHTML =
+      '<div class="__udb_card">'
+      + '<div class="__udb_hdr" id="__udb_bh_hdr">'
+      + '<span class="__udb_eyebrow">Gheloo</span>'
+      + '<span class="__udb_title">Blackholes</span>'
+      + '<span class="__udb_close" id="__udb_bh_close">&times;</span>'
+      + '</div>'
+      + '<div id="__udb_bh_sub">Id-bereiken die elke scan altijd overslaat — gedeeld tussen alle accounts.</div>'
+      + '<div id="__udb_bh_list"></div>'
+      + '<button class="__udb_bh_add" id="__udb_bh_add_btn">+ Bereik toevoegen</button>'
+      + '</div>';
+    document.body.appendChild(bhPanel);
+    bhPanel.style.display = 'none';
+
+    window.__ghk_makeDraggable(bhPanel, bhPanel.querySelector('#__udb_bh_hdr'), '__ghk_udb_bh_pos', function(e) {
+      return e.target.id === '__udb_bh_close';
+    });
+    bhPanel.querySelector('#__udb_bh_close').addEventListener('click', function() {
+      bhPanel.style.display = 'none';
+      if (_bhPollTimer) { clearInterval(_bhPollTimer); _bhPollTimer = null; }
+    });
+    bhPanel.querySelector('#__udb_bh_add_btn').addEventListener('click', function() {
+      _renderBlackholeRow({ id: null, from: null, to: null });
+    });
+    // 'input' + a short debounce instead of 'change' — 'change' only fires on blur, which
+    // turned out unreliable for actually triggering a save (found live 2026-08-30: a row
+    // that looked filled in and saved had 0 matching rows in the real table). This fires
+    // purely off typing, no dependency on how/whether focus ever left the field.
+    const bhSaveTimers = new WeakMap();
+    bhPanel.querySelector('#__udb_bh_list').addEventListener('input', function(e) {
+      const row = e.target.closest('.__udb_bh_row');
+      if (!row) return;
+      clearTimeout(bhSaveTimers.get(row));
+      bhSaveTimers.set(row, setTimeout(function() { _saveBlackholeRow(row); }, 600));
+    });
+    bhPanel.querySelector('#__udb_bh_list').addEventListener('click', function(e) {
+      const delBtn = e.target.closest('.__udb_bh_del');
+      if (!delBtn) return;
+      const row = delBtn.closest('.__udb_bh_row');
+      if (row.dataset.id) {
+        fetch(SUPABASE_URL + '/rest/v1/scan_blackholes?id=eq.' + row.dataset.id, { method: 'DELETE', headers: HEADERS }).catch(function() {});
+      }
+      row.remove();
+    });
+  }
+
+  function _toggleBlackholesPanel() {
+    if (!bhPanel) return;
+    if (bhPanel.style.display !== 'none') {
+      bhPanel.style.display = 'none';
+      if (_bhPollTimer) { clearInterval(_bhPollTimer); _bhPollTimer = null; }
+      return;
+    }
+    // Instant paint from the local cache (survives a relog) while the real fetch is in
+    // flight, instead of a blank list for that first moment.
+    const list = document.getElementById('__udb_bh_list');
+    list.innerHTML = '';
+    _loadCachedBlackholesLocally().forEach(function(bh) { _renderBlackholeRow(bh); });
+    bhPanel.style.display = 'flex';
+    _loadBlackholesListUI();
+    if (_bhPollTimer) clearInterval(_bhPollTimer);
+    _bhPollTimer = setInterval(_loadBlackholesListUI, 3000);
   }
 
   // Discards the in-progress position instead of just pausing it — next time this mode
@@ -1509,6 +1723,7 @@
     buildNameChangesPanel();
     buildAvatarCheckPanel();
     buildScanRangePanel();
+    buildBlackholesPanel();
   }
 
   if (document.readyState === 'loading') {

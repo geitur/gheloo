@@ -102,7 +102,15 @@
     var sentKeys = {};
     batch.forEach(function(it) { sentKeys[it._k] = true; });
     try {
-      await upsertUsers(batch.map(function(it) { return it.u; }), batch[0].o);
+      // The same id can land in the outbox twice within one DRAIN_MS-sized window — e.g. the
+      // range scanner re-probing an id across two laps faster than the previous reply's
+      // outbox entry drained. Two rows with the same id in one upsert makes Postgres's
+      // ON CONFLICT DO UPDATE reject the WHOLE batch ("cannot affect row a second time"),
+      // which then backs off and retries the identical poisoned batch forever (found live
+      // 2026-08-30 — every users upsert failing on a loop). Same class of bug already fixed
+      // for the scanned_ids batch; dedupe here too, keeping the latest entry per id.
+      var dedupedUsers = Array.from(new Map(batch.map(function(it) { return [it.u.id, it.u]; })).values());
+      await upsertUsers(dedupedUsers, batch[0].o);
       // Re-read rather than reuse `items` — packet handlers (or another tab) may have
       // pushed or drained entries while this send was in flight. Remove by `_k`, not
       // position, so this only ever deletes the exact items just confirmed sent.

@@ -205,12 +205,18 @@
     // Central decision point, called after every relevant state change. Instantly re-rolls
     // on a mismatch (no delay) — the server's own roll animation (state passes through '-1'
     // before settling) is what naturally paces this, since we only act on a settled value.
+    // While the host dice itself shows '-1' (mid-roll, no target yet), we start rolling own
+    // dice already instead of waiting idle for the host to settle — head start on the match.
     function _bgMaybeRoll(idx) {
       const slot = _bgOwn[idx];
-      if (!_bgEnabled || !slot.id || _bgHostTarget === null || slot.pending) return;
+      if (!_bgEnabled || !slot.id || slot.pending) return;
       if (slot.raw === '-1') return; // still mid-roll, wait for it to settle
-      const ownNum = /^[1-6]$/.test(slot.raw || '') ? parseInt(slot.raw) : null;
-      if (ownNum === _bgHostTarget) return; // matched — stop
+      if (_bgHostTarget === null) {
+        if (_bgHostRaw !== '-1') return; // no live call and host isn't rolling — nothing to do
+      } else {
+        const ownNum = /^[1-6]$/.test(slot.raw || '') ? parseInt(slot.raw) : null;
+        if (ownNum === _bgHostTarget) return; // matched — stop
+      }
       _bgRoll(idx);
     }
     function _bgMaybeRollAll() { _bgMaybeRoll(0); _bgMaybeRoll(1); }
