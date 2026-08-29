@@ -112,7 +112,96 @@
   const PLACEMENT_RETRY_GRACE_MS   = 1500; // wait after each retry round
   const PLACEMENT_MAX_STALE_ROUNDS = 5;    // give up only once retries stop making any progress at all
 
+  // ── Currency-to-bars conversion — raw diamond/BC balance can't be placed as a furni item
+  // by itself, only the catalog "staaf" (bar) items can. Buying 1 muntje (the cheapest
+  // catalog PurchaseFromCatalog{i:14}{i:1347}...) triggers an ActivityPoints reply as a
+  // side effect, which is the only way found to read the current balance — no direct
+  // "GetBalance" packet exists. ActivityPoints layout confirmed live (2026-08-29):
+  // {i:<pairCount>} then <pairCount> x {i:<activityId>}{i:<amount>} — activityId 5 =
+  // diamonds, 103 = Bel-Credits (confirmed against a real 415-diamond/15-BC balance).
+  // Bars only come in fixed minimum denominations (25 BC / 100 diamonds per bar, catalog
+  // ids 7786/4986) — buys floor(balance/denomination) bars, converting as much of the
+  // balance as divides evenly and leaving any remainder as uncon-vertible raw balance.
+  // The purchased bars land in inventory with the same type_ids _isRareItem already
+  // whitelists (EXTRA_RARE_TYPE_IDS above), so the placement sweep below picks them up
+  // automatically — no extra wiring needed once they exist.
+  const ACTIVITY_POINT_DIAMONDS = 5;
+  const ACTIVITY_POINT_BC       = 103;
+  const CATALOG_PAGE            = 14;
+  const CATALOG_BALANCE_CHECK   = 1347;
+  const CATALOG_BC_BAR          = { itemId: 7786, value: 25 };
+  const CATALOG_DIAMOND_BAR     = { itemId: 4986, value: 100 };
+
+  function _purchaseFromCatalog(itemId) {
+    const pid = _outId('PurchaseFromCatalog');
+    if (pid === null) return false;
+    window.sendPacket('OUT', pid, '{i:' + CATALOG_PAGE + '}{i:' + itemId + '}{i:0}{b:false}{b:true}');
+    return true;
+  }
+
+  function _parseActivityPoints(raw) {
+    const r = window.makeReader(raw);
+    if (!r) return null;
+    try {
+      const count = r.int();
+      const points = {};
+      for (let i = 0; i < count; i++) {
+        const type = r.int();
+        points[type] = r.int();
+      }
+      return points;
+    } catch (e) { return null; }
+  }
+  let _pendingActivityPointsResolve = null;
+  window.onPacket('ActivityPoints', function(p) {
+    if (!_pendingActivityPointsResolve || !p.raw) return;
+    const points = _parseActivityPoints(p.raw);
+    if (!points) return;
+    const resolve = _pendingActivityPointsResolve;
+    _pendingActivityPointsResolve = null;
+    resolve(points);
+  });
+  function _waitForActivityPoints(timeoutMs) {
+    return new Promise(function(resolve) {
+      let settled = false;
+      _pendingActivityPointsResolve = function(points) {
+        if (settled) return;
+        settled = true;
+        resolve(points);
+      };
+      setTimeout(function() {
+        if (settled) return;
+        settled = true;
+        _pendingActivityPointsResolve = null;
+        resolve(null);
+      }, timeoutMs);
+    });
+  }
+
+  async function _convertCurrencyToBars(onProgress, shouldStop) {
+    if (!_purchaseFromCatalog(CATALOG_BALANCE_CHECK)) return;
+    const points = await _waitForActivityPoints(3000);
+    if (!points) return;
+    const diamondBars = Math.floor((points[ACTIVITY_POINT_DIAMONDS] || 0) / CATALOG_DIAMOND_BAR.value);
+    const bcBars      = Math.floor((points[ACTIVITY_POINT_BC] || 0) / CATALOG_BC_BAR.value);
+    for (let i = 0; i < bcBars; i++) {
+      if (shouldStop && shouldStop()) return;
+      if (onProgress) onProgress('Buying BC bar ' + (i + 1) + '/' + bcBars + '...');
+      _purchaseFromCatalog(CATALOG_BC_BAR.itemId);
+      await _sleep(300);
+    }
+    for (let i = 0; i < diamondBars; i++) {
+      if (shouldStop && shouldStop()) return;
+      if (onProgress) onProgress('Buying diamond bar ' + (i + 1) + '/' + diamondBars + '...');
+      _purchaseFromCatalog(CATALOG_DIAMOND_BAR.itemId);
+      await _sleep(300);
+    }
+  }
+
   async function _placeRareItems(onProgress, shouldStop) {
+    if (onProgress) onProgress(0, 0, 'Checking balance...');
+    await _convertCurrencyToBars(function(msg) { if (onProgress) onProgress(0, 0, msg); }, shouldStop);
+    if (shouldStop()) return { ok: false, reason: 'Stopped.' };
     await _refreshInventory();
     if (!window.Inventory || !window.Inventory.loaded) {
       return { ok: false, reason: 'Inventory not loaded yet — open your Inventory panel in-game first, then try again.' };
@@ -397,14 +486,71 @@
     return _waitForRoomReady(roomId);
   }
 
+  // ── Group-owned rooms — the client auto-fires GetHabboGroupDetails ({i:<groupId>}{b:...})
+  // on its own the moment you enter a room that has a group badge (confirmed live,
+  // 2026-08-29 — not something this tool sends, purely observed). A room tied to an active
+  // group can't just be DeleteRoom'd like a normal one, so this listens for that packet
+  // while joining, and if it fires, deactivates the group first (DeactivateGuild{i:groupId}),
+  // then rejoins (deactivating the guild can knock you out of / restate the room) before
+  // actually deleting. Single reassignable pending-slot, same pattern as
+  // _pendingRoomReadyResolve above — window.onPacket has no unsubscribe.
+  let _pendingGroupIdResolve = null;
+  window.PacketStore.subscribe(function(p) {
+    if (p.direction !== 'OUT' || !_pendingGroupIdResolve || !p.raw) return;
+    const ghdId = _outId('GetHabboGroupDetails');
+    if (ghdId === null || p.header !== ghdId) return;
+    const r = window.makeReader(p.raw);
+    if (!r) return;
+    let groupId;
+    try { groupId = r.int(); } catch (e) { return; }
+    const resolve = _pendingGroupIdResolve;
+    _pendingGroupIdResolve = null;
+    resolve(groupId);
+  });
+  function _waitForRoomGroupId(timeoutMs) {
+    return new Promise(function(resolve) {
+      let settled = false;
+      _pendingGroupIdResolve = function(id) {
+        if (settled) return;
+        settled = true;
+        resolve(id);
+      };
+      setTimeout(function() {
+        if (settled) return;
+        settled = true;
+        _pendingGroupIdResolve = null;
+        resolve(null);
+      }, timeoutMs);
+    });
+  }
+
+  // Random gibberish room name — deliberately not a word list, just consonant/vowel
+  // syllables strung together, so every test room gets a fresh, meaningless name.
+  function _randomRoomName() {
+    const consonants = 'bcdfghjklmnpqrstvwxyz';
+    const vowels = 'aeiou';
+    const syllables = 2 + Math.floor(Math.random() * 3);
+    let name = '';
+    for (let i = 0; i < syllables; i++) {
+      name += consonants[Math.floor(Math.random() * consonants.length)];
+      name += vowels[Math.floor(Math.random() * vowels.length)];
+      if (Math.random() < 0.3) name += consonants[Math.floor(Math.random() * consonants.length)];
+    }
+    return name;
+  }
+
   // ── Test room creator — CreateFlatMessageComposer(name, description, model, category,
-  // maxVisitors, tradeType) followed 500ms later by SaveRoomSettingsMessageComposer with a
-  // fixed set of settings. Field order/types confirmed against the real composer sources
-  // (billsonnn/nitro-renderer); every literal value below (password "test", doorMode 2,
-  // whoCanKick 1, allowWalkThrough true, everything else 0/false) is byte-exact verified
-  // against a live capture, not guessed. SaveRoomSettings needs the room's real id, which
-  // only exists after the server replies to CreateFlat with FlatCreatedEvent — so this
-  // can't just replay two fixed packets, it has to wait for that reply first. ──
+  // maxVisitors, tradeType) followed 500ms later by SaveRoomSettingsMessageComposer.
+  // SaveRoomSettings needs the room's real id, which only exists after the server replies
+  // to CreateFlat with FlatCreatedEvent — so this can't just replay two fixed packets, it
+  // has to wait for that reply first. SaveRoomSettings' byte layout below is a direct,
+  // byte-exact live capture (2026-08-29) — {roomId}{name}{i:0}{i:65536}{i:10}{i:32}{i:2}
+  // {tag}{i:0}{i:131072}{i:16777216}{i:0}{i:0}{i:0}{i:65536}{i:0}{i:0}{i:0}{i:0}{i:0}
+  // {b:false}{b:false}. Only `name` and `tag` (the one string field after the "{i:2}",
+  // fixed to "51" here) are parameterized — the rest are copied verbatim from the capture
+  // since their individual meaning wasn't decomposed (matches this file's existing policy
+  // elsewhere: treat a verified real capture as ground truth over a guessed semantic
+  // reconstruction). ──
   // FlatCreatedEvent has no shared parser in core/parsers.js (niche, only needed here) —
   // parsed locally: roomId(int), roomName(str), confirmed against FlatCreatedMessageParser
   // (billsonnn/nitro-renderer).
@@ -441,14 +587,15 @@
     const saveId = _outId('SaveRoomSettings');
     if (createId === null || saveId === null) return { ok: false, reason: 'CreateFlat/SaveRoomSettings not found in PKT.' };
 
-    window.sendPacket('OUT', createId, '{s:"klokje93"}{s:""}{s:"model_5"}{i:32}{i:10}{i:0}');
+    const roomName = _randomRoomName();
+    window.sendPacket('OUT', createId, '{s:"' + roomName + '"}{s:""}{s:"model_5"}{i:32}{i:10}{i:0}');
     const created = await _waitForFlatCreated();
     if (!created) return { ok: false, reason: 'Timed out waiting for the new room to be created.' };
 
     await _sleep(500);
     window.sendPacket('OUT', saveId,
-      '{i:' + created.roomId + '}{s:"klokje93"}{s:""}{i:2}{s:"test"}{i:10}{i:32}{i:0}{i:0}' +
-      '{b:false}{b:false}{b:true}{b:false}{i:0}{i:0}{i:0}{i:1}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}');
+      '{i:' + created.roomId + '}{s:"' + roomName + '"}{i:0}{i:65536}{i:10}{i:32}{i:2}{s:"51"}{i:0}' +
+      '{i:131072}{i:16777216}{i:0}{i:0}{i:0}{i:65536}{i:0}{i:0}{i:0}{i:0}{i:0}{b:false}{b:false}');
 
     // AssignRights ({out:AssignRights}{i:4367673}) has no room-id argument — it acts on
     // whatever room you're currently standing in, so it only lands correctly once we're
@@ -552,7 +699,7 @@
               '<button class="__rd_btn" id="__rd_place_rares" style="flex:1">Place in this room</button>' +
               '<button class="__rd_btn" id="__rd_place_stop" style="flex-shrink:0" disabled>Stop</button>' +
             '</div>' +
-            '<div class="__rd_desc" id="__rd_place_status">Fills a 1-32 x 1-32 grid (floor and wall separately) in your current room with every (LTD)/(Rare)/(SS)/(Club Cadeau)/(BC Shop) item in your inventory, wrapping and stacking if you have more than 1024 of one kind.</div>' +
+            '<div class="__rd_desc" id="__rd_place_status">First converts as much of your diamond/BC balance into bars as divides evenly, then fills a 1-32 x 1-32 grid (floor and wall separately) with every (LTD)/(Rare)/(SS)/(Club Cadeau)/(BC Shop)/Currency item in your inventory.</div>' +
           '</div>' +
 
         '</div>' +
@@ -733,14 +880,28 @@
       const remaining = _rooms.slice();
       const skippedRooms = []; // failed to join — kept visible/pending for a retry, not deleted
       let done = 0;
+      const deactivateGuildId = _outId('DeactivateGuild');
+      let groupsDeactivated = 0;
       while (remaining.length) {
         if (_stopRequested) break;
         const room = remaining.shift();
         progressEl.textContent = 'Entering "' + room.name + '" (' + (done + skippedRooms.length + 1) + '/' + total + ')...';
+        // Arm the group listener BEFORE joining — the client can fire GetHabboGroupDetails
+        // immediately off the RoomReady it triggers off of, faster than we could react to
+        // "joined" first and start listening after the fact.
+        const groupIdPromise = _waitForRoomGroupId(2500);
         const joined = await _joinRoom(room.roomId);
         if (_stopRequested) { remaining.unshift(room); break; }
         let justDeleted = false;
         if (joined) {
+          const groupId = await groupIdPromise;
+          if (groupId && deactivateGuildId !== null) {
+            progressEl.textContent = 'Deactivating group ' + groupId + ' for "' + room.name + '"...';
+            window.sendPacket('OUT', deactivateGuildId, '{i:' + groupId + '}');
+            groupsDeactivated++;
+            await _sleep(800);
+            await _joinRoom(room.roomId); // rejoin — deactivating the guild can knock the room state loose
+          }
           window.sendPacket('OUT', deleteRoomId, '{i:' + room.roomId + '}');
           done++;
           justDeleted = true;
@@ -761,7 +922,8 @@
       _setButtonsForDeleting(false);
       deleteBtn.disabled = !_rooms.length;
       progressEl.textContent = (_stopRequested ? 'Stopped — ' : 'Done — ') +
-        'deleted ' + done + ', skipped ' + skippedRooms.length + ' (couldn\'t enter), ' + remaining.length + ' not attempted, of ' + total + '.';
+        'deleted ' + done + ', skipped ' + skippedRooms.length + ' (couldn\'t enter), ' + remaining.length + ' not attempted, of ' + total
+        + (groupsDeactivated ? ' (' + groupsDeactivated + ' group(s) deactivated first)' : '') + '.';
     }
 
     deleteBtn.addEventListener('click', function() {
