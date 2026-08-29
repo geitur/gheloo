@@ -493,6 +493,27 @@
       });
     } catch (e) { /* best-effort — a missed poll just gets caught on the next one */ }
   }
+
+  // 'range' mode's skip-set is `users`-only (see _scanTick), so its live cross-scanner sync
+  // has to watch `users.created_at` instead of `scanned_ids.scanned_at` — otherwise a
+  // second scanner's finds would only show up here via scanned_ids (which range mode
+  // deliberately ignores) and never actually get skipped.
+  async function _scanPollNewUserIds() {
+    if (!_scanActive || _scanSyncSince == null) return;
+    try {
+      const res = await fetch(
+        SUPABASE_URL + '/rest/v1/users?select=id,created_at&type=eq.1&created_at=gt.' + encodeURIComponent(_scanSyncSince) + '&order=created_at.asc&limit=5000',
+        { headers: HEADERS }
+      );
+      if (!res.ok) return;
+      const rows = await res.json();
+      if (!rows.length) return;
+      rows.forEach(function(r) {
+        if (_scanKnownIds) _scanKnownIds.add(r.id);
+        if (r.created_at > _scanSyncSince) _scanSyncSince = r.created_at;
+      });
+    } catch (e) { /* best-effort — a missed poll just gets caught on the next one */ }
+  }
   function _scanSyncStart(since) {
     // Defaults to now, but _scanStart passes a timestamp captured BEFORE
     // _fetchAllKnownIds() — that fetch can take several seconds for hundreds of
@@ -502,7 +523,7 @@
     // re-probed here anyway.
     _scanSyncSince = since || new Date().toISOString();
     if (_scanSyncTimer) clearInterval(_scanSyncTimer);
-    _scanSyncTimer = setInterval(_scanPollNewIds, SCAN_SYNC_INTERVAL_MS);
+    _scanSyncTimer = setInterval(_scanMode === 'range' ? _scanPollNewUserIds : _scanPollNewIds, SCAN_SYNC_INTERVAL_MS);
   }
   function _scanSyncStop() {
     if (_scanSyncTimer) clearInterval(_scanSyncTimer);
@@ -520,9 +541,15 @@
   let _scanQueue      = null;   // set for 'known' mode: fixed list of already-logged ids to re-check
   let _scanQueueIdx   = 0;
   let _scanMode       = null;   // which mode _scanCurrentId/_scanQueue currently reflects
-  let _scanDirection  = 1;      // 1 = ascending, -1 = descending (only meaningful for 'custom')
+  let _scanDirection  = 1;      // 1 = ascending, -1 = descending (only meaningful for 'custom'/'range')
   let _scanLastReplyId = null;  // last id that actually got an ExtendedProfile reply back — display only
-  let _scanNewCount = 0;        // real accounts found THIS run — display only, reset on a fresh start/custom run
+  let _scanNewCount = 0;        // real accounts found THIS run — display only, reset on a fresh start/custom/range run
+  let _scanRangeFrom = null;    // 'range' mode only — loops back here once _scanRangeTo is reached
+  let _scanRangeTo   = null;
+  let _scanLapCount    = 0;     // 'range' mode only — completed passes over [from, to]
+  let _scanLapHistory  = [];    // new-account count for each COMPLETED lap, oldest first
+  let _scanCurrentLapNew = 0;   // new-account count for the lap in progress
+  let _scanRangeTotalScanned = 0; // total ids probed this session, all laps combined
 
   // Display-only — just tracks what to show in the status line, not tied to any
   // persisted resume position.
@@ -533,6 +560,7 @@
     // here is by construction a genuinely new find. 'known' mode is a refresh sweep over
     // already-known ids — a reply there isn't "new", so it's not counted.
     if (_scanMode !== 'known') _scanNewCount++;
+    if (_scanMode === 'range') { _scanCurrentLapNew++; _updateRangePanelView(); }
   });
 
   function _scanSetStatus(text) {
@@ -550,7 +578,40 @@
     }
 
     let id;
-    if (_scanQueue) {
+    if (_scanMode === 'range') {
+      // Loops the [from, to] range forever instead of stopping — reaching the far end just
+      // wraps back to the start and keeps going, until paused/aborted from the UI. Skip-set
+      // is `users`-only (not scanned_ids) by design: a probe whose reply got lost to a real
+      // connection drop (not just lag — WS/TCP doesn't lose in-order data under plain
+      // latency) would otherwise be marked "known" forever despite never actually landing a
+      // row, permanently skipping a real account. Using `users` means it just gets
+      // re-probed on the next lap instead.
+      const pastBound = function(v) { return _scanDirection > 0 ? v > _scanRangeTo : v < _scanRangeTo; };
+      while (_scanKnownIds && _scanKnownIds.has(_scanCurrentId) && !pastBound(_scanCurrentId)) _scanCurrentId += _scanDirection;
+      if (pastBound(_scanCurrentId)) {
+        _scanLapCount++;
+        _scanLapHistory.push(_scanCurrentLapNew);
+        _scanCurrentLapNew = 0;
+        _scanCurrentId = _scanRangeFrom;
+        while (_scanKnownIds && _scanKnownIds.has(_scanCurrentId) && !pastBound(_scanCurrentId)) _scanCurrentId += _scanDirection;
+        if (pastBound(_scanCurrentId)) {
+          // Skip the normal status refresh below — it would just overwrite this with the
+          // generic "bezig bij id X" line.
+          const statusEl = document.getElementById('__udb_range_status_line');
+          if (statusEl) statusEl.textContent = 'Alle ids in ' + _scanRangeFrom + '–' + _scanRangeTo + ' staan al bekend — wacht op nieuwe...';
+          return; // whole range already known — cheap no-op tick, tries again next interval
+        }
+      }
+      id = _scanCurrentId;
+      _scanCurrentId += _scanDirection;
+      _scanRangeTotalScanned++;
+      // Deliberately NOT added to _scanKnownIds here — that would mark it "known" the
+      // instant it's merely probed, so the next lap would skip it even if it never actually
+      // landed a `users` row. Only a CONFIRMED account (via the live users.created_at poll)
+      // should ever get skipped; an unconfirmed id gets re-probed every lap until it is one.
+      _enqueueScannedId(id);
+      _updateRangePanelView();
+    } else if (_scanQueue) {
       // Someone else's 'known'-mode scan may have refreshed the next few queue entries
       // since this queue was built — skip past anything already fresh instead of
       // re-probing it too.
@@ -617,44 +678,68 @@
   }
 
   // mode: 'known' = re-check every id already in the database (refresh stale data,
-  // catch unbans); 'start' = sequential sweep from id 1; 'custom' = jump to a given id.
-  // 'start' still skips ids already known — only 'known' mode targets those on purpose.
-  async function _scanStart(mode, customId, direction) {
+  // catch unbans); 'start' = sequential sweep from id 1; 'custom' = jump to a given id;
+  // 'range' = loop [rangeFrom, rangeTo] forever, `users`-only skip-set (see _scanTick).
+  // 'start'/'range' still skip ids already known — only 'known' mode targets those on
+  // purpose.
+  async function _scanStart(mode, customId, direction, rangeFrom, rangeTo) {
     if (_scanActive) return;
     mode = mode || 'start';
     const btn = panel.querySelector('#__udb_scan_btn');
     if (btn) btn.disabled = true;
-    _scanSetStatus('Loading already-logged ids…');
     const fetchStartedAt = new Date().toISOString();
-    const known = await _fetchAllKnownIds();
-    _scanKnownIds = known.all;
 
     // Only reset position when the mode actually changes (or this is the first run) —
     // re-picking the SAME mode after a pause continues where it left off, but switching
     // modes (e.g. 'start' -> 'custom') must not inherit the other mode's scan position.
-    // 'custom' always jumps to the given id — a fresh explicit target every time it's picked.
+    // 'custom'/a fresh 'range' call always jump to the given id(s) — an explicit target
+    // every time one is given.
     const isSameMode = _scanMode === mode;
-    if (mode === 'known') {
-      if (!isSameMode || !_scanQueue) {
-        _scanSetStatus('Checking which known ids were refreshed recently…');
-        // Real accounts only (never scanned_ids misses — those were never users) minus
-        // anything another account's 'known'-mode scan already refreshed recently, so two
-        // accounts starting a full refresh around the same time don't redo the same work.
-        const recentlyTouched = await _fetchRecentlyTouchedIds(KNOWN_REFRESH_STALE_MS);
-        _scanQueue = Array.from(known.users)
-          .filter(function(id) { return !recentlyTouched.has(id); })
-          .sort(function(a, b) { return a - b; });
-        _scanQueueIdx = 0;
-      }
-    } else {
+
+    if (mode === 'range') {
+      // Deliberately `users` only, never the scanned_ids union _fetchAllKnownIds() builds
+      // for the other modes — see _scanTick's 'range' branch for why.
+      const userIds = await _fetchAllIds('users', 'type=eq.1');
+      _scanKnownIds = new Set(userIds);
       _scanQueue = null;
-      if (mode === 'custom') {
-        _scanCurrentId = customId;
-        _scanDirection = direction === -1 ? -1 : 1;
-        _scanNewCount = 0;
-      } else { // 'start'
-        _scanDirection = 1;
-        if (!isSameMode || _scanCurrentId === null) { _scanCurrentId = 1; _scanNewCount = 0; }
+      if (rangeFrom != null) {
+        _scanRangeFrom = rangeFrom;
+        _scanRangeTo   = rangeTo;
+        _scanDirection = rangeFrom <= rangeTo ? 1 : -1;
+        _scanCurrentId = rangeFrom;
+        _scanNewCount  = 0;
+        _scanLapCount  = 1;
+        _scanLapHistory = [];
+        _scanCurrentLapNew = 0;
+        _scanRangeTotalScanned = 0;
+        _scanLastReplyId = null;
+      }
+      // Resuming (isSameMode, no fresh rangeFrom given) just keeps the saved position.
+    } else {
+      const known = await _fetchAllKnownIds();
+      _scanKnownIds = known.all;
+      if (mode === 'known') {
+        if (!isSameMode || !_scanQueue) {
+          _scanSetStatus('Checking which known ids were refreshed recently…');
+          // Real accounts only (never scanned_ids misses — those were never users) minus
+          // anything another account's 'known'-mode scan already refreshed recently, so two
+          // accounts starting a full refresh around the same time don't redo the same work.
+          const recentlyTouched = await _fetchRecentlyTouchedIds(KNOWN_REFRESH_STALE_MS);
+          _scanQueue = Array.from(known.users)
+            .filter(function(id) { return !recentlyTouched.has(id); })
+            .sort(function(a, b) { return a - b; });
+          _scanQueueIdx = 0;
+        }
+      } else {
+        _scanQueue = null;
+        if (mode === 'custom') {
+          _scanCurrentId = customId;
+          _scanDirection = direction === -1 ? -1 : 1;
+          _scanNewCount = 0;
+        } else { // 'start'
+          _scanDirection = 1;
+          if (!isSameMode || _scanCurrentId === null) { _scanCurrentId = 1; _scanNewCount = 0; }
+        }
       }
     }
     _scanMode = mode;
@@ -682,7 +767,9 @@
     }
     if (_scanQueue) {
       _scanSetStatus('Paused — ' + _scanQueueIdx + '/' + _scanQueue.length + ' known ids checked.');
-    } else {
+    } else if (_scanMode !== 'range') {
+      // 'range' mode's status lives in its own panel (#__udb_range_status_line) — the
+      // header line stays blank for it instead of duplicating/lagging behind that.
       _scanSetStatus(_scanCurrentId !== null ? 'Paused at id ' + (_scanCurrentId - _scanDirection) : '');
     }
   }
@@ -1112,9 +1199,26 @@
       '.__udb_ac_row:hover{background:rgba(255,255,255,0.04)}',
       '.__udb_ac_btn{margin-top:8px;cursor:pointer;background:rgba(255,255,255,.12);border:none;color:#fff;font-size:10px;font-weight:700;padding:5px 10px;border-radius:20px;display:inline-flex;align-items:center;gap:5px}',
       '.__udb_ac_btn:hover{background:rgba(255,255,255,.22)}',
-      '#__udb_scan_menu,#__udb_scan_pause_menu{position:fixed;z-index:100000;display:none;flex-direction:column;background:#12131A;border:1px solid #23252f;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.5);overflow:hidden;min-width:170px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}',
-      '#__udb_scan_menu button,#__udb_scan_pause_menu button{all:unset;cursor:pointer;color:#eceefb;font-size:11px;padding:9px 12px;box-sizing:border-box}',
-      '#__udb_scan_menu button:hover,#__udb_scan_pause_menu button:hover{background:rgba(255,255,255,.08)}',
+      '#__udb_range{position:fixed;top:8px;right:664px;width:260px;z-index:1001;user-select:none;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:12px}',
+      '#__udb_range *{box-sizing:border-box}',
+      '#__udb_range_form{padding:12px 14px;display:flex;flex-direction:column;gap:10px}',
+      '#__udb_range_form label{display:flex;flex-direction:column;gap:4px;font-size:10px;color:#82849a;font-weight:600}',
+      '#__udb_range_form input{background:#0A0B10;border:1px solid #23252f;border-radius:8px;color:#eceefb;padding:7px 9px;font-size:12px;outline:none;box-sizing:border-box}',
+      '.__udb_range_start{all:unset;cursor:pointer;text-align:center;background:#A6B0FF;color:#0A0B10;font-size:11px;font-weight:700;padding:8px;border-radius:8px;box-sizing:border-box}',
+      '.__udb_range_start:hover{filter:brightness(1.08)}',
+      '.__udb_range_known{all:unset;cursor:pointer;text-align:center;font-size:10px;color:#82849a;padding:4px;box-sizing:border-box}',
+      '.__udb_range_known:hover{color:#eceefb}',
+      '#__udb_range_stats{padding:12px 14px;display:none;flex-direction:column;gap:8px;font-size:11px}',
+      '#__udb_range_status_line{font-weight:700;color:#eceefb}',
+      '#__udb_range_total_line{color:#82849a}',
+      '.__udb_range_lap_current{color:#A6B0FF;font-weight:700}',
+      '.__udb_range_lap_hist{max-height:140px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;color:#82849a}',
+      '.__udb_range_actions{display:flex;gap:8px;margin-top:4px}',
+      '.__udb_range_actions button{all:unset;flex:1;cursor:pointer;text-align:center;font-size:11px;font-weight:700;padding:7px;border-radius:8px;box-sizing:border-box}',
+      '.__udb_range_pause{background:#A6B0FF;color:#0A0B10}',
+      '.__udb_range_pause:hover{filter:brightness(1.08)}',
+      '.__udb_range_cancel{background:rgba(231,76,60,0.14);color:#e74c3c;border:1px solid rgba(231,76,60,0.3)!important}',
+      '.__udb_range_cancel:hover{background:rgba(231,76,60,0.22)}',
     ].join('');
     document.head.appendChild(style);
   }
@@ -1173,7 +1277,7 @@
       _renderNameChanges();
     });
     panel.querySelector('#__udb_scan_btn').addEventListener('click', function() {
-      if (_scanActive) _scanTogglePauseMenu(); else _scanToggleMenu();
+      _scanTogglePanel();
     });
     panel.querySelector('#__udb_loadall_btn').addEventListener('click', function() {
       if (_loading) return;
@@ -1236,65 +1340,117 @@
     acPanel.querySelector('#__udb_ac_close').addEventListener('click', function() { acPanel.style.display = 'none'; });
   }
 
-  let scanMenu = null;
+  // ── Range-scan panel — single draggable panel, always reachable from the scan button,
+  // replacing the old known/start/custom/cooldown dropdown plus the separate pause/resume
+  // popup menus. Shows the from-id/to-id/cooldown form when there's no session yet; once
+  // started it swaps to a live view (status, total scanned, lap breakdown) with its own
+  // Pauzeer/Hervat and Afbreken buttons, so it never needs to be reopened to check on or
+  // control a running scan.
+  let rangePanel = null;
 
-  function buildScanMenu() {
-    scanMenu = document.createElement('div');
-    scanMenu.id = '__udb_scan_menu';
-    scanMenu.innerHTML =
-      '<button data-mode="known">Scan known ids</button>'
-      + '<button data-mode="start">Scan from start</button>'
-      + '<button data-mode="custom">Scan from id…</button>'
-      + '<button data-action="cooldown">Cooldown…</button>';
-    document.body.appendChild(scanMenu);
-    scanMenu.style.display = 'none';
+  function buildScanRangePanel() {
+    rangePanel = document.createElement('div');
+    rangePanel.id = '__udb_range';
+    rangePanel.innerHTML =
+      '<div class="__udb_card">'
+      + '<div class="__udb_hdr" id="__udb_range_hdr">'
+      + '<span class="__udb_eyebrow">Gheloo</span>'
+      + '<span class="__udb_title">Scan van id tot id</span>'
+      + '<span class="__udb_close" id="__udb_range_close">&times;</span>'
+      + '</div>'
+      + '<div id="__udb_range_form">'
+      + '<label>Van id<input type="number" id="__udb_range_from" min="1" value="1"></label>'
+      + '<label>Tot id<input type="number" id="__udb_range_to" min="1" placeholder="bv. 800000"></label>'
+      + '<label>Cooldown tussen scans (ms)<input type="number" id="__udb_range_cooldown" min="' + SCAN_INTERVAL_MIN_MS + '"></label>'
+      + '<button class="__udb_range_start" id="__udb_range_start_btn">Start</button>'
+      + '<button class="__udb_range_known" id="__udb_range_known_btn">Of ververs bekende accounts i.p.v.</button>'
+      + '</div>'
+      + '<div id="__udb_range_stats">'
+      + '<div id="__udb_range_status_line"></div>'
+      + '<div id="__udb_range_total_line"></div>'
+      + '<div id="__udb_range_last_reply_line"></div>'
+      + '<div id="__udb_range_lap_current" class="__udb_range_lap_current"></div>'
+      + '<div id="__udb_range_lap_hist" class="__udb_range_lap_hist"></div>'
+      + '<div class="__udb_range_actions">'
+      + '<button class="__udb_range_pause" id="__udb_range_pause_btn">Pauzeer</button>'
+      + '<button class="__udb_range_cancel" id="__udb_range_cancel_btn">Afbreken</button>'
+      + '</div>'
+      + '</div>'
+      + '</div>';
+    document.body.appendChild(rangePanel);
+    rangePanel.style.display = 'none';
 
-    scanMenu.querySelectorAll('button').forEach(function(b) {
-      b.addEventListener('click', function() {
-        if (b.dataset.action === 'cooldown') {
-          const val = window.prompt(
-            'Cooldown tussen scans in ms (huidig: ' + _scanIntervalMs + 'ms — lager = sneller, minimum ' + SCAN_INTERVAL_MIN_MS + 'ms):',
-            String(_scanIntervalMs)
-          );
-          if (val === null) return;
-          const ms = parseInt(val, 10);
-          if (!ms) return;
-          _setScanIntervalMs(ms);
-          scanMenu.style.display = 'none';
-          return;
-        }
-        if (b.dataset.mode === 'custom') {
-          const val = window.prompt('Start scanning from which id?', '1');
-          if (val === null) return;
-          const id = parseInt(val, 10);
-          if (!id || id < 1) return;
-          const dirVal = window.prompt('Direction — type "down" to scan downward from this id, or leave blank for upward.', '');
-          if (dirVal === null) return;
-          const direction = dirVal.trim().toLowerCase() === 'down' ? -1 : 1;
-          scanMenu.style.display = 'none';
-          _scanStart('custom', id, direction);
-          return;
-        }
-        scanMenu.style.display = 'none';
-        _scanStart(b.dataset.mode);
-      });
+    window.__ghk_makeDraggable(rangePanel, rangePanel.querySelector('#__udb_range_hdr'), '__ghk_udb_range_pos', function(e) {
+      return e.target.id === '__udb_range_close';
     });
-
-    document.addEventListener('click', function(e) {
-      if (scanMenu.style.display === 'none') return;
-      if (scanMenu.contains(e.target) || e.target.id === '__udb_scan_btn') return;
-      scanMenu.style.display = 'none';
+    rangePanel.querySelector('#__udb_range_close').addEventListener('click', function() {
+      rangePanel.style.display = 'none';
+    });
+    rangePanel.querySelector('#__udb_range_start_btn').addEventListener('click', function() {
+      const from = parseInt(document.getElementById('__udb_range_from').value, 10);
+      const to = parseInt(document.getElementById('__udb_range_to').value, 10);
+      const cooldown = parseInt(document.getElementById('__udb_range_cooldown').value, 10);
+      if (!from || from < 1 || !to || to < 1) { window.alert('Vul een geldig van-id en tot-id in.'); return; }
+      if (cooldown) _setScanIntervalMs(cooldown);
+      _showRangeLoading();
+      _scanStart('range', null, null, from, to).then(_updateRangePanelView);
+    });
+    rangePanel.querySelector('#__udb_range_known_btn').addEventListener('click', function() {
+      rangePanel.style.display = 'none';
+      _scanStart('known');
+    });
+    rangePanel.querySelector('#__udb_range_pause_btn').addEventListener('click', function() {
+      if (_scanActive) { _scanStop(); _updateRangePanelView(); return; }
+      _showRangeLoading();
+      _scanStart('range').then(_updateRangePanelView);
+    });
+    rangePanel.querySelector('#__udb_range_cancel_btn').addEventListener('click', function() {
+      _scanCancel();
+      _updateRangePanelView();
     });
   }
 
-  function _scanToggleMenu() {
-    if (!scanMenu) return;
-    if (scanMenu.style.display !== 'none') { scanMenu.style.display = 'none'; return; }
-    const btn = panel.querySelector('#__udb_scan_btn');
-    const r = btn.getBoundingClientRect();
-    scanMenu.style.left = r.left + 'px';
-    scanMenu.style.top  = (r.bottom + 4) + 'px';
-    scanMenu.style.display = 'flex';
+  // _scanStart's own known-ids fetch (hundreds of thousands of rows) can take a few
+  // seconds with no other feedback in between — swap to the stats view immediately on
+  // click instead of leaving the panel looking unresponsive until it resolves.
+  function _showRangeLoading() {
+    document.getElementById('__udb_range_form').style.display = 'none';
+    const statsEl = document.getElementById('__udb_range_stats');
+    statsEl.style.display = 'flex';
+    document.getElementById('__udb_range_status_line').textContent = 'Gelogde ids laden...';
+    document.getElementById('__udb_range_total_line').textContent = '';
+    document.getElementById('__udb_range_last_reply_line').textContent = '';
+    document.getElementById('__udb_range_lap_current').textContent = '';
+    document.getElementById('__udb_range_lap_hist').innerHTML = '';
+  }
+
+  // Decides form-vs-live-stats and refreshes every stat in the live view — called on every
+  // open, and on every tick/reply/pause/resume/cancel while the panel might be showing.
+  function _updateRangePanelView() {
+    if (!rangePanel) return;
+    const hasSession = _scanMode === 'range' && _scanCurrentId !== null;
+    document.getElementById('__udb_range_form').style.display = hasSession ? 'none' : 'flex';
+    document.getElementById('__udb_range_stats').style.display = hasSession ? 'flex' : 'none';
+    if (!hasSession) return;
+    document.getElementById('__udb_range_status_line').textContent =
+      (_scanActive ? 'Actief' : 'Gepauzeerd') + ' — bezig bij id ' + _scanCurrentId + ' (' + _scanRangeFrom + '–' + _scanRangeTo + ')';
+    document.getElementById('__udb_range_total_line').textContent = _scanRangeTotalScanned + ' id(s) gescand in totaal';
+    document.getElementById('__udb_range_last_reply_line').textContent =
+      _scanLastReplyId != null ? 'Laatste gelogde id: ' + _scanLastReplyId : 'Nog geen reply ontvangen.';
+    document.getElementById('__udb_range_lap_current').textContent =
+      'Loop ' + _scanLapCount + ' bezig — ' + _scanCurrentLapNew + ' nieuw deze loop';
+    document.getElementById('__udb_range_lap_hist').innerHTML = _scanLapHistory.map(function(n, i) {
+      return '<div>Loop ' + (i + 1) + ': ' + n + ' nieuw</div>';
+    }).join('');
+    document.getElementById('__udb_range_pause_btn').textContent = _scanActive ? 'Pauzeer' : 'Hervat';
+  }
+
+  function _scanTogglePanel() {
+    if (!rangePanel) return;
+    if (rangePanel.style.display !== 'none') { rangePanel.style.display = 'none'; return; }
+    if (!(_scanMode === 'range' && _scanCurrentId !== null)) document.getElementById('__udb_range_cooldown').value = _scanIntervalMs;
+    _updateRangePanelView();
+    rangePanel.style.display = 'flex';
   }
 
   // Discards the in-progress position instead of just pausing it — next time this mode
@@ -1306,43 +1462,15 @@
     _scanQueue = null;
     _scanQueueIdx = 0;
     _scanMode = null;
+    _scanRangeFrom = null;
+    _scanRangeTo = null;
+    _scanLapCount = 0;
+    _scanLapHistory = [];
+    _scanCurrentLapNew = 0;
+    _scanRangeTotalScanned = 0;
     _scanSetStatus('Geannuleerd.');
   }
 
-  let pauseMenu = null;
-
-  function buildScanPauseMenu() {
-    pauseMenu = document.createElement('div');
-    pauseMenu.id = '__udb_scan_pause_menu';
-    pauseMenu.innerHTML =
-      '<button data-action="pause">Pauzeer (positie bewaren)</button>'
-      + '<button data-action="cancel">Annuleer (reset)</button>';
-    document.body.appendChild(pauseMenu);
-    pauseMenu.style.display = 'none';
-
-    pauseMenu.querySelectorAll('button').forEach(function(b) {
-      b.addEventListener('click', function() {
-        pauseMenu.style.display = 'none';
-        if (b.dataset.action === 'cancel') _scanCancel(); else _scanStop();
-      });
-    });
-
-    document.addEventListener('click', function(e) {
-      if (pauseMenu.style.display === 'none') return;
-      if (pauseMenu.contains(e.target) || e.target.id === '__udb_scan_btn') return;
-      pauseMenu.style.display = 'none';
-    });
-  }
-
-  function _scanTogglePauseMenu() {
-    if (!pauseMenu) return;
-    if (pauseMenu.style.display !== 'none') { pauseMenu.style.display = 'none'; return; }
-    const btn = panel.querySelector('#__udb_scan_btn');
-    const r = btn.getBoundingClientRect();
-    pauseMenu.style.left = r.left + 'px';
-    pauseMenu.style.top  = (r.bottom + 4) + 'px';
-    pauseMenu.style.display = 'flex';
-  }
 
   window.__udb_ensureLoaded = function() {
     if (!_loaded && !_loading) _loadUsers();
@@ -1380,8 +1508,7 @@
     buildPanel();
     buildNameChangesPanel();
     buildAvatarCheckPanel();
-    buildScanMenu();
-    buildScanPauseMenu();
+    buildScanRangePanel();
   }
 
   if (document.readyState === 'loading') {
