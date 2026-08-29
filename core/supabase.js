@@ -123,58 +123,6 @@
     'Content-Type':  'application/json',
   };
 
-  // ── Avatar image caching — leet.city's own avatarimage endpoint now sits behind a
-  // Cloudflare CAPTCHA challenge for cross-site embedding (found 2026-08-29), so
-  // accounts.databin.uk's User Database can no longer hotlink it directly for most users.
-  // Fetching it from HERE instead — while this tab is already on leet.city, in a real
-  // logged-in browser session — is legitimate same-origin traffic and isn't blocked.
-  // Queued and paced (not fired inline per user) so a big room/scan burst doesn't hammer
-  // leet.city's own imaging endpoint even though it's same-origin.
-  var AVATAR_URL_BASE = 'https://www.leet.city/leet-imaging/avatarimage';
-  function avatarImageUrl(figure) {
-    return AVATAR_URL_BASE + '?figure=' + encodeURIComponent(figure)
-      + '&direction=2&head_direction=3&size=m&gesture=sml&headonly=1&action=wav&img_format=png';
-  }
-  var AVATAR_FETCH_GAP_MS = 400;
-  var _avatarQueue = [];
-  var _avatarQueueRunning = false;
-  function _queueAvatarFetch(id, figure) {
-    _avatarQueue.push({ id: id, figure: figure });
-    _runAvatarQueue();
-  }
-  function _blobToBase64(blob) {
-    return new Promise(function(resolve, reject) {
-      var reader = new FileReader();
-      reader.onload = function() { resolve(reader.result.split(',')[1]); };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-  async function _runAvatarQueue() {
-    if (_avatarQueueRunning) return;
-    _avatarQueueRunning = true;
-    while (_avatarQueue.length) {
-      var item = _avatarQueue.shift();
-      try {
-        var res = await fetch(avatarImageUrl(item.figure));
-        if (res.ok) {
-          var blob = await res.blob();
-          var base64 = await _blobToBase64(blob);
-          await fetch(SUPABASE_URL + '/rest/v1/user_avatars?on_conflict=id', {
-            method:  'POST',
-            headers: Object.assign({}, HEADERS, { 'Prefer': 'resolution=merge-duplicates' }),
-            body:    JSON.stringify([{ id: item.id, figure: item.figure, image_base64: base64 }]),
-          });
-        }
-      } catch (e) {
-        // Best-effort — a missed avatar just gets retried the next time this figure (or a
-        // new one) is seen for this id, no separate outbox/backoff needed for this.
-      }
-      await new Promise(function(r) { setTimeout(r, AVATAR_FETCH_GAP_MS); });
-    }
-    _avatarQueueRunning = false;
-  }
-
   // previous_names/previous_figures history length — each figure string can run
   // 100-150+ chars, so this is the single biggest per-row size lever.
   var HISTORY_CAP = 12;
@@ -250,22 +198,6 @@
       console.warn('[Supabase] fetch existing failed:', e);
     }
 
-    // Existing cached avatars — only re-fetch/re-upload a user's avatar image when their
-    // figure has actually changed (or there's no cached copy yet), not on every sighting.
-    var existingAvatars = {};
-    try {
-      var avr = await fetch(
-        SUPABASE_URL + '/rest/v1/user_avatars?id=in.(' + ids.join(',') + ')&select=id,figure',
-        { headers: HEADERS }
-      );
-      if (avr.ok) {
-        var avrows = await avr.json();
-        avrows.forEach(function(a) { existingAvatars[a.id] = a.figure; });
-      }
-    } catch (e) {
-      console.warn('[Supabase] fetch existing avatars failed:', e);
-    }
-
     // 'room'/'profile' are real-time — you're either physically in the room right now or
     // you just opened their live profile card. 'guild'/'relationship' reflect whatever
     // the server had cached for that list, which can lag behind. So only room/profile
@@ -293,8 +225,6 @@
       var newName       = u.name   || '';
       var candidateFigure = u.figure || '';
       var newFigure = (!ex.figure || isTrustedSource) ? candidateFigure : ex.figure;
-
-      if (newFigure && existingAvatars[u.id] !== newFigure) _queueAvatarFetch(u.id, newFigure);
 
       // Track changes
       var nameChanged = ex.name && ex.name !== newName;
