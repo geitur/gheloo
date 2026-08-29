@@ -400,7 +400,15 @@
     } catch (e) { return []; }
   }
   function _saveScannedIdsOutbox(items) {
-    try { localStorage.setItem(SCANNED_IDS_OUTBOX_KEY, JSON.stringify(items)); } catch (e) {}
+    try {
+      localStorage.setItem(SCANNED_IDS_OUTBOX_KEY, JSON.stringify(items));
+    } catch (e) {
+      // Same quota hazard as core/supabase.js's outbox — drop oldest to stay unwedged
+      // instead of silently swallowing every future enqueue once the key's maxed out.
+      if (e && e.name === 'QuotaExceededError' && items.length > 1) {
+        _saveScannedIdsOutbox(items.slice(Math.ceil(items.length * 0.1)));
+      }
+    }
   }
   function _enqueueScannedId(id) {
     const items = _loadScannedIdsOutbox();
@@ -428,10 +436,20 @@
       // touch, not just the first — that's what lets a 'known'-mode queue-build (below)
       // treat "touched in the last 15 min" as "someone else already just refreshed this."
       const nowIso = new Date().toISOString();
+      // The same id can land in the outbox twice (the scan loop enqueues at probe-send
+      // time; core/supabase.js's __udb_markIdsScanned enqueues it again once a reply
+      // upserts it) and both copies can end up in the same batch. Postgres rejects an
+      // INSERT ... ON CONFLICT DO UPDATE that hits the same row twice in one statement
+      // ("cannot affect row a second time") — a flat 500 on the whole batch, every time,
+      // found live 2026-08-29 right after fixing the missing UPDATE grant. Dedupe by id
+      // for the request body; batchKeys still covers every outbox entry so all duplicates
+      // get cleared from the queue once the one row they collapsed into is confirmed sent.
+      const rowsById = new Map();
+      batch.forEach(function(it) { rowsById.set(it.id, { id: it.id, scanned_at: nowIso }); });
       const res = await fetch(SUPABASE_URL + '/rest/v1/scanned_ids?on_conflict=id', {
         method:  'POST',
         headers: Object.assign({}, HEADERS, { 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' }),
-        body:    JSON.stringify(batch.map(function(it) { return { id: it.id, scanned_at: nowIso }; })),
+        body:    JSON.stringify(Array.from(rowsById.values())),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       // Remove by `_k`, not position — another tab may have drained/enqueued into this

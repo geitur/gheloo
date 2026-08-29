@@ -55,7 +55,22 @@
     } catch (e) { return []; }
   }
   function saveOutbox(items) {
-    try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(items)); } catch (e) { console.warn('[Supabase] outbox save failed:', e); }
+    try {
+      localStorage.setItem(OUTBOX_KEY, JSON.stringify(items));
+    } catch (e) {
+      // localStorage is ~5-10MB/origin. A backend outage that outlasts the drain rate (the
+      // 2026-08-29 scanned_ids permission bug held this up a full day) can queue enough
+      // full user objects to hit that ceiling — after which EVERY further enqueue silently
+      // fails to persist (caught below, swallowed) even though the in-memory push looked
+      // like it worked. Drop the oldest slice to make room instead of staying wedged.
+      if (e && e.name === 'QuotaExceededError' && items.length > 1) {
+        var trimmed = items.slice(Math.ceil(items.length * 0.1));
+        console.warn('[Supabase] outbox over quota, dropping ' + (items.length - trimmed.length) + ' oldest entries');
+        saveOutbox(trimmed);
+        return;
+      }
+      console.warn('[Supabase] outbox save failed:', e);
+    }
   }
   function enqueueUsers(users, opts) {
     if (!users || !users.length) return;
