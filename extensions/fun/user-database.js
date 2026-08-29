@@ -378,15 +378,33 @@
   let _scannedIdsBackoffUntil = 0;
   let _scannedIdsDraining = false;
 
+  // Same cross-tab hazard as core/supabase.js's outbox: this key is shared by every open
+  // tab, and removing "whatever's currently first" after an await deletes a different
+  // tab's never-sent item the moment two tabs drain concurrently — silent, permanent loss
+  // with no error (root cause of the 2026-08-29 "70k scanned, ~2k landed" report). Each
+  // entry gets a unique `_k`; removal filters by that, not by position.
+  let _scannedIdsKeySeq = 0;
+  function _nextScannedIdsKey() { return Date.now() + '_' + Math.random().toString(36).slice(2) + '_' + (_scannedIdsKeySeq++); }
   function _loadScannedIdsOutbox() {
-    try { return JSON.parse(localStorage.getItem(SCANNED_IDS_OUTBOX_KEY) || '[]'); } catch (e) { return []; }
+    try {
+      const raw = JSON.parse(localStorage.getItem(SCANNED_IDS_OUTBOX_KEY) || '[]');
+      let changed = false;
+      // Pre-fix entries are bare ids (numbers), not {id,_k} objects — migrate on read.
+      const items = raw.map((it) => {
+        if (it != null && typeof it === 'object' && it._k != null) return it;
+        changed = true;
+        return { id: (it != null && typeof it === 'object') ? it.id : it, _k: _nextScannedIdsKey() };
+      });
+      if (changed) _saveScannedIdsOutbox(items);
+      return items;
+    } catch (e) { return []; }
   }
-  function _saveScannedIdsOutbox(ids) {
-    try { localStorage.setItem(SCANNED_IDS_OUTBOX_KEY, JSON.stringify(ids)); } catch (e) {}
+  function _saveScannedIdsOutbox(items) {
+    try { localStorage.setItem(SCANNED_IDS_OUTBOX_KEY, JSON.stringify(items)); } catch (e) {}
   }
   function _enqueueScannedId(id) {
     const items = _loadScannedIdsOutbox();
-    items.push(id);
+    items.push({ id: id, _k: _nextScannedIdsKey() });
     _saveScannedIdsOutbox(items);
   }
 
@@ -403,6 +421,7 @@
     const items = _loadScannedIdsOutbox();
     if (!items.length) return;
     const batch = items.slice(0, SCANNED_IDS_BATCH_SIZE);
+    const batchKeys = new Set(batch.map((it) => it._k));
     _scannedIdsDraining = true;
     try {
       // merge-duplicates (not ignore-duplicates) so scanned_at gets bumped to now on every
@@ -412,11 +431,13 @@
       const res = await fetch(SUPABASE_URL + '/rest/v1/scanned_ids?on_conflict=id', {
         method:  'POST',
         headers: Object.assign({}, HEADERS, { 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' }),
-        body:    JSON.stringify(batch.map(function(id) { return { id: id, scanned_at: nowIso }; })),
+        body:    JSON.stringify(batch.map(function(it) { return { id: it.id, scanned_at: nowIso }; })),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
+      // Remove by `_k`, not position — another tab may have drained/enqueued into this
+      // same key while the fetch was in flight (see the outbox comment above).
       const current = _loadScannedIdsOutbox();
-      _saveScannedIdsOutbox(current.slice(batch.length));
+      _saveScannedIdsOutbox(current.filter((it) => !batchKeys.has(it._k)));
     } catch (e) {
       _log('scanned-id sync failed, will retry: ' + e.message);
       _scannedIdsBackoffUntil = Date.now() + SCANNED_IDS_BACKOFF_MS;

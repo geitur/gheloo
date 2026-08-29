@@ -36,8 +36,23 @@
   var _backoffUntil = 0;
   var _draining      = false;
 
+  // Multiple tabs/windows share this same localStorage key (same origin). A removal that
+  // just trusts array position ("shift the first item off") breaks the moment a second tab
+  // is also draining: by the time tab A's fetch resolves, tab B may have already shifted a
+  // DIFFERENT item into position 0, so tab A ends up deleting an item it never sent — gone
+  // for good, no error, no retry. Every entry gets a unique `_k` so removal can target the
+  // exact item that was actually confirmed sent, no matter what else moved around it in the
+  // meantime (found live 2026-08-29: 70k+ scanned locally, ~2k landed in the DB).
+  var _outboxKeySeq = 0;
+  function _nextOutboxKey() { return Date.now() + '_' + Math.random().toString(36).slice(2) + '_' + (_outboxKeySeq++); }
   function loadOutbox() {
-    try { return JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]'); } catch (e) { return []; }
+    try {
+      var items = JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]');
+      var changed = false;
+      items.forEach(function(it) { if (it._k == null) { it._k = _nextOutboxKey(); changed = true; } });
+      if (changed) saveOutbox(items);
+      return items;
+    } catch (e) { return []; }
   }
   function saveOutbox(items) {
     try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(items)); } catch (e) { console.warn('[Supabase] outbox save failed:', e); }
@@ -45,22 +60,39 @@
   function enqueueUsers(users, opts) {
     if (!users || !users.length) return;
     var items = loadOutbox();
-    users.forEach(function(u) { items.push({ u: u, o: opts || {} }); });
+    users.forEach(function(u) { items.push({ u: u, o: opts || {}, _k: _nextOutboxKey() }); });
     saveOutbox(items);
   }
 
+  // One POST can carry many rows — upsertUsers() already accepts an array. Sending only
+  // items[0] here capped real throughput at ~10 users/sec (1 per DRAIN_MS tick) no matter
+  // how fast a scan or a full room roster found people, which is what "nothing lands in
+  // the DB fast enough with 2 tabs scanning" traces back to (2026-08-29). Batching every
+  // consecutive item that shares the same opts (same source/room — can't merge across
+  // different ones without mis-stamping last_room_id) into one request removes that
+  // ceiling while still keeping only one request in flight at a time, which is the actual
+  // protection the small VM needs against the connection-pool wedge from 2026-08-28.
+  var DRAIN_BATCH_MAX = 200;
   async function drainTick() {
     if (_draining || Date.now() < _backoffUntil) return;
     var items = loadOutbox();
     if (!items.length) return;
     _draining = true;
+    var frontOptsKey = JSON.stringify(items[0].o);
+    var batch = [];
+    for (var i = 0; i < items.length && batch.length < DRAIN_BATCH_MAX; i++) {
+      if (JSON.stringify(items[i].o) !== frontOptsKey) break;
+      batch.push(items[i]);
+    }
+    var sentKeys = {};
+    batch.forEach(function(it) { sentKeys[it._k] = true; });
     try {
-      await upsertUsers([items[0].u], items[0].o);
-      // Re-read rather than reuse `items` — packet handlers may have pushed more
-      // entries onto the outbox while this send was in flight.
+      await upsertUsers(batch.map(function(it) { return it.u; }), batch[0].o);
+      // Re-read rather than reuse `items` — packet handlers (or another tab) may have
+      // pushed or drained entries while this send was in flight. Remove by `_k`, not
+      // position, so this only ever deletes the exact items just confirmed sent.
       var current = loadOutbox();
-      current.shift();
-      saveOutbox(current);
+      saveOutbox(current.filter(function(it) { return !sentKeys[it._k]; }));
     } catch (e) {
       console.warn('[Supabase] outbox send failed, will retry:', e);
       _backoffUntil = Date.now() + BACKOFF_MS;
