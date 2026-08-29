@@ -540,17 +540,21 @@
   }
 
   // ── Test room creator — CreateFlatMessageComposer(name, description, model, category,
-  // maxVisitors, tradeType) followed 500ms later by SaveRoomSettingsMessageComposer.
-  // SaveRoomSettings needs the room's real id, which only exists after the server replies
-  // to CreateFlat with FlatCreatedEvent — so this can't just replay two fixed packets, it
-  // has to wait for that reply first. SaveRoomSettings' byte layout below is a direct,
-  // byte-exact live capture (2026-08-29) — {roomId}{name}{i:0}{i:65536}{i:10}{i:32}{i:2}
-  // {tag}{i:0}{i:131072}{i:16777216}{i:0}{i:0}{i:0}{i:65536}{i:0}{i:0}{i:0}{i:0}{i:0}
-  // {b:false}{b:false}. Only `name` and `tag` (the one string field after the "{i:2}",
-  // fixed to "51" here) are parameterized — the rest are copied verbatim from the capture
-  // since their individual meaning wasn't decomposed (matches this file's existing policy
-  // elsewhere: treat a verified real capture as ground truth over a guessed semantic
-  // reconstruction). ──
+  // maxVisitors, tradeType) followed by TWO SaveRoomSettingsMessageComposer calls, both
+  // node-decoded byte-for-byte against real raw hex captures (2026-08-29) — zero leftover
+  // bytes against each frame's own declared length, so this is trusted over any hand/tool
+  // decode of the same captures (an earlier {i:2} guess here silently sent a malformed
+  // packet the server just dropped — no password, no tag, no error surfaced). SaveRoomSettings
+  // needs the room's real id, which only exists after the server replies to CreateFlat with
+  // FlatCreatedEvent — so this can't just replay fixed packets, it has to wait for that
+  // reply first. First call: {roomId}{name}{i:0}{i:0}{i:10}{i:32}{i:2}{i:0}{i:0}{i:256}{i:0}
+  // {i:0}{i:0}{i:1}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0} — a defaults sync the client fires when the
+  // settings dialog opens, no password/tag yet. Second call is the real save, with password
+  // and tag: {roomId}{name}{i:0}{u:2}{s:"test"}{i:10}{i:32}{i:2}{s:"51"}{i:0}{i:0}{i:16777216}
+  // {i:0}{i:0}{i:0}{i:65536}{i:0}{i:0}{i:0}{i:0}{i:0}{b:false}{b:false}. `{i:}` in this
+  // composer format always writes 4 bytes — doorMode and the tag's own length prefix are
+  // only 2, so those need `{u:}` (ushort); the tag is a normal length-prefixed string
+  // ("51"), not a raw int like an earlier guess assumed. ──
   // FlatCreatedEvent has no shared parser in core/parsers.js (niche, only needed here) —
   // parsed locally: roomId(int), roomName(str), confirmed against FlatCreatedMessageParser
   // (billsonnn/nitro-renderer).
@@ -592,10 +596,23 @@
     const created = await _waitForFlatCreated();
     if (!created) return { ok: false, reason: 'Timed out waiting for the new room to be created.' };
 
+    // The client sends TWO SaveRoomSettings calls back to back, not one — node-decoded
+    // byte-for-byte against a real capture (2026-08-23), zero leftover bytes against each
+    // frame's own declared length on both. First call is a defaults sync (no password/tag
+    // yet) the client fires when the settings dialog opens; the second is the actual save
+    // with password + tag. `{i:}` in this composer format always writes 4 bytes — doorMode
+    // and the tag's own length prefix are only 2, so those need `{u:}` (ushort); the tag
+    // itself is a normal length-prefixed string ("51"), not a raw int like an earlier
+    // guess assumed (that misreading is why it silently failed before).
     await _sleep(500);
     window.sendPacket('OUT', saveId,
-      '{i:' + created.roomId + '}{s:"' + roomName + '"}{i:0}{i:65536}{i:10}{i:32}{i:2}{s:"51"}{i:0}' +
-      '{i:131072}{i:16777216}{i:0}{i:0}{i:0}{i:65536}{i:0}{i:0}{i:0}{i:0}{i:0}{b:false}{b:false}');
+      '{i:' + created.roomId + '}{s:"' + roomName + '"}{i:0}{i:0}{i:10}{i:32}{i:2}{i:0}{i:0}{i:256}' +
+      '{i:0}{i:0}{i:0}{i:1}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}');
+
+    await _sleep(500);
+    window.sendPacket('OUT', saveId,
+      '{i:' + created.roomId + '}{s:"' + roomName + '"}{i:0}{u:2}{s:"test"}{i:10}{i:32}{i:2}{s:"51"}' +
+      '{i:0}{i:0}{i:16777216}{i:0}{i:0}{i:0}{i:65536}{i:0}{i:0}{i:0}{i:0}{i:0}{b:false}{b:false}');
 
     // AssignRights ({out:AssignRights}{i:4367673}) has no room-id argument — it acts on
     // whatever room you're currently standing in, so it only lands correctly once we're
