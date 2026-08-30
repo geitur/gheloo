@@ -49,10 +49,9 @@
   // 1..32 x 1..32 grid in the room you're currently standing in, wrapping back to (1,1)
   // and continuing if there are more items than tiles, until inventory is empty.
   //
-  // KamerConstructieTool is sent once first — without it, placing onto a tile that already
+  // ":bh 0" chat command is sent once first — without it, placing onto a tile that already
   // has something on it stacks upward or gets rejected; with it, every placement forces
   // height 0 so the grid can be filled solid regardless of what's already on each tile.
-  // Payload is a real capture (2026-08-30) — see the byte-exact comment at the send site.
   //
   // PlaceObject wire format ({s:"<placementId> <x> <y> <facing>"}) confirmed working
   // already in room-clone.js's own placement loop — reused verbatim here.
@@ -205,7 +204,7 @@
     }
     const pid = _outId('PlaceObject');
     if (pid === null) return { ok: false, reason: 'PlaceObject not found in PKT.' };
-    const kctId = _outId('KamerConstructieTool');
+    const chatId = _outId('Chat');
     _pendingPlacements = new Map();
 
     const items = Object.values(window.Inventory.items || {}).filter(function(it) {
@@ -218,13 +217,12 @@
       return { ok: false, reason: 'No (LTD)/(Rare)/(SS)/(Club Cadeau)/(BC Shop) items found in your inventory.' };
     }
 
-    if (kctId !== null) {
-      // Byte-exact real capture (2026-08-30), replacing an earlier guessed layout: 11 plain
-      // ints then 3 bools, first int 16777216 (0x01000000 — a single-bit flag value, same
-      // pattern as the bitflag-shaped ints seen in the SaveRoomSettings captures elsewhere
-      // in this file; not decomposed further since the exact bit meaning isn't needed here).
-      window.sendPacket('OUT', kctId,
-        '{i:16777216}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{b:false}{b:false}{b:false}');
+    if (chatId !== null) {
+      // ":bh 0" chat command forces height 0, same effect KamerConstructieTool was used for
+      // before — replaced with this (2026-08-30) per a real capture, same reasoning: without
+      // it, placing onto a tile that already has something on it stacks upward or gets
+      // rejected.
+      window.sendPacket('OUT', chatId, '{s:":bh 0"}{i:0}');
     }
 
     const total = items.length + wallItems.length;
