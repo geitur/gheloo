@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gheloo",
-  "version": "2.4.6",
+  "version": "2.4.7",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -57,5 +57,5 @@
       "all_frames": true
     }
   ],
-  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://userlogger.databin.uk/*", "https://api.github.com/*", "https://github.com/*", "https://*.githubusercontent.com/*"]
+  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://userlogger.databin.uk/*", "https://api.github.com/*", "https://github.com/*", "https://*.githubusercontent.com/*", "https://ipapi.co/*"]
 }

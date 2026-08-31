@@ -226,11 +226,16 @@
       window.Gheloo.setActive('ping', _pingOn);
       window.__ghk_pingEnabled = _pingOn;
       window.__ghk_pingOverlayOn = _pingOn;
-      if (!_pingOn && window.__ghk_resetPing) window.__ghk_resetPing();
+      if (!_pingOn && window.__ghk_resetPing) window.__ghk_resetPing(false);
       _updatePingSubtitle();
       _savePingSettings();
       if (window.__ghk_updatePillsWrapPos) window.__ghk_updatePillsWrapPos();
+      window.dispatchEvent(new CustomEvent('__ghk_ping_toggle', { detail: _pingOn }));
     }
+    // Lets other panels (e.g. marktplaats.js) flip Settings > Performance > Ping without
+    // duplicating its on/off state — they read window.__ghk_pingEnabled and listen for the
+    // '__ghk_ping_toggle' event to stay in sync when the toggle changes from either side.
+    window.__ghk_togglePing = togglePing;
 
     const CATEGORIES = [
       {
@@ -556,6 +561,14 @@
           '<div class="ghl-proxy-url-lbl">WS URL</div>' +
           '<div class="ghl-proxy-url" id="ghl-proxy-url">—</div>' +
         '</div>' +
+        '<div style="margin-top:8px">' +
+          '<div class="ghl-proxy-url-lbl">IP</div>' +
+          '<div class="ghl-proxy-url" id="ghl-proxy-ip" style="cursor:pointer" title="Klik om te tonen/verbergen">—</div>' +
+        '</div>' +
+        '<div style="margin-top:8px">' +
+          '<div class="ghl-proxy-url-lbl">Land</div>' +
+          '<div class="ghl-proxy-url" id="ghl-proxy-country">—</div>' +
+        '</div>' +
       '</div>' +
       '<div class="ghl-me-card ghl-proxy-card" style="margin-top:10px">' +
         '<div class="ghl-proxy-url-lbl">Catalogus Scan</div>' +
@@ -580,6 +593,32 @@
 
     proxyContent.querySelector('#ghl-proxy-hub-btn').addEventListener('click', function() {
       window.open('https://hub.databin.uk/', '_blank');
+    });
+
+    // IP is a spoiler: masked to the first 3 characters by default, click to reveal, click
+    // again to re-mask. Country code shows plainly next to it — only the IP itself is sensitive.
+    let _proxyIp = null, _proxyIpRevealed = false;
+    function _renderProxyIp() {
+      const el = proxyContent.querySelector('#ghl-proxy-ip');
+      if (!el) return;
+      if (!_proxyIp) { el.textContent = '—'; return; }
+      el.textContent = _proxyIpRevealed ? _proxyIp : (_proxyIp.slice(0, 3) + '•'.repeat(Math.max(0, _proxyIp.length - 3)));
+    }
+    proxyContent.querySelector('#ghl-proxy-ip').addEventListener('click', function() {
+      if (!_proxyIp) return;
+      _proxyIpRevealed = !_proxyIpRevealed;
+      _renderProxyIp();
+    });
+    fetch('https://ipapi.co/json/').then(function(r) { return r.json(); }).then(function(data) {
+      _proxyIp = data && data.ip ? data.ip : null;
+      _renderProxyIp();
+      const countryEl = proxyContent.querySelector('#ghl-proxy-country');
+      if (countryEl) countryEl.textContent = (data && (data.country_code || data.country)) || 'Onbekend';
+    }).catch(function() {
+      const el = proxyContent.querySelector('#ghl-proxy-ip');
+      if (el) el.textContent = 'Onbekend';
+      const countryEl = proxyContent.querySelector('#ghl-proxy-country');
+      if (countryEl) countryEl.textContent = 'Onbekend';
     });
 
     // Room Clone (extensions/room-clone.js) exposes catalog coverage + live scan
@@ -807,10 +846,19 @@
     // is multitab.js's push-update hook, fires null when Ping toggles off.
     if (window.onLatency) {
       window.onLatency(function(ms) {
-        window.Gheloo.setBadge('ping', ms != null ? ms + 'ms' : '');
-        pingOverlay.textContent = (ms != null ? ms : '—') + ' ms';
+        // ms carries 0.01ms precision now (see multitab.js) — round for display only, the
+        // decimals stay live on window.__ghk_rtt for anything that needs them (marktplaats.js).
+        const rounded = ms != null ? Math.round(ms) : null;
+        window.Gheloo.setBadge('ping', rounded != null ? rounded + 'ms' : '');
+        if (!window.__ghk_pingFrozen) pingOverlay.textContent = (rounded != null ? rounded : '—') + ' ms';
       });
     }
+    // 3 unanswered probes in a row (multitab.js) — the last reading is too old to call
+    // "live" anymore, so say so instead of quietly showing a stale number.
+    window.addEventListener('__ghk_ping_frozen', function(e) {
+      pingOverlay.textContent = e.detail ? 'bevroren' : pingOverlay.textContent;
+      pingOverlay.style.color = e.detail ? '#ff6b6b' : '';
+    });
 
     let _fpsFrames = 0, _fpsLast = performance.now();
     function _fpsTick(now) {

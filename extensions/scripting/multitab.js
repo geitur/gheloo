@@ -59,14 +59,34 @@
 
   // Clears the reading (rather than just freezing it) when the Settings > Performance >
   // Ping toggle turns off, so nothing displays a stale number as if it were still live.
-  window.__ghk_resetPing = function() {
+  //
+  // disarm defaults to true for core/ws.js's open/close/error hooks — a real reconnect means
+  // a fresh login burst is coming, so re-locking the gate until the next OpenFlatConnection
+  // is correct there. content.js's togglePing() passes disarm=false on its off-path: turning
+  // the toggle off doesn't touch the connection, so there's no future OpenFlatConnection to
+  // wait for — re-locking there would strand the gate closed forever on the next toggle-on.
+  window.__ghk_resetPing = function(disarm) {
     _myRtt = null; _rttEma = null; _pendingPings.length = 0;
     window.__ghk_rtt = null;
-    _pingArmed = false; // wait for a fresh OpenFlatConnection before probing again
+    if (disarm !== false) _pingArmed = false;
+    _setFrozen(false);
     _emitLatency(null);
     _renderPeers();
     _renderMulti();
   };
+
+  // Set once 3 probes are outstanding with no reply at all — the last __ghk_rtt reading is
+  // then old enough it shouldn't be trusted as "live" anymore (dropped packets, dead
+  // connection, tab throttled in the background, etc). Cleared the moment any reply lands
+  // again. window.__ghk_pingFrozen is the flag; '__ghk_ping_frozen' the change event, same
+  // pattern as '__ghk_ping_toggle' — so content.js's overlay and marktplaats.js's gate can
+  // react without polling.
+  window.__ghk_pingFrozen = false;
+  function _setFrozen(v) {
+    if (window.__ghk_pingFrozen === v) return;
+    window.__ghk_pingFrozen = v;
+    window.dispatchEvent(new CustomEvent('__ghk_ping_frozen', { detail: v }));
+  }
 
   // Don't start probing right after the socket connects — login sends a burst of
   // frames the server processes before the client has entered any room, and a ping
@@ -74,20 +94,31 @@
   // network latency. Wait for the first real OpenFlatConnection (room entry) instead.
   let _pingArmed = false;
   window.onPacket && window.onPacket('OpenFlatConnection', function() { _pingArmed = true; });
+  // If this script (re)attaches while the socket is already open (extension reload without
+  // a page refresh, or any late injection), OpenFlatConnection already fired before this
+  // listener existed to catch it — _pingArmed would then stay false forever and the probe
+  // would never send. Socket already open at load time means the login burst is long over,
+  // so arm immediately instead of waiting for an event that already happened.
+  if (window._ws || window._worker || window._ws_worker) _pingArmed = true;
 
   function _sendPing() {
     if (!window.__ghk_pingEnabled) return; // opt-in — only probe while the Ping toggle is on
     if (!_pingArmed) return; // haven't seen a room-enter yet since (re)connect
     if (!window.sendPacket || (!window._ws && !window._worker && !window._ws_worker)) return;
     if (_pendingPings.length > 3) _pendingPings.length = 0; // response(s) got lost — don't let stale sends pile up
-    _pendingPings.push(Date.now());
+    _pendingPings.push(performance.now()); // sub-ms monotonic clock, not Date.now()'s integer ms
     window.sendPacket('OUT', 418);
+    if (_pendingPings.length >= 3) _setFrozen(true);
   }
   window.onPacket && window.onPacket('GiftWrappingConfiguration', function() {
     const sentAt = _pendingPings.shift();
     if (sentAt === undefined) return;
-    _myRtt  = Date.now() - sentAt;
-    _rttEma = _rttEma === null ? _myRtt : Math.round(_rttEma * 0.7 + _myRtt * 0.3);
+    _setFrozen(false);
+    _myRtt  = performance.now() - sentAt;
+    // Kept to 0.01ms, not rounded to whole ms — window.__ghk_rtt is consumed by things doing
+    // sub-ms race timing (marktplaats.js's buy/cancel calibration). Whole-ms display (the
+    // top-left overlay chip, the Settings row badge) rounds it at the point it's shown instead.
+    _rttEma = _rttEma === null ? _myRtt : Math.round((_rttEma * 0.7 + _myRtt * 0.3) * 100) / 100;
     window.__ghk_rtt = _rttEma;
     _emitLatency(_rttEma);
     _renderPeers();
@@ -101,10 +132,14 @@
   });
   // Self-rescheduling instead of setInterval so a live interval change (Settings >
   // Performance > Ping's dropdown) takes effect on the very next tick, no restart needed.
+  // Aligned to wall-clock epoch boundaries (not "time since this tab loaded") so every tab
+  // on the same machine ticks at the same instant — self/peer rtt then get sampled close
+  // together in time instead of drifting apart by up to a full interval.
   function _scheduleNextPing() {
-    setTimeout(function() { _sendPing(); _scheduleNextPing(); }, window.__ghk_pingIntervalMs || 2000);
+    const interval = window.__ghk_pingIntervalMs || 2000;
+    const delay = interval - (Date.now() % interval);
+    setTimeout(function() { _sendPing(); _scheduleNextPing(); }, delay);
   }
-  setTimeout(_sendPing, 1500);
   _scheduleNextPing();
 
   function _announce() {
