@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gheloo",
-  "version": "2.4.7",
+  "version": "2.4.8",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -45,7 +45,8 @@
         "extensions/exploits/marktplaats.js",
         "extensions/exploits/photo-library.js",
         "extensions/settings/room-history.js",
-        "extensions/settings/marktplaats-alerts.js"],
+        "extensions/settings/marktplaats-alerts.js",
+        "extensions/settings/marktplaats-notes.js"],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": true
