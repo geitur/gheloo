@@ -683,6 +683,14 @@
     + '  if(ev.data.__n==="send"){'
     + '    if(self.__hookedWs)self.__hookedWs.send(ev.data.buf);'
     + '    self.__nestedWorkers.forEach(function(w){var c=ev.data.buf.slice(0);w.postMessage({__n:"send",buf:c},[c]);});'
+    + '  } else if(ev.data.__n==="sendAt"){'
+    // Timer lives in the worker's own global scope, not the page's — dedicated Workers are not
+    // subject to Chrome's background/inactive-tab timer throttling the way main-frame timers
+    // are, so a scheduled send here keeps its precision even when the tab holding this worker
+    // isn't focused or visible. buf/at are resolved by the caller ahead of time; this only
+    // does the fire.
+    + '    (function(buf,at){setTimeout(function(){if(self.__hookedWs)self.__hookedWs.send(buf);},Math.max(0,at-Date.now()));})(ev.data.buf,ev.data.at);'
+    + '    self.__nestedWorkers.forEach(function(w){var c=ev.data.buf.slice(0);w.postMessage({__n:"sendAt",buf:c,at:ev.data.at},[c]);});'
     + '  } else if(ev.data.__n==="block"){'
     + '    if(ev.data.blocked)self.__blockedOutWireIds[ev.data.wireId]=true;else delete self.__blockedOutWireIds[ev.data.wireId];'
     + '    self.__nestedWorkers.forEach(function(w){w.postMessage(ev.data);});'
@@ -777,6 +785,17 @@
       if (window._ws) { window._ws.dispatchEvent(new MessageEvent('message', { data: raw })); return true; }
       console.warn('[sendPacket] IN injection not supported in worker mode'); return false;
     }
+  };
+
+  // Same OUT-packet encoding sendPacket uses, minus the send — for callers that need to
+  // resolve the packet ID/payload well ahead of a precise fire time (e.g. multitab.js's
+  // scheduled sends) so the only thing left to do at T is hand a ready buffer to the worker.
+  // Resolving at fire time instead would mean a slow main thread tick (GC pause, a heavy
+  // synchronous handler, tab backgrounding) eats into the fire-time precision itself, not
+  // just the scheduling of it.
+  window.__ghk_buildRawPacket = function(dir, logicalId, gEarthStr) {
+    const payload = gEarthStr ? window.GPacket.fromExpression(gEarthStr).slice(6) : new ArrayBuffer(0);
+    return buildRawPacket(dir, logicalId, payload);
   };
 
   // makeWriter — binary writer, mirror of makeReader, for building outgoing payloads

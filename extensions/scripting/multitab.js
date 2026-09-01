@@ -46,7 +46,6 @@
   // every request, same for every account. Not tied to any user data, so response time is
   // pure network RTT with no server-side query cost riding along, and no per-account skew.
   let _myRtt = null, _rttEma = null;
-  const _pendingPings = [];
 
   // Public hook for the paste-your-own-JS Extensions panel (and any other panel) to react
   // to live ping — same shape as onPacket. window.__ghk_rtt is the plain current-value
@@ -60,9 +59,15 @@
   // Clears the reading (rather than just freezing it) when the Settings > Performance >
   // Ping toggle turns off, so nothing displays a stale number as if it were still live.
   window.__ghk_resetPing = function() {
-    _myRtt = null; _rttEma = null; _pendingPings.length = 0;
+    _myRtt = null; _rttEma = null;
+    clearTimeout(_pingTimeoutHandle);
+    _pingSentAt = null; _pingTimeoutHandle = null;
     window.__ghk_rtt = null;
-    _pingArmed = false; // wait for a fresh OpenFlatConnection before probing again
+    // _pingArmed deliberately left alone here — it exists to guard against probing into the
+    // login burst right after a fresh (re)connect, not to gate the Ping toggle. This runs on
+    // every toggle-off too; clearing it would mean flipping the toggle back on mid-session
+    // (no new OpenFlatConnection, since you're not re-entering a room) leaves pinging dead
+    // until you happen to walk through a door again.
     _emitLatency(null);
     _renderPeers();
     _renderMulti();
@@ -75,18 +80,33 @@
   let _pingArmed = false;
   window.onPacket && window.onPacket('OpenFlatConnection', function() { _pingArmed = true; });
 
+  // Single probe in flight at a time, not a FIFO queue — at a configured interval below real
+  // RTT (e.g. the 50ms marktplaats.js sets while its panel is open), a queue lets multiple
+  // sends stack up before any reply lands, and once it overflowed the old ">3, clear the
+  // array" reset threw away timestamps mid-flight: a later reply would then shift() a
+  // timestamp meant for a *different* send, pairing it with the wrong one and producing a
+  // wildly wrong (too low or too high) reading — exactly the "160 then 11" bounce this was.
+  // Refusing to send while one is already outstanding makes mispairing structurally
+  // impossible; effective cadence just naturally floors at real RTT if that's above the
+  // configured interval, which is the fastest a genuine reading could ever be anyway.
+  let _pingSentAt = null;
+  let _pingTimeoutHandle = null;
+  const PING_TIMEOUT_MS = 5000; // reply presumed lost — free the slot so pinging isn't stuck forever
+
   function _sendPing() {
     if (!window.__ghk_pingEnabled) return; // opt-in — only probe while the Ping toggle is on
     if (!_pingArmed) return; // haven't seen a room-enter yet since (re)connect
     if (!window.sendPacket || (!window._ws && !window._worker && !window._ws_worker)) return;
-    if (_pendingPings.length > 3) _pendingPings.length = 0; // response(s) got lost — don't let stale sends pile up
-    _pendingPings.push(Date.now());
+    if (_pingSentAt !== null) return; // previous probe still outstanding — wait for its reply (or timeout)
+    _pingSentAt = Date.now();
     window.sendPacket('OUT', 418);
+    _pingTimeoutHandle = setTimeout(function() { _pingSentAt = null; _pingTimeoutHandle = null; }, PING_TIMEOUT_MS);
   }
   window.onPacket && window.onPacket('GiftWrappingConfiguration', function() {
-    const sentAt = _pendingPings.shift();
-    if (sentAt === undefined) return;
-    _myRtt  = Date.now() - sentAt;
+    if (_pingSentAt === null) return;
+    clearTimeout(_pingTimeoutHandle);
+    _myRtt  = Date.now() - _pingSentAt;
+    _pingSentAt = null;
     _rttEma = _rttEma === null ? _myRtt : Math.round(_rttEma * 0.7 + _myRtt * 0.3);
     window.__ghk_rtt = _rttEma;
     _emitLatency(_rttEma);
@@ -140,7 +160,7 @@
       if (window._ws || window._worker) _executeMultiPackets(msg.str);
     } else if (msg.type === 'send_at' && msg.targetId === TAB_ID) {
       if (!window._ws && !window._worker) return;
-      setTimeout(() => _executeMultiPackets(msg.str), Math.max(0, msg.at - Date.now()));
+      _scheduleSendAt(msg.str, msg.at);
     }
   };
 
@@ -202,6 +222,36 @@
     const packets = _parseMultiPackets((str||'').trim());
     packets.forEach(p => { if (!p.unknown && p.id !== null && window.sendPacket) window.sendPacket(p.dir, p.id, p.payload || undefined); });
     return packets.some(p => !p.unknown && p.id !== null);
+  }
+
+  // Fires packets at a precise wall-clock time. Prefers resolving each packet to a raw
+  // buffer now and handing the actual timed send to the worker (see core/ws.js's "sendAt"
+  // hook) — a dedicated Worker's timers keep their precision even while this tab is
+  // backgrounded/unfocused, unlike a main-thread setTimeout, which Chrome throttles once a
+  // tab isn't active. Falls back to a plain main-thread setTimeout only when there's no
+  // worker to hand off to (direct-WebSocket builds).
+  function _scheduleSendAt(str, at) {
+    // Same priority window.sendPacket itself uses: a live direct WebSocket wins over any
+    // worker — window.Worker is hooked globally, so a worker that has nothing to do with
+    // the game socket (audio/decode/whatever) still "accepts" a sendAt message and silently
+    // swallows it, no __hookedWs to ever fire through. Only reach for a worker when there's
+    // no live window._ws to send through directly.
+    if (window._ws && window._ws.readyState === 1) {
+      setTimeout(() => _executeMultiPackets(str), Math.max(0, at - Date.now()));
+      return;
+    }
+    const ww = window._ws_worker || window._worker;
+    if (ww && window.__ghk_buildRawPacket) {
+      _parseMultiPackets((str||'').trim()).forEach(p => {
+        if (p.unknown || p.id === null) return;
+        const raw = window.__ghk_buildRawPacket(p.dir, p.id, p.payload || undefined);
+        if (!raw) return;
+        const c = raw.slice(0);
+        ww.postMessage({ __n: 'sendAt', buf: c, at }, [c]);
+      });
+      return;
+    }
+    setTimeout(() => _executeMultiPackets(str), Math.max(0, at - Date.now()));
   }
 
   let _renderPeers = () => {};
@@ -479,7 +529,7 @@
         if (!t.enabled || !vals[key]) return;
         const fireAt = T + step * offsetMs;
         step++;
-        if (t.id === 'self') setTimeout(() => _executeMultiPackets(vals[key]), Math.max(0, fireAt - Date.now()));
+        if (t.id === 'self') _scheduleSendAt(vals[key], fireAt);
         else BC.postMessage({ type: 'send_at', targetId: key, str: vals[key], at: fireAt });
       });
     });
