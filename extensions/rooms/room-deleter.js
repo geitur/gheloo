@@ -49,13 +49,9 @@
   // 1..32 x 1..32 grid in the room you're currently standing in, wrapping back to (1,1)
   // and continuing if there are more items than tiles, until inventory is empty.
   //
-  // KamerConstructieTool "height active, height 0" is sent once first — byte-exact
-  // confirmed against a live capture, and structurally identical to room-clone.js's own
-  // already-confirmed _sendConstructionTool(0, null) call (same 47-byte layout, same
-  // token stream, just heightActive=1/heightScaled=0/stateActive=0/stateVal=0 here).
-  // Without it, placing onto a tile that already has something on it stacks upward or
-  // gets rejected; with it, every placement forces height 0 so the grid can be filled
-  // solid regardless of what's already on each tile.
+  // ":bh 0" chat command is sent once first — without it, placing onto a tile that already
+  // has something on it stacks upward or gets rejected; with it, every placement forces
+  // height 0 so the grid can be filled solid regardless of what's already on each tile.
   //
   // PlaceObject wire format ({s:"<placementId> <x> <y> <facing>"}) confirmed working
   // already in room-clone.js's own placement loop — reused verbatim here.
@@ -208,7 +204,7 @@
     }
     const pid = _outId('PlaceObject');
     if (pid === null) return { ok: false, reason: 'PlaceObject not found in PKT.' };
-    const kctId = _outId('KamerConstructieTool');
+    const chatId = _outId('Chat');
     _pendingPlacements = new Map();
 
     const items = Object.values(window.Inventory.items || {}).filter(function(it) {
@@ -221,13 +217,12 @@
       return { ok: false, reason: 'No (LTD)/(Rare)/(SS)/(Club Cadeau)/(BC Shop) items found in your inventory.' };
     }
 
-    if (kctId !== null) {
-      window.sendPacket('OUT', kctId,
-        '{b:1}{i:0}' +
-        '{i:0}{b:0}' +
-        '{b:0}{b:0}{b:0}{b:0}{b:0}' +
-        '{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{b:0}{b:0}' +
-        '{b:false}{b:false}');
+    if (chatId !== null) {
+      // ":bh 0" chat command forces height 0, same effect KamerConstructieTool was used for
+      // before — replaced with this (2026-08-30) per a real capture, same reasoning: without
+      // it, placing onto a tile that already has something on it stacks upward or gets
+      // rejected.
+      window.sendPacket('OUT', chatId, '{s:":bh 0"}{i:0}');
     }
 
     const total = items.length + wallItems.length;

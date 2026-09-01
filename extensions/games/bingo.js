@@ -107,9 +107,10 @@
     let _bgHostTarget    = null; // parsed 1-6 number, or null when there's no live call
     let _bgSelectTarget  = null; // 'host' | 'own1' | 'own2' | null — which button is waiting for a click
     let _bgLastRollAt    = 0;    // Date.now() of the most recently scheduled roll send (reserved slot)
+    const _bgPendingTimeoutMs = 4000; // self-heal: a pending roll older than this is treated as lost
     const _bgOwn = [
-      { id: null, raw: null, pending: false }, // own dice 1
-      { id: null, raw: null, pending: false }, // own dice 2
+      { id: null, raw: null, pending: false, pendingAt: 0 }, // own dice 1
+      { id: null, raw: null, pending: false, pendingAt: 0 }, // own dice 2
     ];
 
     function _bgSetHostIdUI() {
@@ -194,6 +195,7 @@
       const slot = _bgOwn[idx];
       if (!slot.id) return;
       slot.pending = true;
+      slot.pendingAt = Date.now();
       const now = Date.now();
       const waitFor = Math.max(0, _bgLastRollAt + _bgRollGapMs - now);
       _bgLastRollAt = now + waitFor;
@@ -207,8 +209,14 @@
     // before settling) is what naturally paces this, since we only act on a settled value.
     // While the host dice itself shows '-1' (mid-roll, no target yet), we start rolling own
     // dice already instead of waiting idle for the host to settle — head start on the match.
+    // Backgrounded tabs throttle/delay setTimeout (sometimes for minutes), so a roll's
+    // sendPacket can fire very late, or its ObjectDataUpdate reply can get missed while the
+    // tab is hidden — either way `pending` gets stuck true and the chain stalls silently.
+    // A pending flag older than _bgPendingTimeoutMs is treated as lost and cleared so it
+    // self-heals instead of needing a manual roll to nudge it back to life.
     function _bgMaybeRoll(idx) {
       const slot = _bgOwn[idx];
+      if (slot.pending && Date.now() - slot.pendingAt > _bgPendingTimeoutMs) slot.pending = false;
       if (!_bgEnabled || !slot.id || slot.pending) return;
       if (slot.raw === '-1') return; // still mid-roll, wait for it to settle
       if (_bgHostTarget === null) {
@@ -254,12 +262,20 @@
 
     window.__ghk_bgOwnIds = () => _bgOwn.map(s => s.id).filter(Boolean);
 
+    // Watchdog, not just event-driven: a stuck `pending` only clears inside _bgMaybeRoll,
+    // which normally only runs off incoming packets. If nothing arrives while the tab is
+    // backgrounded there's no packet to trigger the self-heal check above, so this interval
+    // re-checks on a timer instead of waiting for one. Also re-syncs immediately on tab
+    // return, since that's the moment a throttled-out roll is most likely to be sitting stuck.
+    setInterval(_bgMaybeRollAll, 2000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) _bgMaybeRollAll(); });
+
     // Reset on room change, same pattern as Color Party.
     window.onPacket('RoomReady', () => {
       _bgEnabled = false;
       _bgHostId = null;
       _bgHostRaw = null; _bgHostTarget = null;
-      _bgOwn.forEach(slot => { slot.id = null; slot.raw = null; slot.pending = false; });
+      _bgOwn.forEach(slot => { slot.id = null; slot.raw = null; slot.pending = false; slot.pendingAt = 0; });
       _bgSelectTarget = null;
       _bgLastRollAt = 0;
       const ssBtn = bg.querySelector('#__bg_startstop');
