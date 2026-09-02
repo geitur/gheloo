@@ -12,6 +12,14 @@
    unique to this page (category-mark buttons, inline note editing, the credits table's
    column dividers) stays here. */
 .import-row{display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap}
+#pwd-stats-btn{margin-top:8px;font:700 12.5px inherit}
+.pwd-stats-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.pwd-stats-tbl th{text-align:left;padding:6px 10px;color:var(--muted);font-size:11px;border-bottom:1px solid var(--border)}
+.pwd-stats-tbl td{padding:6px 10px;border-bottom:1px solid color-mix(in oklch,var(--border) 50%,transparent);font-family:ui-monospace,monospace}
+.pwd-stats-tbl td:last-child,.pwd-stats-tbl th:last-child{text-align:right}
+.pwd-stats-wrap{max-height:60vh;overflow-y:auto}
+#catnote-text[readonly]{opacity:.6;cursor:not-allowed;background:var(--input)}
+.search-hit{background:color-mix(in oklch,var(--gold) 55%,transparent);color:#0a0b10;border-radius:3px;padding:0 1px}
 .import-status{font-size:12px;color:var(--muted)}
 
 thead th{border-right:1px solid var(--border)}
@@ -37,10 +45,12 @@ tbody td:last-child{border-right:none}
 .mark-btn[data-cat="groen"]:hover{border-color:var(--green)}
 .mark-btn[data-cat="rood"]:hover{border-color:var(--red)}
 .mark-btn[data-cat="paars"]:hover{border-color:var(--purple)}
+.mark-btn[data-cat="blauw"]:hover{border-color:var(--primary)}
 .mark-btn.on-goud{background:var(--gold);border-color:var(--gold)}
 .mark-btn.on-groen{background:var(--green);border-color:var(--green)}
 .mark-btn.on-rood{background:var(--red);border-color:var(--red)}
 .mark-btn.on-paars{background:var(--purple);border-color:var(--purple)}
+.mark-btn.on-blauw{background:var(--primary);border-color:var(--primary)}
 .mark-btn svg{width:12px;height:12px;pointer-events:none}
 
 .loading{color:var(--muted);font-size:13px;padding:48px;text-align:center}
@@ -65,9 +75,14 @@ tbody td:last-child{border-right:none}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         View Item Overview
       </a>
+      <button class="sb-action-link" id="pwd-stats-btn" type="button" style="width:100%;cursor:pointer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Wachtwoord Stats
+      </button>
     </div>
     <nav id="tabs">
       <button class="tab active" data-tab="all">Alle <span class="count" id="cnt-all">0</span></button>
+      <button class="tab" data-tab="blauw"><span class="dot" style="background:var(--primary)"></span>Blauw <span class="count" id="cnt-blauw">0</span></button>
       <button class="tab" data-tab="paars"><span class="dot" style="background:var(--purple)"></span>Paars <span class="count" id="cnt-paars">0</span></button>
       <button class="tab" data-tab="goud"><span class="dot" style="background:var(--gold)"></span>Goud <span class="count" id="cnt-goud">0</span></button>
       <button class="tab" data-tab="groen"><span class="dot" style="background:var(--green)"></span>Groen <span class="count" id="cnt-groen">0</span></button>
@@ -108,8 +123,12 @@ tbody td:last-child{border-right:none}
 
     <div class="card" id="catnote-card" style="display:none">
       <div class="card-body">
-        <textarea id="catnote-text" placeholder="Waarvoor dienen deze accounts?"></textarea>
+        <textarea id="catnote-text" placeholder="Waarvoor dienen deze accounts?" readonly></textarea>
         <div class="import-row">
+          <button class="btn btn-outline" id="catnote-edit-btn" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+            Bewerken
+          </button>
           <span class="import-status" id="catnote-status"></span>
         </div>
       </div>
@@ -123,13 +142,16 @@ tbody td:last-child{border-right:none}
             <th>Naam</th>
             <th>Wachtwoord</th>
             <th><span class="sort-th" data-sort="account">Credits<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
+            <th><span class="sort-th" data-sort="duckets">Duckets<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
+            <th><span class="sort-th" data-sort="diamonds">Diamonds<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th><span class="sort-th" data-sort="vrienden">BelCredits<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th><span class="sort-th" data-sort="rank">Rank<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
+            <th><span class="sort-th" data-sort="created_at">Toegevoegd<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
             <th><span class="sort-th" data-sort="note">Notitie<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="18 15 12 9 6 15"/></svg></span></th>
           </tr>
         </thead>
         <tbody id="tbl-body">
-          <tr class="empty-row"><td colspan="7">Laden…</td></tr>
+          <tr class="empty-row"><td colspan="10">Laden…</td></tr>
         </tbody>
       </table>
     </div>
@@ -147,6 +169,6 @@ tbody td:last-child{border-right:none}
   </div>
 </div>
 
-<script src="app.js?v=3"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>

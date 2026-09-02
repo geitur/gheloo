@@ -285,7 +285,7 @@
       const filter = _showAll ? '' : '&last_room_id=not.is.null';
       _all = await _fetchAllPages(
         'users', 'select=*&type=eq.1' + filter + '&order=last_seen.desc.nullslast',
-        function(n) { if (countEl) countEl.textContent = 'Loading… (' + n + ')'; }
+        function(n) { if (countEl) countEl.textContent = 'Loading… (' + n.toLocaleString('nl-BE') + ')'; }
       );
       _loaded = true;
       _applyFilters();
@@ -860,7 +860,7 @@
   function _renderList(users, q) {
     const countEl = panel.querySelector('#__udb_count');
     const listEl = panel.querySelector('#__udb_list');
-    countEl.textContent = users.length + ' user' + (users.length !== 1 ? 's' : '') + (_all.length !== users.length ? ' of ' + _all.length : '');
+    countEl.textContent = users.length.toLocaleString('nl-BE') + ' user' + (users.length !== 1 ? 's' : '') + (_all.length !== users.length ? ' of ' + _all.length.toLocaleString('nl-BE') : '');
 
     if (!users.length) {
       listEl.innerHTML = '<div class="__udb_empty_sm">' + (_all.length ? 'No matches.' : 'No users logged yet.') + '</div>';
@@ -1265,6 +1265,32 @@
       '.__udb_bh_row.__udb_bh_save_err input{border-color:#e74c3c!important;transition:border-color .15s}',
       '.__udb_bh_add{all:unset;display:block;cursor:pointer;text-align:center;font-size:11px;font-weight:700;color:#A6B0FF;padding:10px 14px;box-sizing:border-box}',
       '.__udb_bh_add:hover{background:rgba(255,255,255,.05)}',
+      '#__udb_scan_menu{position:fixed;z-index:1002;display:flex;flex-direction:column;background:#12131A;border:1px solid #23252f;border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.55);overflow:hidden;min-width:170px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}',
+      '#__udb_scan_menu button{all:unset;box-sizing:border-box;display:block;width:100%;padding:9px 12px;font-size:11px;font-weight:600;color:#eceefb;cursor:pointer}',
+      '#__udb_scan_menu button:hover{background:rgba(255,255,255,.06)}',
+      '#__udb_scan_menu button+button{border-top:1px solid #23252f}',
+      '#__udb_bc{position:fixed;top:8px;right:664px;width:280px;z-index:1001;user-select:none;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:12px}',
+      '#__udb_bc *{box-sizing:border-box}',
+      '#__udb_bc_form{padding:12px 14px;display:flex;flex-direction:column;gap:10px}',
+      '.__udb_bc_mode_row{display:flex;gap:14px;font-size:11px;color:#82849a}',
+      '.__udb_bc_radio{display:flex;align-items:center;gap:5px;cursor:pointer}',
+      '.__udb_bc_radio input{width:auto;accent-color:#6C7CFF;padding:0}',
+      '#__udb_bc_input{width:100%;min-height:110px;resize:vertical;background:#0A0B10;border:1px solid #23252f;border-radius:8px;color:#eceefb;padding:8px 9px;font-size:11px;font-family:monospace;outline:none}',
+      '#__udb_bc_input:focus{border-color:#6C7CFF}',
+      '.__udb_bc_file_row{display:flex;align-items:center;gap:8px}',
+      '.__udb_bc_file_status{font-size:10px;color:#5c5e6b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '#__udb_bc_form label,#__udb_bc_stats label{display:flex;flex-direction:column;gap:4px;font-size:10px;color:#82849a;font-weight:600}',
+      '#__udb_bc_form input,#__udb_bc_stats input{background:#0A0B10;border:1px solid #23252f;border-radius:8px;color:#eceefb;padding:7px 9px;font-size:12px;outline:none;box-sizing:border-box}',
+      '#__udb_bc_stats{padding:12px 14px;display:none;flex-direction:column;gap:8px;font-size:11px}',
+      '#__udb_bc_progress_line{font-weight:700;color:#eceefb}',
+      '#__udb_bc_status_line{color:#A6B0FF;font-family:monospace;font-size:10px}',
+      '.__udb_bc_results_hdr{font-size:9px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:#5c5e6b;margin-top:4px}',
+      '#__udb_bc_results_list{max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}',
+      '.__udb_bc_row{display:flex;align-items:center;justify-content:space-between;gap:8px;background:#1c1e2a;border:1px solid #23252f;border-radius:8px;padding:7px 9px}',
+      '.__udb_bc_row_info{display:flex;flex-direction:column;gap:2px;min-width:0}',
+      '.__udb_bc_row_id{font-size:11px;font-weight:700;color:#eceefb}',
+      '.__udb_bc_row_name{font-size:10px;color:#82849a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.__udb_bc_open_btn{flex-shrink:0;margin-top:0!important}',
     ].join('');
     document.head.appendChild(style);
   }
@@ -1322,8 +1348,9 @@
       window.__udb_ensureLoaded();
       _renderNameChanges();
     });
-    panel.querySelector('#__udb_scan_btn').addEventListener('click', function() {
-      _scanTogglePanel();
+    panel.querySelector('#__udb_scan_btn').addEventListener('click', function(e) {
+      e.stopPropagation();
+      _scanMenuToggle();
     });
     panel.querySelector('#__udb_loadall_btn').addEventListener('click', function() {
       if (_loading) return;
@@ -1518,6 +1545,7 @@
   // account/tab shows up here too, without stomping a row mid-edit.
   let bhPanel = null;
   let _bhPollTimer = null;
+  let bcPanel = null;
 
   function _renderBlackholeRow(bh) {
     const row = document.createElement('div');
@@ -1667,6 +1695,402 @@
     _bhPollTimer = setInterval(_loadBlackholesListUI, 3000);
   }
 
+  // ── Ban Checker ──────────────────────────────────────────────────────────────────
+  // Separate from the id-discovery scanner above: given an explicit, fixed list of ids
+  // (typed in or pasted, e.g. straight from a userlogger export), probes each one via
+  // GetExtendedProfile and decides hit/miss per id instead of walking a range. A miss
+  // gets retried (same id re-sent) up to 5 attempts total before being written off as
+  // banned/deleted — a reply on attempt 2 or 3 counts as a normal hit, only silence
+  // across all 5 lands it in the results list.
+  const BC_DELAY_KEY = 'gheloo_udb_bc_delay_ms';
+  const BC_ATTEMPTS_KEY = 'gheloo_udb_bc_attempts';
+  let _bcDelayMs = parseInt(localStorage.getItem(BC_DELAY_KEY), 10) || 300;
+  if (_bcDelayMs < SCAN_INTERVAL_MIN_MS) _bcDelayMs = SCAN_INTERVAL_MIN_MS;
+  let _bcMaxAttempts = parseInt(localStorage.getItem(BC_ATTEMPTS_KEY), 10) || 5;
+  if (_bcMaxAttempts < 1) _bcMaxAttempts = 1;
+
+  let _bcQueue      = [];   // [{id, name|null}]
+  let _bcIdx        = 0;
+  let _bcActive     = false;
+  let _bcResults    = [];   // entries from _bcQueue that never replied within BC_MAX_ATTEMPTS
+  let _bcWaitingId  = null; // id the current attempt's wait is listening for
+  let _bcGotReply   = false;
+  // ids currently re-probed via a result row's "Open profile" button — a reply for one
+  // of these means the original 5-miss verdict was just lag, not an actual ban, so that
+  // row gets pulled back out of the results list instead of staying flagged forever.
+  const _bcRecheckWaiting = new Set();
+  let _bcSkippedNames = []; // 'names' mode: pasted names never found on userlogger at all
+
+  function _setBcDelayMs(ms) {
+    ms = parseInt(ms, 10);
+    if (!ms || ms < SCAN_INTERVAL_MIN_MS) ms = SCAN_INTERVAL_MIN_MS;
+    _bcDelayMs = ms;
+    localStorage.setItem(BC_DELAY_KEY, String(ms));
+  }
+
+  function _setBcMaxAttempts(n) {
+    n = parseInt(n, 10);
+    if (!n || n < 1) n = 1;
+    _bcMaxAttempts = n;
+    localStorage.setItem(BC_ATTEMPTS_KEY, String(n));
+    const hdr = bcPanel && bcPanel.querySelector('#__udb_bc_results_hdr');
+    if (hdr) hdr.textContent = 'Niet gevonden (' + _bcMaxAttempts + '/' + _bcMaxAttempts + ' gemist)';
+  }
+
+  // Own listener, independent of the id-discovery scanner's — window.onPacket supports
+  // any number of listeners per packet name (see core/ws.js), so this doesn't disturb
+  // the existing ExtendedProfile handling above or in core/supabase.js.
+  window.onPacket('ExtendedProfile', function(p) {
+    if (!p.parsed) return;
+    if (_bcWaitingId != null && p.parsed.id === _bcWaitingId) _bcGotReply = true;
+    if (_bcRecheckWaiting.has(p.parsed.id)) {
+      _bcRecheckWaiting.delete(p.parsed.id);
+      const idx = _bcResults.findIndex(function(r) { return r.id === p.parsed.id; });
+      if (idx !== -1) {
+        _bcResults.splice(idx, 1);
+        _bcRenderResults();
+        _bcRenderProgress();
+      }
+    }
+  });
+
+  // 'ids' mode: accepts bare ids (one per line) or "name<TAB>id" / "id<TAB>name" pairs —
+  // exactly the shape of a userdb TSV export. Whichever token on the line is purely
+  // digits is taken as the id; whatever's left (if anything) becomes the display name.
+  // A line with no numeric token (e.g. a "username\tid" header row) is silently dropped.
+  // 'names' mode: every line is a plain username (first tab-separated column if there
+  // happen to be more, e.g. pasting a full accounts-site export) — no id yet, that gets
+  // resolved against userlogger by _bcResolveNames before the check actually starts.
+  // The two modes exist because a habbo name can itself be all-digits (seen live in a
+  // real accounts export, e.g. "124120559191220") — indistinguishable from a real id by
+  // pattern alone, so guessing silently probed that number as if it were one and always
+  // missed. Letting the user say which the list actually is avoids that misread.
+  function _bcParseInput(text, mode) {
+    const out = [];
+    (text || '').split(/\r?\n/).forEach(function(line) {
+      line = line.trim();
+      if (!line) return;
+      if (mode === 'names') {
+        const name = line.split(/\t/)[0].trim();
+        if (name) out.push({ id: null, name: name });
+        return;
+      }
+      const tokens = line.split(/\t+|\s{2,}|,/).map(function(t) { return t.trim(); }).filter(Boolean);
+      const parts = tokens.length > 1 ? tokens : line.split(/\s+/);
+      let id = null;
+      const nameParts = [];
+      parts.forEach(function(t) {
+        if (id === null && /^\d+$/.test(t)) id = parseInt(t, 10);
+        else if (t) nameParts.push(t);
+      });
+      if (id !== null) out.push({ id: id, name: nameParts.join(' ') || null });
+    });
+    return out;
+  }
+
+  // Resolves every id-less {name} entry against userlogger's own users table (same
+  // SUPABASE_URL/HEADERS this file already talks to for everything else) — batched, with
+  // a short pause between batches so a long pasted list doesn't fire dozens of requests
+  // back to back. Returns the ones that matched (with their real id filled in) separately
+  // from the ones that don't exist there at all, so those can be reported instead of
+  // silently probed with no id and instantly "found" as banned.
+  const BC_RESOLVE_BATCH = 40;
+  const BC_RESOLVE_GAP_MS = 200;
+  async function _bcResolveNames(entries) {
+    const already = entries.filter(function(e) { return e.id != null; });
+    const toResolve = entries.filter(function(e) { return e.id == null && e.name; });
+    if (!toResolve.length) return { resolved: already, unresolved: [] };
+
+    const foundId = new Map();
+    for (let i = 0; i < toResolve.length; i += BC_RESOLVE_BATCH) {
+      const batch = toResolve.slice(i, i + BC_RESOLVE_BATCH);
+      _bcSetStatus('Ids opzoeken op userlogger… (' + Math.min(i + BC_RESOLVE_BATCH, toResolve.length) + '/' + toResolve.length + ')');
+      const filt = 'in.(' + batch.map(function(e) { return '"' + e.name.replace(/"/g, '""') + '"'; }).join(',') + ')';
+      try {
+        const res = await fetch(SUPABASE_URL + '/rest/v1/users?select=id,name&name=' + encodeURIComponent(filt), { headers: HEADERS });
+        if (res.ok) {
+          const rows = await res.json();
+          rows.forEach(function(r) { foundId.set(r.name, r.id); });
+        } else {
+          _log('ban-check name resolve failed: HTTP ' + res.status);
+        }
+      } catch (e) { _log('ban-check name resolve failed: ' + e.message); }
+      if (i + BC_RESOLVE_BATCH < toResolve.length) await _bcSleep(BC_RESOLVE_GAP_MS);
+    }
+
+    const resolved = already.slice();
+    const unresolved = [];
+    toResolve.forEach(function(e) {
+      const id = foundId.get(e.name);
+      if (id != null) resolved.push({ id: id, name: e.name });
+      else unresolved.push(e);
+    });
+    return { resolved: resolved, unresolved: unresolved };
+  }
+
+  function _bcSleep(ms) { return new Promise(function(res) { setTimeout(res, ms); }); }
+
+  // One id, up to BC_MAX_ATTEMPTS probes. Resolves true on any reply (first attempt or
+  // a retry), false only after every attempt went unanswered. Bails out (treated as an
+  // an inconclusive "true"/skip, never recorded as banned) if the ban check was paused
+  // mid-wait, or if the packet isn't available at all.
+  async function _bcCheckOne(id) {
+    const pid = _outId('GetExtendedProfile');
+    if (pid === null) {
+      _log('GetExtendedProfile not found in PKT — is the game connected?');
+      _bcActive = false;
+      return true;
+    }
+    for (let attempt = 1; attempt <= _bcMaxAttempts; attempt++) {
+      if (!_bcActive) return true;
+      _bcWaitingId = id;
+      _bcGotReply = false;
+      window.sendPacket('OUT', pid, '{i:' + id + '}{b:false}');
+      _bcSetStatus('Checken id ' + id + ' — poging ' + attempt + '/' + _bcMaxAttempts + '…');
+      await _bcSleep(_bcDelayMs);
+      if (_bcGotReply) { _bcWaitingId = null; return true; }
+    }
+    _bcWaitingId = null;
+    return false;
+  }
+
+  async function _bcRun() {
+    while (_bcActive && _bcIdx < _bcQueue.length) {
+      const item = _bcQueue[_bcIdx];
+      const ok = await _bcCheckOne(item.id);
+      if (!_bcActive) break; // paused mid-check — don't count this one either way
+      if (!ok) { _bcResults.push(item); _bcRenderResults(); }
+      _bcIdx++;
+      _bcRenderProgress();
+    }
+    if (_bcActive && _bcIdx >= _bcQueue.length) {
+      _bcActive = false;
+      _bcUpdateButtons();
+      _bcSetStatus('Klaar — ' + _bcQueue.length + ' id(s) gecheckt, ' + _bcResults.length + ' niet gevonden.');
+    }
+  }
+
+  function _bcSetStatus(text) {
+    const el = bcPanel && bcPanel.querySelector('#__udb_bc_status_line');
+    if (el) el.textContent = text || '';
+  }
+
+  function _bcRenderProgress() {
+    const el = bcPanel && bcPanel.querySelector('#__udb_bc_progress_line');
+    if (!el) return;
+    let text = _bcIdx + ' / ' + _bcQueue.length + ' gecheckt — ' + _bcResults.length + ' niet gevonden';
+    if (_bcSkippedNames.length) text += ' — ' + _bcSkippedNames.length + ' naam/namen niet op userlogger (overgeslagen)';
+    el.textContent = text;
+  }
+
+  function _bcRenderResults() {
+    const listEl = bcPanel && bcPanel.querySelector('#__udb_bc_results_list');
+    if (!listEl) return;
+    if (!_bcResults.length) { listEl.innerHTML = '<div class="__udb_empty_sm">Nog niets gevonden.</div>'; return; }
+    listEl.innerHTML = _bcResults.slice().reverse().map(function(r) {
+      return '<div class="__udb_bc_row">'
+        + '<div class="__udb_bc_row_info">'
+        + '<span class="__udb_bc_row_id">#' + r.id + '</span>'
+        + (r.name ? '<span class="__udb_bc_row_name">' + _esc(r.name) + '</span>' : '')
+        + '</div>'
+        + '<button class="__udb_ac_btn __udb_bc_open_btn" data-id="' + r.id + '" title="Stuur GetExtendedProfile met b:true — opent het profiel in-game">' + _ICON_PERSON + ' Open profile</button>'
+        + '</div>';
+    }).join('');
+  }
+
+  function _bcUpdateButtons() {
+    if (!bcPanel) return;
+    bcPanel.querySelector('#__udb_bc_pause_btn').textContent = _bcActive ? 'Pauzeer' : 'Hervat';
+  }
+
+  function _bcStart(queue) {
+    if (queue) { _bcQueue = queue; _bcIdx = 0; _bcResults = []; }
+    if (!_bcQueue.length) return;
+    _bcActive = true;
+    _bcUpdateButtons();
+    _bcRun();
+  }
+
+  function _bcPause() {
+    _bcActive = false;
+    _bcWaitingId = null;
+    _bcUpdateButtons();
+    _bcSetStatus('Gepauzeerd — ' + _bcIdx + '/' + _bcQueue.length + ' gecheckt.');
+  }
+
+  function _bcCancel() {
+    _bcActive = false;
+    _bcWaitingId = null;
+    _bcQueue = [];
+    _bcIdx = 0;
+    _bcResults = [];
+    _bcSkippedNames = [];
+    if (!bcPanel) return;
+    bcPanel.querySelector('#__udb_bc_form').style.display = 'flex';
+    bcPanel.querySelector('#__udb_bc_stats').style.display = 'none';
+  }
+
+  function buildBanCheckPanel() {
+    bcPanel = document.createElement('div');
+    bcPanel.id = '__udb_bc';
+    bcPanel.innerHTML =
+      '<div class="__udb_card">'
+      + '<div class="__udb_hdr" id="__udb_bc_hdr">'
+      + '<span class="__udb_eyebrow">Gheloo</span>'
+      + '<span class="__udb_title">Ban Checker</span>'
+      + '<span class="__udb_close" id="__udb_bc_close">&times;</span>'
+      + '</div>'
+      + '<div id="__udb_bc_form">'
+      + '<div class="__udb_bc_mode_row">'
+      + '<label class="__udb_bc_radio"><input type="radio" name="__udb_bc_mode" value="ids" checked> Ids</label>'
+      + '<label class="__udb_bc_radio"><input type="radio" name="__udb_bc_mode" value="names"> Namen <span style="opacity:.6">(opzoeken via userlogger)</span></label>'
+      + '</div>'
+      + '<textarea id="__udb_bc_input" placeholder="Bij \'Ids\': ids, of een lijst als &#10;naam[TAB]id&#10;per regel.&#10;Bij \'Namen\': gewoon een lijst usernames, één per regel."></textarea>'
+      + '<div class="__udb_bc_file_row">'
+      + '<input type="file" id="__udb_bc_file" accept=".txt,.tsv,.csv" style="display:none">'
+      + '<button class="__udb_range_known" id="__udb_bc_file_btn" type="button">Upload .txt</button>'
+      + '<span class="__udb_bc_file_status" id="__udb_bc_file_status"></span>'
+      + '</div>'
+      + '<label>Delay tussen pogingen (ms)<input type="number" id="__udb_bc_delay" min="' + SCAN_INTERVAL_MIN_MS + '" value="' + _bcDelayMs + '"></label>'
+      + '<label>Aantal pogingen voor "niet gevonden"<input type="number" id="__udb_bc_attempts" min="1" value="' + _bcMaxAttempts + '"></label>'
+      + '<button class="__udb_range_start" id="__udb_bc_start_btn">Start</button>'
+      + '</div>'
+      + '<div id="__udb_bc_stats">'
+      + '<div id="__udb_bc_progress_line"></div>'
+      + '<div id="__udb_bc_status_line"></div>'
+      + '<label>Delay tussen pogingen (ms)<input type="number" id="__udb_bc_delay_live" min="' + SCAN_INTERVAL_MIN_MS + '"></label>'
+      + '<label>Aantal pogingen voor "niet gevonden"<input type="number" id="__udb_bc_attempts_live" min="1"></label>'
+      + '<div class="__udb_range_actions">'
+      + '<button class="__udb_range_pause" id="__udb_bc_pause_btn">Pauzeer</button>'
+      + '<button class="__udb_range_cancel" id="__udb_bc_cancel_btn">Afbreken</button>'
+      + '</div>'
+      + '<div class="__udb_bc_results_hdr" id="__udb_bc_results_hdr">Niet gevonden (' + _bcMaxAttempts + '/' + _bcMaxAttempts + ' gemist)</div>'
+      + '<div id="__udb_bc_results_list"></div>'
+      + '</div>'
+      + '</div>';
+    document.body.appendChild(bcPanel);
+    bcPanel.style.display = 'none';
+    bcPanel.querySelector('#__udb_bc_stats').style.display = 'none';
+
+    window.__ghk_makeDraggable(bcPanel, bcPanel.querySelector('#__udb_bc_hdr'), '__ghk_udb_bc_pos', function(e) {
+      return e.target.id === '__udb_bc_close';
+    });
+    bcPanel.querySelector('#__udb_bc_close').addEventListener('click', function() { bcPanel.style.display = 'none'; });
+
+    bcPanel.querySelector('#__udb_bc_file_btn').addEventListener('click', function() {
+      bcPanel.querySelector('#__udb_bc_file').click();
+    });
+    bcPanel.querySelector('#__udb_bc_file').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const statusEl = bcPanel.querySelector('#__udb_bc_file_status');
+      file.text().then(function(text) {
+        const ta = bcPanel.querySelector('#__udb_bc_input');
+        ta.value = ta.value.trim() ? ta.value.trim() + '\n' + text : text;
+        if (statusEl) statusEl.textContent = file.name + ' toegevoegd.';
+      });
+      e.target.value = '';
+    });
+
+    bcPanel.querySelector('#__udb_bc_start_btn').addEventListener('click', async function() {
+      const delay = parseInt(bcPanel.querySelector('#__udb_bc_delay').value, 10);
+      if (delay) _setBcDelayMs(delay);
+      const attempts = parseInt(bcPanel.querySelector('#__udb_bc_attempts').value, 10);
+      if (attempts) _setBcMaxAttempts(attempts);
+      const mode = (bcPanel.querySelector('input[name="__udb_bc_mode"]:checked') || {}).value || 'ids';
+      let queue = _bcParseInput(bcPanel.querySelector('#__udb_bc_input').value, mode);
+      if (!queue.length) { window.alert('Geen geldige regels gevonden in de lijst.'); return; }
+
+      bcPanel.querySelector('#__udb_bc_form').style.display = 'none';
+      bcPanel.querySelector('#__udb_bc_stats').style.display = 'flex';
+      bcPanel.querySelector('#__udb_bc_delay_live').value = _bcDelayMs;
+      bcPanel.querySelector('#__udb_bc_attempts_live').value = _bcMaxAttempts;
+      _bcRenderResults();
+      _bcRenderProgress();
+
+      _bcSkippedNames = [];
+      if (mode === 'names') {
+        const { resolved, unresolved } = await _bcResolveNames(queue);
+        queue = resolved;
+        _bcSkippedNames = unresolved;
+        _bcRenderProgress();
+        if (!queue.length) {
+          bcPanel.querySelector('#__udb_bc_form').style.display = 'flex';
+          bcPanel.querySelector('#__udb_bc_stats').style.display = 'none';
+          window.alert('Geen van deze namen gevonden op userlogger.');
+          return;
+        }
+      }
+      _bcStart(queue);
+    });
+    bcPanel.querySelector('#__udb_bc_delay_live').addEventListener('change', function(e) {
+      const ms = parseInt(e.target.value, 10);
+      if (ms) _setBcDelayMs(ms);
+    });
+    bcPanel.querySelector('#__udb_bc_attempts_live').addEventListener('change', function(e) {
+      const n = parseInt(e.target.value, 10);
+      if (n) _setBcMaxAttempts(n);
+    });
+    bcPanel.querySelector('#__udb_bc_pause_btn').addEventListener('click', function() {
+      if (_bcActive) { _bcPause(); return; }
+      _bcStart(null);
+    });
+    bcPanel.querySelector('#__udb_bc_cancel_btn').addEventListener('click', function() { _bcCancel(); });
+    bcPanel.querySelector('#__udb_bc_results_list').addEventListener('click', function(e) {
+      const btn = e.target.closest('.__udb_bc_open_btn');
+      if (!btn) return;
+      const id = parseInt(btn.dataset.id, 10);
+      // If this re-probe actually gets a reply, that means the original 5-miss verdict
+      // was just lag — pull the row back out (see the ExtendedProfile listener above).
+      _bcRecheckWaiting.add(id);
+      setTimeout(function() { _bcRecheckWaiting.delete(id); }, 5000);
+      _profileCheck(id);
+    });
+  }
+
+  function _banCheckTogglePanel() {
+    if (!bcPanel) return;
+    if (bcPanel.style.display !== 'none') { bcPanel.style.display = 'none'; return; }
+    bcPanel.style.display = 'flex';
+  }
+
+  // ── Scan mode chooser — the scan button opens this tiny menu instead of jumping
+  // straight into the id-discovery scanner, since there are now two different scanners
+  // behind it.
+  let scanMenu = null;
+  function _buildScanMenu() {
+    scanMenu = document.createElement('div');
+    scanMenu.id = '__udb_scan_menu';
+    scanMenu.innerHTML =
+      '<button id="__udb_scan_menu_default">Standaard scanner</button>'
+      + '<button id="__udb_scan_menu_bc">Ban checker</button>';
+    document.body.appendChild(scanMenu);
+    scanMenu.style.display = 'none';
+    scanMenu.querySelector('#__udb_scan_menu_default').addEventListener('click', function() {
+      scanMenu.style.display = 'none';
+      _scanTogglePanel();
+    });
+    scanMenu.querySelector('#__udb_scan_menu_bc').addEventListener('click', function() {
+      scanMenu.style.display = 'none';
+      _banCheckTogglePanel();
+    });
+    document.addEventListener('mousedown', function(e) {
+      if (scanMenu.style.display === 'none') return;
+      if (e.target === scanMenu || scanMenu.contains(e.target)) return;
+      if (e.target.id === '__udb_scan_btn') return;
+      scanMenu.style.display = 'none';
+    });
+  }
+  function _scanMenuToggle() {
+    if (!scanMenu) _buildScanMenu();
+    if (scanMenu.style.display !== 'none') { scanMenu.style.display = 'none'; return; }
+    const btn = panel.querySelector('#__udb_scan_btn');
+    const rect = btn.getBoundingClientRect();
+    scanMenu.style.top = (rect.bottom + 4) + 'px';
+    scanMenu.style.left = Math.max(8, rect.right - 170) + 'px';
+    scanMenu.style.display = 'flex';
+  }
+
   // Discards the in-progress position instead of just pausing it — next time this mode
   // is picked it starts fresh ('start' goes back to id 1, 'custom' simply forgets the
   // range, 'known' rebuilds its queue).
@@ -1724,6 +2148,7 @@
     buildAvatarCheckPanel();
     buildScanRangePanel();
     buildBlackholesPanel();
+    buildBanCheckPanel();
   }
 
   if (document.readyState === 'loading') {

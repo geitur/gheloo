@@ -11,11 +11,14 @@
     'Content-Type': 'application/json',
   };
 
-  const LINE_RE = /^(?<user>[^:]+):(?<pass>[^|]+?)\s*\|\s*Credits:\s*(?<account>\d+)\s*\|\s*BelCredits:\s*(?<vrienden>\d+)\s*\|\s*Rank:\s*(?<rank>\d+)/i;
+  const LINE_RE = /^(?<user>[^:]+):(?<pass>[^|]+?)\s*\|\s*Credits:\s*(?<account>\d+)\s*\|\s*BelCredits:\s*(?<vrienden>\d+)\s*\|\s*Rank:\s*(?<rank>\d+)(?:\s*\|\s*Diamonds:\s*(?<diamonds>\d+))?(?:\s*\|\s*Duckets:\s*(?<duckets>\d+))?/i;
 
   let _all = new Map();   // username -> row
   let _catNotes = new Map(); // category key -> note text
-  let _tab = 'all';
+  // Empty set = "Alle" (everything). Otherwise a union of every checked category —
+  // clicking a color tab toggles it on/off without clearing the others, "Alle" always
+  // resets back to the empty (show-everything) state.
+  let _selectedCats = new Set();
   let _query = '';
   let _sortKey = null;    // 'account' | 'vrienden' | 'rank' | null (default: username asc)
   let _sortDir = 'asc';
@@ -92,7 +95,7 @@
       _all = new Map(rows.map((r) => [r.username, r]));
       render();
     } catch (e) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Fout bij laden: ' + esc(e.message) + '</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="10">Fout bij laden: ' + esc(e.message) + '</td></tr>';
     }
     try {
       const notes = await sbGet('/category_notes?select=*');
@@ -143,14 +146,25 @@
     }
   }
 
-  function showTopCard(tab) {
-    const isAll = tab === 'all';
+  // Import card only makes sense on "Alle"; the category note only makes sense when
+  // exactly one category is checked (a note is per-category, not per-combination).
+  function showTopCard() {
+    const isAll = _selectedCats.size === 0;
+    const singleCat = _selectedCats.size === 1 ? Array.from(_selectedCats)[0] : null;
     document.getElementById('import-card').style.display = isAll ? '' : 'none';
-    document.getElementById('catnote-card').style.display = isAll ? 'none' : '';
-    if (!isAll) {
-      document.getElementById('catnote-text').value = _catNotes.get(tab) || '';
+    document.getElementById('catnote-card').style.display = singleCat ? '' : 'none';
+    if (singleCat) {
+      document.getElementById('catnote-text').value = _catNotes.get(singleCat) || '';
+      document.getElementById('catnote-text').readOnly = true;
       document.getElementById('catnote-status').textContent = '';
     }
+  }
+
+  function updateActiveTabs() {
+    document.querySelectorAll('.tab').forEach((t) => {
+      const key = t.dataset.tab;
+      t.classList.toggle('active', key === 'all' ? _selectedCats.size === 0 : _selectedCats.has(key));
+    });
   }
 
   // ── Import ───────────────────────────────────────────────────────────────────
@@ -166,12 +180,19 @@
       const m = LINE_RE.exec(line);
       if (!m) return;
       const username = m.groups.user.trim();
+      // diamonds/duckets are a newer addition to the import format — an older-format
+      // paste won't have them. The key still has to be present on every row regardless
+      // (PostgREST rejects a bulk upsert where some rows have a column and others don't),
+      // so fall back to whatever's already stored for this account instead of blanking it.
+      const existing = _all.get(username);
       byUsername.set(username, {
         username: username,
         password: m.groups.pass.trim(),
         account: parseInt(m.groups.account, 10),
         vrienden: parseInt(m.groups.vrienden, 10),
         rank: parseInt(m.groups.rank, 10),
+        diamonds: m.groups.diamonds != null ? parseInt(m.groups.diamonds, 10) : (existing ? existing.diamonds : null),
+        duckets: m.groups.duckets != null ? parseInt(m.groups.duckets, 10) : (existing ? existing.duckets : null),
       });
     });
     return Array.from(byUsername.values());
@@ -267,6 +288,7 @@
 
   // ── Render ───────────────────────────────────────────────────────────────────
   const MARKS = [
+    { key: 'blauw', title: 'Blauw' },
     { key: 'paars', title: 'Paars' },
     { key: 'goud', title: 'Goud' },
     { key: 'groen', title: 'Groen' },
@@ -282,8 +304,15 @@
     }).join('') + '</span>';
   }
 
-  function copyText(text) {
-    return '<button class="copy-txt" data-action="copy" data-copy="' + esc(text) + '" title="Klik om te kopiëren">' + esc(text) + '</button>';
+  function highlightMatch(text, query) {
+    text = text || '';
+    if (!query) return esc(text);
+    const idx = text.toLowerCase().indexOf(query.toLowerCase());
+    if (idx === -1) return esc(text);
+    return esc(text.slice(0, idx)) + '<mark class="search-hit">' + esc(text.slice(idx, idx + query.length)) + '</mark>' + esc(text.slice(idx + query.length));
+  }
+  function copyText(text, query) {
+    return '<button class="copy-txt" data-action="copy" data-copy="' + esc(text) + '" title="Klik om te kopiëren">' + highlightMatch(text, query) + '</button>';
   }
 
   // Same filter+sort logic render() uses for the table — pulled out so Export can dump
@@ -291,26 +320,31 @@
   function getFilteredSorted() {
     const rows = Array.from(_all.values());
     let filtered = rows.filter((r) => {
-      if (_tab === 'goud' || _tab === 'groen' || _tab === 'rood' || _tab === 'paars') return r.category === _tab;
-      if (_tab === 'none') return !r.category;
-      return true;
+      if (_selectedCats.size === 0) return true;
+      return _selectedCats.has(r.category || 'none');
     });
     if (_query) {
       const q = _query.toLowerCase();
-      filtered = filtered.filter((r) => r.username.toLowerCase().includes(q));
+      filtered = filtered.filter((r) => r.username.toLowerCase().includes(q) || (r.password || '').toLowerCase().includes(q));
     }
 
     if (_query) {
-      // Searching: closest match first (exact, then starts-with, then contains),
+      // Searching: closest match first (exact, then starts-with, then contains — checked
+      // across both username and password, whichever field matches best for that row),
       // column sort takes a back seat while a query is active.
       const q = _query.toLowerCase();
-      const score = (r) => {
-        const name = r.username.toLowerCase();
-        if (name === q) return 0;
-        if (name.indexOf(q) === 0) return 1;
-        return 2;
+      const fieldScore = (val) => {
+        const v = (val || '').toLowerCase();
+        if (v === q) return 0;
+        if (v.indexOf(q) === 0) return 1;
+        if (v.indexOf(q) !== -1) return 2;
+        return 3;
       };
+      const score = (r) => Math.min(fieldScore(r.username), fieldScore(r.password));
       filtered.sort((a, b) => score(a) - score(b) || a.username.localeCompare(b.username));
+    } else if (_sortKey === 'created_at') {
+      const dir = _sortDir === 'desc' ? -1 : 1;
+      filtered.sort((a, b) => ((new Date(a.created_at || 0) - new Date(b.created_at || 0)) * dir) || a.username.localeCompare(b.username));
     } else if (_sortKey === 'note') {
       // Text field, not numeric — "up" means accounts WITH a note first, same up/down
       // convention as the numeric columns, just keyed on presence instead of magnitude.
@@ -338,10 +372,32 @@
     { key: 'username', label: 'Naam' },
     { key: 'password', label: 'Wachtwoord' },
     { key: 'account', label: 'Credits' },
+    { key: 'duckets', label: 'Duckets' },
+    { key: 'diamonds', label: 'Diamonds' },
     { key: 'vrienden', label: 'BelCredits' },
     { key: 'rank', label: 'Rank' },
     { key: 'note', label: 'Notitie' },
   ];
+
+  // ── Password stats ──────────────────────────────────────────────────────────
+  function openPasswordStatsModal() {
+    const rows = Array.from(_all.values()).filter((r) => r.password);
+    const counts = new Map();
+    rows.forEach((r) => counts.set(r.password, (counts.get(r.password) || 0) + 1));
+    const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const reused = sorted.filter((e) => e[1] > 1);
+
+    const summary = '<div class="desc" style="margin-bottom:12px">'
+      + rows.length.toLocaleString('nl-BE') + ' accounts met wachtwoord, '
+      + sorted.length.toLocaleString('nl-BE') + ' unieke wachtwoorden, '
+      + reused.length.toLocaleString('nl-BE') + ' hergebruikt (op meer dan 1 account).</div>';
+
+    const tbl = '<div class="pwd-stats-wrap"><table class="pwd-stats-tbl"><thead><tr><th>Wachtwoord</th><th>Aantal accounts</th></tr></thead><tbody>'
+      + sorted.map((e) => '<tr><td>' + esc(e[0]) + '</td><td>' + e[1] + '</td></tr>').join('')
+      + '</tbody></table></div>';
+
+    openModal('Wachtwoord Stats', summary + tbl);
+  }
 
   function openExportModal() {
     openModal(
@@ -392,7 +448,8 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'gheloo-accounts-' + _tab + '-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.txt';
+    const tabLabel = _selectedCats.size === 0 ? 'all' : Array.from(_selectedCats).join('-');
+    a.download = 'gheloo-accounts-' + tabLabel + '-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.txt';
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -401,17 +458,21 @@
 
   function render() {
     const rows = Array.from(_all.values());
-    const counts = { all: rows.length, goud: 0, groen: 0, rood: 0, paars: 0, none: 0 };
+    const counts = { all: rows.length, goud: 0, groen: 0, rood: 0, paars: 0, blauw: 0, none: 0 };
     rows.forEach((r) => {
       if (r.category === 'goud') counts.goud++;
       else if (r.category === 'groen') counts.groen++;
       else if (r.category === 'rood') counts.rood++;
       else if (r.category === 'paars') counts.paars++;
+      else if (r.category === 'blauw') counts.blauw++;
       else counts.none++;
     });
-    ['all', 'goud', 'groen', 'rood', 'paars', 'none'].forEach((k) => {
-      document.getElementById('cnt-' + k).textContent = counts[k];
+    ['all', 'goud', 'groen', 'rood', 'paars', 'blauw', 'none'].forEach((k) => {
+      document.getElementById('cnt-' + k).textContent = counts[k].toLocaleString('nl-BE');
     });
+
+    updateActiveTabs();
+    showTopCard();
 
     const filtered = getFilteredSorted();
 
@@ -420,8 +481,10 @@
       el.classList.toggle('sort-desc', _sortKey === el.dataset.sort && _sortDir === 'desc');
     });
 
-    const titles = { all: 'Alle accounts', goud: 'Goud', groen: 'Groen', rood: 'Rood', paars: 'Paars', none: 'Ongesorteerd' };
-    document.getElementById('page-title').textContent = titles[_tab];
+    const titles = { goud: 'Goud', groen: 'Groen', rood: 'Rood', paars: 'Paars', blauw: 'Blauw', none: 'Ongesorteerd' };
+    document.getElementById('page-title').textContent = _selectedCats.size === 0
+      ? 'Alle accounts'
+      : Array.from(_selectedCats).map((k) => titles[k]).join(' + ');
 
     const totalPages = Math.max(1, Math.ceil(filtered.length / _pageSize));
     if (_page >= totalPages) _page = totalPages - 1;
@@ -433,17 +496,20 @@
 
     const tbody = document.getElementById('tbl-body');
     if (!filtered.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">' + (rows.length ? 'Geen resultaten.' : 'Nog geen accounts geïmporteerd.') + '</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="10">' + (rows.length ? 'Geen resultaten.' : 'Nog geen accounts geïmporteerd.') + '</td></tr>';
       return;
     }
     tbody.innerHTML = pageRows.map((r) => (
       '<tr>'
       + '<td class="plain-cell">' + markBtn(r) + '</td>'
-      + '<td>' + copyText(r.username) + '</td>'
-      + '<td>' + copyText(r.password) + '</td>'
+      + '<td>' + copyText(r.username, _query) + '</td>'
+      + '<td>' + copyText(r.password, _query) + '</td>'
       + '<td class="plain-cell">' + (r.account != null ? r.account.toLocaleString() : '—') + '</td>'
+      + '<td class="plain-cell">' + (r.duckets ?? '—') + '</td>'
+      + '<td class="plain-cell">' + (r.diamonds ?? '—') + '</td>'
       + '<td class="plain-cell">' + (r.vrienden ?? '—') + '</td>'
       + '<td class="plain-cell">' + (r.rank ?? '—') + '</td>'
+      + '<td class="plain-cell">' + (r.created_at ? new Date(r.created_at).toLocaleString('nl-BE') : '—') + '</td>'
       + '<td><input class="note-input" data-username="' + esc(r.username) + '" value="' + esc(r.note || '') + '" placeholder="…"></td>'
       + '</tr>'
     )).join('');
@@ -462,7 +528,7 @@
       + '<button class="btn btn-outline" id="pg-back10" title="10 pagina\'s terug"' + (atStart ? ' disabled' : '') + '>&laquo;&laquo;</button>'
       + '<button class="btn btn-outline" id="pg-prev" title="Vorige"' + (atStart ? ' disabled' : '') + '>&laquo;</button>'
       + '<input class="page-jump" id="pg-jump" type="number" min="1" max="' + totalPages + '" value="' + (_page + 1) + '">'
-      + '<span class="page-info">/ ' + totalPages + ' (' + total + ' accounts)</span>'
+      + '<span class="page-info">/ ' + totalPages + ' (' + total.toLocaleString('nl-BE') + ' accounts)</span>'
       + '<button class="btn btn-outline" id="pg-next" title="Volgende"' + (atEnd ? ' disabled' : '') + '>&raquo;</button>'
       + '<button class="btn btn-outline" id="pg-fwd10" title="10 pagina\'s vooruit"' + (atEnd ? ' disabled' : '') + '>&raquo;&raquo;</button>'
       + '<button class="btn btn-outline" id="pg-last" title="Laatste pagina"' + (atEnd ? ' disabled' : '') + '>&raquo;&raquo;&raquo;</button>'
@@ -491,10 +557,11 @@
     document.getElementById('tabs').addEventListener('click', (e) => {
       const btn = e.target.closest('.tab');
       if (!btn) return;
-      _tab = btn.dataset.tab;
+      const key = btn.dataset.tab;
+      if (key === 'all') _selectedCats.clear();
+      else if (_selectedCats.has(key)) _selectedCats.delete(key);
+      else _selectedCats.add(key);
       _page = 0;
-      document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === btn));
-      showTopCard(_tab);
       render();
     });
 
@@ -505,6 +572,7 @@
     });
 
     document.getElementById('export-btn').addEventListener('click', openExportModal);
+    document.getElementById('pwd-stats-btn').addEventListener('click', openPasswordStatsModal);
     document.getElementById('modal-close-btn').addEventListener('click', closeModal);
     document.getElementById('modal-overlay').addEventListener('click', (e) => {
       if (e.target.id === 'modal-overlay') closeModal();
@@ -560,9 +628,15 @@
       e.target.value = '';
     });
 
+    document.getElementById('catnote-edit-btn').addEventListener('click', () => {
+      const el = document.getElementById('catnote-text');
+      el.readOnly = false;
+      el.focus();
+    });
     document.getElementById('catnote-text').addEventListener('focusout', (e) => {
-      if (_tab === 'all') return;
-      saveCategoryNote(_tab, e.target.value);
+      e.target.readOnly = true;
+      if (_selectedCats.size !== 1) return;
+      saveCategoryNote(Array.from(_selectedCats)[0], e.target.value);
     });
 
     document.getElementById('tbl-body').addEventListener('click', (e) => {

@@ -13,7 +13,7 @@
    else, no separate checkbox indicator. */
 .filter-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .search-input{width:auto;max-width:none}
-#q_name{width:200px}
+#q_name,#q_motto{width:200px}
 #q_id, #q_id_min, #q_id_max{width:110px}
 
 #status{font-size:12px;color:var(--muted);margin-bottom:10px}
@@ -62,6 +62,7 @@ thead th{position:sticky;top:0}
       <div class="card-body">
         <div class="filter-row">
           <input class="search-input" id="q_name" placeholder="Naam bevat...">
+          <input class="search-input" id="q_motto" placeholder="Motto bevat...">
           <input class="search-input" id="q_id" placeholder="Exact ID" type="number">
           <input class="search-input" id="q_id_min" placeholder="ID vanaf" type="number">
           <input class="search-input" id="q_id_max" placeholder="ID tot" type="number">
@@ -127,6 +128,11 @@ function skipPages(delta) { gotoPage(currentPage() + delta); }
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function fmtNum(n) {
+  const v = parseInt(n, 10);
+  return isNaN(v) ? String(n) : v.toLocaleString('nl-BE');
 }
 
 function avatarUrl(figure) {
@@ -200,7 +206,7 @@ function renderPagination() {
     + '<button class="btn btn-outline" id="pg-back10" title="10 pagina\'s terug"' + (atStart ? ' disabled' : '') + '>&laquo;&laquo;</button>'
     + '<button class="btn btn-outline" id="pg-prev" title="Vorige"' + (atStart ? ' disabled' : '') + '>&laquo;</button>'
     + '<input class="page-jump" id="pg-jump" type="number" min="1" max="' + tp + '" value="' + currentPage() + '">'
-    + '<span class="page-info">/ ' + tp + ' (' + totalMatches + ' users)</span>'
+    + '<span class="page-info">/ ' + tp + ' (' + fmtNum(totalMatches) + ' users)</span>'
     + '<button class="btn btn-outline" id="pg-next" title="Volgende"' + (atEnd ? ' disabled' : '') + '>&raquo;</button>'
     + '<button class="btn btn-outline" id="pg-fwd10" title="10 pagina\'s vooruit"' + (atEnd ? ' disabled' : '') + '>&raquo;&raquo;</button>'
     + '<button class="btn btn-outline" id="pg-last" title="Laatste pagina"' + (atEnd ? ' disabled' : '') + '>&raquo;&raquo;&raquo;</button>'
@@ -255,7 +261,7 @@ async function search(reset) {
     sortByRelevance();
     const from = total !== '?' && total !== '0' ? (currentOffset + 1) : 0;
     const to = currentOffset + lastRows.length;
-    statusEl.textContent = (lastRows.length ? (from + '–' + to) : '0') + ' van ' + total + ' matches';
+    statusEl.textContent = (lastRows.length ? (fmtNum(from) + '–' + fmtNum(to)) : '0') + ' van ' + fmtNum(total) + ' matches';
     renderTable();
     renderPagination();
   } catch (e) {
@@ -265,6 +271,7 @@ async function search(reset) {
 
 function currentFilterParams() {
   const name = document.getElementById('q_name').value.trim();
+  const motto = document.getElementById('q_motto').value.trim();
   const id = document.getElementById('q_id').value.trim();
   const idMin = document.getElementById('q_id_min').value.trim();
   const idMax = document.getElementById('q_id_max').value.trim();
@@ -273,6 +280,7 @@ function currentFilterParams() {
   if (idMin) params.push('id=gte.' + encodeURIComponent(idMin));
   if (idMax) params.push('id=lte.' + encodeURIComponent(idMax));
   if (name) params.push('name=ilike.*' + encodeURIComponent(name) + '*');
+  if (motto) params.push('motto=ilike.*' + encodeURIComponent(motto) + '*');
   params.push('order=' + currentSort);
   return params;
 }
@@ -327,7 +335,7 @@ async function exportTxt() {
   }
 }
 
-document.querySelectorAll('#q_name, #q_id, #q_id_min, #q_id_max').forEach(el => {
+document.querySelectorAll('#q_name, #q_motto, #q_id, #q_id_min, #q_id_max').forEach(el => {
   el.addEventListener('keydown', e => { if (e.key === 'Enter') search(true); });
 });
 

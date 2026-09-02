@@ -47,6 +47,15 @@ input[type=file]{font-size:12px;color:var(--muted)}
 .edition-badge{justify-content:center;font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;padding:4px 6px}
 .modal-total{font-size:11px;color:var(--muted);margin-top:12px;padding-top:10px;border-top:1px solid var(--border)}
 .modal-tag{color:var(--muted);font-weight:500;font-size:12px}
+
+.currency-summary{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.currency-stat{display:flex;flex-direction:column;gap:2px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 20px;min-width:150px}
+.currency-stat-label{font-size:10.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.currency-stat-value{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.25}
+.currency-stat.bc{background:color-mix(in oklch,var(--gold) 14%,transparent);border-color:color-mix(in oklch,var(--gold) 45%,transparent)}
+.currency-stat.bc .currency-stat-value{color:var(--gold)}
+.currency-stat.diamond{background:color-mix(in oklch,oklch(0.75 0.13 210) 14%,transparent);border-color:color-mix(in oklch,oklch(0.75 0.13 210) 45%,transparent)}
+.currency-stat.diamond .currency-stat-value{color:oklch(0.75 0.13 210)}
 </style>
 </head>
 <body>
@@ -60,7 +69,7 @@ input[type=file]{font-size:12px;color:var(--muted)}
           <div class="title">Item Overview</div>
         </div>
       </div>
-      <a class="hub-back" href="https://hub.databin.uk/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>Terug naar Hub</a>
+      <a class="hub-back" href="https://accounts.databin.uk/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>Terug naar Accounts</a>
     </div>
     <nav id="tabs">
       <button class="tab active" data-tab="inventory">Inventory<span class="nav-dot"></span></button>
@@ -83,7 +92,9 @@ input[type=file]{font-size:12px;color:var(--muted)}
       </div>
       <input class="search-input" id="inv-search" placeholder="Zoek op naam...">
       <div class="filter-row" id="inv-filter-row"></div>
+      <div class="currency-summary" id="inv-currency-summary" style="display:none"></div>
       <div class="cat-grid" id="inv-grid"></div>
+      <div class="pagination" id="inv-pagination"></div>
     </div>
 
     <div class="page" data-page="users">
@@ -193,6 +204,6 @@ input[type=file]{font-size:12px;color:var(--muted)}
   </div>
 </div>
 
-<script src="app.js?v=30"></script>
+<script src="app.js?v=38"></script>
 </body>
 </html>

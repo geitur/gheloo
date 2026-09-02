@@ -122,6 +122,11 @@
   let _inv = [];
   let _invQuery = '';
   let _invFilters = new Set(); // empty = "Alle" (no category filter active)
+  const INV_PAGE_SIZE_OPTIONS = [50, 100, 200];
+  const INV_PAGE_SIZE_KEY = 'gheloo_items_inv_page_size';
+  let _invPageSize = INV_PAGE_SIZE_OPTIONS.includes(parseInt(localStorage.getItem(INV_PAGE_SIZE_KEY), 10))
+    ? parseInt(localStorage.getItem(INV_PAGE_SIZE_KEY), 10) : 50;
+  let _invPage = 0;
   let _userQuery = '';
 
   // Same category set as the Ruilwaarde scan checkboxes in Settings, matched against each
@@ -141,6 +146,17 @@
   let _usersPage = 0;
   const USERS_PAGE_SIZE = 50;
 
+  // Bel-Credits/Diamanten furni names always start with the stack's face value
+  // ("25 Bel-Credits Staaf (BC)", "750 Diamanten Schedel") — read it straight off the name.
+  function parseCurrencyValue(name) {
+    if (!name) return null;
+    let m = /^(\d+)\s*Bel-Credits/i.exec(name);
+    if (m) return { type: 'bc', value: parseInt(m[1], 10) };
+    m = /^(\d+)\s*Diamanten/i.exec(name);
+    if (m) return { type: 'diamond', value: parseInt(m[1], 10) };
+    return null;
+  }
+
   async function loadInventory() {
     try {
       _inv = await fetchAll('/inventory_items?select=item_id,room_id,room_name,owner_username,type_id,item_name,tag,edition_number,is_wall,last_seen');
@@ -152,7 +168,7 @@
   function groupByType(rows) {
     const groups = new Map();
     rows.forEach((r) => {
-      const key = r.type_id + '|' + r.item_name;
+      const key = r.item_name + '|' + (r.is_wall ? 1 : 0);
       if (!groups.has(key)) groups.set(key, { key: key, name: r.item_name, typeId: r.type_id, tag: r.tag, rows: [] });
       groups.get(key).rows.push(r);
     });
@@ -167,7 +183,7 @@
       const count = f === 'ALL' ? searchRows.length : searchRows.filter((r) => INV_FILTER_MATCH[f](r.tag)).length;
       const active = f === 'ALL' ? _invFilters.size === 0 : _invFilters.has(f);
       return '<button class="filter-chip' + (active ? ' active' : '') + '" data-filter="' + f + '">'
-        + esc(INV_FILTER_LABELS[f]) + ' <span style="opacity:.65">' + count + '</span></button>';
+        + esc(INV_FILTER_LABELS[f]) + ' <span style="opacity:.65">' + count.toLocaleString('nl-BE') + '</span></button>';
     }).join('');
   }
 
@@ -179,8 +195,34 @@
     let rows = q ? _inv.filter((r) => (r.item_name || '').toLowerCase().includes(q)) : _inv;
     if (_invFilters.size) rows = rows.filter((r) => Array.from(_invFilters).some((f) => INV_FILTER_MATCH[f](r.tag)));
     const groups = Array.from(groupByType(rows).values()).sort((a, b) => a.name.localeCompare(b.name));
-    subEl.textContent = groups.length + ' furni-type(s), ' + rows.length + ' item(s) totaal.';
-    grid.innerHTML = groups.length ? groups.map((g) => {
+    subEl.textContent = groups.length.toLocaleString('nl-BE') + ' furni-type(s), ' + rows.length.toLocaleString('nl-BE') + ' item(s) totaal.';
+
+    const summaryEl = document.getElementById('inv-currency-summary');
+    if (_invFilters.size === 0 || _invFilters.has('CURRENCY')) {
+      // Sums by NAME pattern (parseCurrencyValue), not by the `tag` column — a scan can
+      // land a Bel-Credits/Diamanten item with a stale/wrong tag (e.g. "Bel-Credits"
+      // instead of "Currency"), and gating the sum on tag silently undercounts those even
+      // though the card itself (grouped by name, not tag) still shows them.
+      let totalBC = 0, totalDiamond = 0;
+      rows.forEach((r) => {
+        const v = parseCurrencyValue(r.item_name);
+        if (v) { if (v.type === 'bc') totalBC += v.value; else totalDiamond += v.value; }
+      });
+      summaryEl.style.display = '';
+      summaryEl.innerHTML =
+        '<div class="currency-stat bc"><span class="currency-stat-label">Totaal Bel-Credits</span><span class="currency-stat-value">' + totalBC.toLocaleString('nl-BE') + '</span></div>'
+        + '<div class="currency-stat diamond"><span class="currency-stat-label">Totaal Diamanten</span><span class="currency-stat-value">' + totalDiamond.toLocaleString('nl-BE') + '</span></div>';
+    } else {
+      summaryEl.style.display = 'none';
+      summaryEl.innerHTML = '';
+    }
+
+    const totalPages = Math.max(1, Math.ceil(groups.length / _invPageSize));
+    if (_invPage >= totalPages) _invPage = totalPages - 1;
+    if (_invPage < 0) _invPage = 0;
+    const pageGroups = groups.slice(_invPage * _invPageSize, _invPage * _invPageSize + _invPageSize);
+
+    grid.innerHTML = pageGroups.length ? pageGroups.map((g) => {
       const icon = _iconByName.get(g.name);
       return '<button type="button" class="cat-card" data-action="open-item" data-key="' + esc(g.key) + '">'
         + '<span class="cat-qty">' + g.rows.length + '</span>'
@@ -189,6 +231,16 @@
         + '</button>';
     }).join('') : '<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:40px">'
       + (_inv.length ? 'Geen furni gevonden.' : 'Nog geen inventory geïmporteerd — zie Settings.') + '</div>';
+
+    const pagEl = document.getElementById('inv-pagination');
+    const atStart = _invPage <= 0, atEnd = _invPage >= totalPages - 1;
+    pagEl.innerHTML =
+      '<button class="btn btn-outline" id="inv-prev"' + (atStart ? ' disabled' : '') + '>&laquo; Vorige</button>'
+      + '<span class="page-info">Pagina ' + (_invPage + 1) + ' / ' + totalPages + '</span>'
+      + '<button class="btn btn-outline" id="inv-next"' + (atEnd ? ' disabled' : '') + '>Volgende &raquo;</button>'
+      + '<select class="page-size-select" id="inv-page-size" title="Furni-types per pagina">'
+      + INV_PAGE_SIZE_OPTIONS.map((n) => '<option value="' + n + '"' + (n === _invPageSize ? ' selected' : '') + '>' + n + '</option>').join('')
+      + '</select>';
   }
 
   // Edition numbers stay collapsed behind the count by default — a wall of 20+ badges per
@@ -1011,6 +1063,7 @@
 
     document.getElementById('inv-search').addEventListener('input', (e) => {
       _invQuery = e.target.value;
+      _invPage = 0;
       renderInventory();
     });
     document.getElementById('inv-filter-row').addEventListener('click', (e) => {
@@ -1020,7 +1073,20 @@
       if (filter === 'ALL') _invFilters.clear();
       else if (_invFilters.has(filter)) _invFilters.delete(filter);
       else _invFilters.add(filter);
+      _invPage = 0;
       renderInventory();
+    });
+    document.getElementById('inv-pagination').addEventListener('click', (e) => {
+      if (e.target.id === 'inv-prev') { _invPage--; renderInventory(); }
+      else if (e.target.id === 'inv-next') { _invPage++; renderInventory(); }
+    });
+    document.getElementById('inv-pagination').addEventListener('change', (e) => {
+      if (e.target.id === 'inv-page-size') {
+        _invPageSize = parseInt(e.target.value, 10) || 50;
+        localStorage.setItem(INV_PAGE_SIZE_KEY, String(_invPageSize));
+        _invPage = 0;
+        renderInventory();
+      }
     });
     document.getElementById('user-search').addEventListener('input', (e) => {
       _userQuery = e.target.value;

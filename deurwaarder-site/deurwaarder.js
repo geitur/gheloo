@@ -92,6 +92,7 @@ function fmtDate(iso, short) {
   if (!iso) return '—'
   const d = new Date(iso)
   if (short) return d.toLocaleDateString('nl-NL',{day:'2-digit',month:'short'})
+       + ' ' + d.toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'})
   return d.toLocaleDateString('nl-NL',{day:'2-digit',month:'short',year:'numeric'})
        + ' ' + d.toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit'})
 }
@@ -100,6 +101,24 @@ function statusBadge(s) {
   const m = {active:['badge-green','In Inventory'],traded:['badge-orange','Ready for Pullback'],pullbacked:['badge-red','Pulled Back'],lost:['badge-zinc','Lost']}
   const [cls,label] = m[s] || ['badge-zinc', s||'?']
   return `<span class="badge ${cls}">${label}</span>`
+}
+
+// Clickable status badge for the Pullbacks table — Ready for Pullback ↔ Pulled Back is a
+// quick, common toggle that shouldn't need the full Edit Asset modal every time. 'lost'
+// stays a plain badge (not part of that toggle).
+let _quickStatusOpenId = null
+function quickStatusBadge(a) {
+  if (a.current_status !== 'traded' && a.current_status !== 'pullbacked') return statusBadge(a.current_status)
+  const m = {traded:['badge-orange','Ready for Pullback'],pullbacked:['badge-red','Pulled Back']}
+  const [cls,label] = m[a.current_status]
+  const open = _quickStatusOpenId === a.id
+  return `<span style="position:relative;display:inline-block">
+    <button class="badge ${cls}" style="cursor:pointer;appearance:none;-webkit-appearance:none;margin:0;font-family:inherit;line-height:inherit" data-action="quick-status-toggle" data-id="${h(a.id)}">${label}</button>
+    <div class="ac-dropdown" id="qs-dd-${h(a.id)}" style="display:${open?'block':'none'};min-width:150px">
+      <div class="ac-item" data-action="quick-status-set" data-id="${h(a.id)}" data-holder="${h(a.current_holder)}" data-new-status="traded">Ready for Pullback</div>
+      <div class="ac-item" data-action="quick-status-set" data-id="${h(a.id)}" data-holder="${h(a.current_holder)}" data-new-status="pullbacked">Pulled Back</div>
+    </div>
+  </span>`
 }
 
 /* — Item catalog (photos + trade values) ——————————————— */
@@ -133,7 +152,7 @@ const EV_LABELS = {manual_update:'Update',marketplace_sale:'New Trade',trade:'Tr
 const REASON_LABELS = {
   CREATED:'New Item in Inventory',
   DUPED_LOG:'New Duped Item',
-  RECOVERED:'New Item in Inventory',
+  RECOVERED:'Recovered Item',
   HOLDER_CHANGE:'Moved',
   LOST:'Marked as Lost',
   RESTORED:'Marked as Restored',
@@ -144,11 +163,12 @@ const EV_COLORS = {manual_update:'var(--primary)',marketplace_sale:'var(--red)',
 const REASON_COLORS = {CREATED:'var(--green)',DUPED_LOG:'var(--orange)',RECOVERED:'var(--green)',HOLDER_CHANGE:'var(--zinc)',LOST:'var(--zinc)',RESTORED:'var(--green)',IMPORTED:'var(--green)',EDITED:'var(--primary)'}
 
 function eventBadge(t, reason, scamType) {
-  const isBulk = reason && reason.startsWith('BULK:')
   let label, col
   if (t==='marketplace_sale') {
+    // Always the specific scam type ("New Gambled", "New Hacked", ...) — no more
+    // generic "New Bulk Traded" wording regardless of how many items were involved.
     const typeLabel = SCAM_TYPE_LABELS[scamType] || SCAM_TYPE_LABELS.traded
-    label = isBulk ? `New Bulk ${typeLabel}` : `New ${typeLabel}`
+    label = `New ${typeLabel}`
     col = SCAM_TYPE_COLORS[scamType] || SCAM_TYPE_COLORS.traded
   } else if (reason && REASON_LABELS[reason]) {
     label = REASON_LABELS[reason]
@@ -186,7 +206,7 @@ function nav(r) {
 function updateNav(view) {
   document.querySelectorAll('.nav-item').forEach(el => {
     const r = el.dataset.route
-    const active = r === view || (view === 'asset' && r === 'pullbacks')
+    const active = r === view || (view === 'asset' && r === 'pullbacks') || (view === 'invlog' && r === 'inventory')
     el.classList.toggle('active', active)
     const dot = el.querySelector('.dot'); if (dot) dot.remove()
     if (active) el.insertAdjacentHTML('beforeend','<span class="dot"></span>')
@@ -204,6 +224,7 @@ async function route() {
     if (view==='dashboard') await renderDashboard(mc)
     else if (view==='pullbacks') await renderPullbacks(mc)
     else if (view==='inventory') await renderCatalog(mc)
+    else if (view==='invlog')    await renderInventoryLog(mc)
     else if (view==='scammed')   await renderScammed(mc)
     else if (view==='victims')   await renderVictims(mc)
     else if (view==='holders')   await renderHolders(mc)
@@ -271,6 +292,13 @@ function setupEvents() {
   document.getElementById('main-content').addEventListener('click', handleClick)
   document.getElementById('modal-body').addEventListener('click', handleClick)
   document.getElementById('tutorial-overlay').addEventListener('click', handleClick)
+
+  document.addEventListener('click', e => {
+    if (_quickStatusOpenId == null) return
+    if (e.target.closest('[data-action="quick-status-toggle"],[data-action="quick-status-set"]')) return
+    _quickStatusOpenId = null
+    document.querySelectorAll('[id^="qs-dd-"]').forEach(dd => dd.style.display = 'none')
+  })
 
   document.getElementById('main-content').addEventListener('input', handleInput)
 
@@ -366,6 +394,24 @@ function handleClick(e) {
     case 'clear-ev-filters':  { _evFilters={asset:'',trade:'',pb:'',holder:'',victim:'',type:'ALL'}; _evTypeGroupOpen=null; route(); break }
     case 'apply-ev-filters':  route(); break
     case 'inv-status':        { _invStatus=status; renderPullbacks(document.getElementById('main-content')); break }
+    case 'quick-status-toggle': {
+      const wasOpen = _quickStatusOpenId === id
+      _quickStatusOpenId = wasOpen ? null : id
+      document.querySelectorAll('[id^="qs-dd-"]').forEach(dd => dd.style.display = 'none')
+      if (!wasOpen) { const dd = document.getElementById(`qs-dd-${id}`); if (dd) dd.style.display = 'block' }
+      break
+    }
+    case 'quick-status-set': {
+      _quickStatusOpenId = null
+      const newStatus = el.dataset.newStatus
+      const holder = el.dataset.holder
+      ;(async () => {
+        try { await doEditAsset(id, holder, newStatus, undefined, undefined, undefined, undefined); route() }
+        catch(err) { alert(err.message) }
+      })()
+      break
+    }
+    case 'log-status':        { _logStatus=status; renderInventoryLog(document.getElementById('main-content')); break }
     case 'cat-filter':        { _catFilter=el.dataset.filter; renderCatalog(document.getElementById('main-content')); break }
     case 'holder-filter':     { _holderFilter=el.dataset.filter; renderHolders(document.getElementById('main-content')); break }
     case 'scam-filter':       { _scamFilter=el.dataset.filter; renderScammed(document.getElementById('main-content')); break }
@@ -380,6 +426,8 @@ function handleClick(e) {
     case 'show-trade-item-info': { window._tradeDetailActiveItem = el.dataset.name; renderTradeDetailModal(window._tradeDetailEventId); break }
     case 'delete-asset':      openDeleteAssetModal(id); break
     case 'open-cat-item':     openCatItemModal(el.dataset.name); break
+    case 'open-holder-items': openHolderItemsModal(el.dataset.holder); break
+    case 'show-holder-item':  { window._holderItemsActive = el.dataset.id; renderHolderItemsModal(); break }
     case 'open-bc-modal':     openBcModal(); break
     case 'open-tutorials':    openTutorialPicker(); break
     case 'start-tutorial':    startTutorial(el.dataset.tut); break
@@ -499,6 +547,7 @@ function handleInput(e) {
   const mc = document.getElementById('main-content')
   switch(inputAction) {
     case 'inv-search':       liveSearch('inv-search', renderPullbacks, mc, e.target.value); break
+    case 'log-search':       liveSearch('log-search', renderInventoryLog, mc, e.target.value); break
     case 'cat-search':       liveSearch('cat-search', renderCatalog, mc, e.target.value); break
     case 'scam-search':      liveSearch('scam-search', renderScammed, mc, e.target.value); break
     case 'victim-search':    liveSearch('victim-search', renderVictims, mc, e.target.value); break
@@ -614,8 +663,8 @@ async function renderDashboard(mc) {
   const rfpItems = ai.filter(a=>a.current_status==='traded'&&isPullbackClaim(a))
   const pulledBackCount = ai.filter(a=>a.current_status==='pullbacked'&&isPullbackClaim(a)).length
   const lostCount = ai.filter(a=>a.current_status==='lost'&&isPullbackClaim(a)).length
-  const uniqueVictims = new Set(sc.map(e=>e.scammed_user).filter(Boolean)).size
-  const activeHolders = new Set(ai.filter(a=>a.current_status!=='lost').map(a=>a.current_holder)).size
+  const uniqueVictims = new Set(sc.map(e=>e.scammed_user).filter(Boolean).map(n=>n.toLowerCase())).size
+  const activeHolders = new Set(ai.filter(a=>a.current_status!=='lost').map(a=>a.current_holder).filter(Boolean).map(n=>n.toLowerCase())).size
   const values = window._catalogValues||{}
   const totalWorth = inInvItems.reduce((s,a)=>s+(values[a.item_name]||0),0) + rfpItems.reduce((s,a)=>s+(values[a.item_name]||0),0) + bcInInventory
   const stats=[
@@ -755,12 +804,12 @@ async function backfillDashboardHistory() {
       if (tl[0].date > day) continue
       const s = statusAt(tl, day)
       if (s==='lost') { lost++; continue }
-      holderSet.add(a.current_holder)
+      if (a.current_holder) holderSet.add(a.current_holder.toLowerCase())
       if (s==='pullbacked') pb++
       if (s==='active' && !a.is_duped) { inv++; worth += values[a.item_name]||0 }
       else if (s==='traded' && !a.is_duped) { rfp++; worth += values[a.item_name]||0 }
     }
-    const victims = new Set((scamEvts||[]).filter(e=>e.timestamp.slice(0,10)<=day).map(e=>e.scammed_user)).size
+    const victims = new Set((scamEvts||[]).filter(e=>e.timestamp.slice(0,10)<=day).map(e=>e.scammed_user).filter(Boolean).map(n=>n.toLowerCase())).size
     rows.push({date:day, ready_for_pullback:rfp, in_inventory:inv, pulled_back:pb, lost, inventory_worth:worth, unique_victims:victims, active_holders:holderSet.size})
   }
   if (rows.length) await sbUpsert('/dashboard_snapshots?on_conflict=date', rows).catch(()=>{})
@@ -968,11 +1017,11 @@ async function renderPullbacks(mc, search) {
     const pbHolderClass = (holderBanned || a.current_status==='lost') ? 'text-muted' : (a.current_status==='pullbacked' ? 'text-red' : 'text-orange')
     return `<tr${rowBg?` style="background:color-mix(in oklch,${rowBg} 8%,transparent)"`:''}>
     <td>${a.pb_code?`<button class="link mono text-orange" data-action="filter-events" data-key="pb" data-val="${h(a.pb_code)}">${h(a.pb_code)}</button>`:'<span class="text-muted">—</span>'}</td>
-    <td><button class="link mono" data-nav="asset/${h(a.id)}">${h(a.id)}</button></td>
+    <td><button class="link mono" data-action="filter-events" data-key="asset" data-val="${h(a.id)}">${h(a.id)}</button></td>
     <td><div class="item-cell">${itemThumb(a.item_name)}<span>${h(a.item_name||'—')}</span></div></td>
     <td>${a.current_status==='lost' && !holderBanned ? '<span class="text-muted">—</span>' : `<button class="link ${pbHolderClass}" data-action="filter-events" data-key="holder" data-val="${h(a.current_holder)}">${h(a.current_holder||'—')}</button>${holderBanned?' <span class="badge badge-red">Banned</span>':''}`}</td>
     <td>${!a.item_holder?'<span class="text-muted">—</span>':`<button class="link text-muted" data-action="filter-events" data-key="holder" data-val="${h(a.item_holder)}">${h(a.item_holder)}</button>${isBanned(bannedSet,a.item_holder)?' <span class="badge badge-red">Banned</span>':''}${soldToMap.has(a.id)?` <span class="text-muted">→</span> <button class="link text-muted" data-action="filter-events" data-key="victim" data-val="${h(soldToMap.get(a.id))}">${h(soldToMap.get(a.id))}</button>`:''}`}</td>
-    <td>${statusBadge(a.current_status)}</td>
+    <td>${quickStatusBadge(a)}</td>
     <td class="text-muted" style="font-size:11px">${relTime(a.created_at)}</td>
     <td>
       <div style="display:flex;align-items:center;justify-content:flex-end;gap:12px">
@@ -1032,6 +1081,71 @@ function catRowMatches(a, filter) {
   if (filter === 'DUPED') return (!!a.is_duped && a.current_status==='active') || (!a.is_duped && a.current_status==='traded' && !!a.item_holder)
   if (a.current_status === 'traded') return isGenuineClaim
   return !a.is_duped
+}
+
+/* — Inventory Log (every real, non-duped item you own — holder/name/status/edit) —— */
+let _logSearch='', _logStatus='ALL'
+
+async function renderInventoryLog(mc, search) {
+  if (search !== undefined) _logSearch = search
+  let q = '/ss_items?select=id,item_name,current_holder,current_status,is_duped,item_holder,notes,created_at&is_duped=eq.false&order=created_at.desc&limit=300'
+  if (_logStatus !== 'ALL') q += `&current_status=eq.${_logStatus}`
+  if (_logSearch) { const s=encodeURIComponent(_logSearch); q += `&or=(id.ilike.*${s}*,current_holder.ilike.*${s}*,item_name.ilike.*${s}*)` }
+  const [itemsRaw, bannedRaw] = await Promise.all([
+    sbGet(q).catch(()=>null),
+    sbGet('/banned_holders?select=holder').catch(()=>null)
+  ])
+  const items = itemsRaw || []
+  const bannedSet = new Set((bannedRaw||[]).map(r=>(r.holder||'').toLowerCase()))
+
+  // Same status values/labels statusBadge() and the Pullbacks page already use — picking
+  // a status here means the same thing it does everywhere else in the app.
+  const statusOpts = ['ALL','active','traded','pullbacked','lost']
+  const statusLabels = {ALL:'All',active:'In Inventory',traded:'Ready for Pullback',pullbacked:'Pulled Back',lost:'Lost'}
+
+  const rows = items.map(a=>{
+    const holderBanned = isBanned(bannedSet,a.current_holder)
+    return `<tr>
+      <td><button class="link mono" data-action="filter-events" data-key="asset" data-val="${h(a.id)}">${h(a.id)}</button></td>
+      <td>${holderBanned?`<span class="text-muted">${h(a.current_holder||'—')} <span class="badge badge-red">Banned</span></span>`:`<button class="link" data-action="filter-events" data-key="holder" data-val="${h(a.current_holder)}">${h(a.current_holder||'—')}</button>`}</td>
+      <td><div class="item-cell">${itemThumb(a.item_name)}<span>${h(a.item_name||'—')}</span></div></td>
+      <td>${statusBadge(a.current_status)}</td>
+      <td class="text-muted" style="font-size:11px">${fmtDate(a.created_at,true)}</td>
+      <td style="font-size:11px">${h(a.notes||'—')}</td>
+      <td>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-ghost btn-sm" title="Edit" data-action="edit-asset" data-id="${h(a.id)}" data-holder="${h(a.current_holder)}" data-item-holder="${h(a.item_holder||'')}" data-status="${h(a.current_status)}" data-item-name="${h(a.item_name||'')}" data-context="${a.item_holder?'pullback':'inventory'}" data-notes="${h(a.notes||'')}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
+          <button class="btn btn-ghost btn-sm" title="Delete" data-action="delete-asset" data-id="${h(a.id)}" style="color:var(--red)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg>
+          </button>
+        </div>
+      </td>
+    </tr>`
+  }).join('') || `<tr class="empty-row"><td colspan="7">No items found.</td></tr>`
+
+  mc.innerHTML = `
+    <div class="page-hdr">
+      <div><div class="page-title">Inventory Log</div><div class="page-sub">${items.length} item${items.length!==1?'s':''}, newest first${_logStatus!=='ALL'?' · '+statusLabels[_logStatus]:''}${_logSearch?' · "'+h(_logSearch)+'"':''}</div></div>
+      <button class="btn btn-outline btn-sm" data-nav="inventory">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        Back to Inventory
+      </button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <div class="search-input" style="flex:1;min-width:200px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="Search ID, holder, item…" value="${h(_logSearch)}" data-input-action="log-search">
+      </div>
+      <div class="filter-row" style="margin-bottom:0">
+        ${statusOpts.map(s=>`<button class="filter-chip${_logStatus===s?' active':''}" data-action="log-status" data-status="${s}">${statusLabels[s]}</button>`).join('')}
+      </div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>SS ID</th><th>Holder</th><th>Item</th><th>Status</th><th>Timestamp</th><th>Notes</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`
 }
 
 async function renderCatalog(mc, search) {
@@ -1101,10 +1215,16 @@ async function renderCatalog(mc, search) {
   mc.innerHTML = `
     <div class="page-hdr">
       <div><div class="page-title">Inventory</div><div class="page-sub">${names.length} item type${names.length!==1?'s':''}${_catFilter!=='ALL'?' · '+CAT_FILTER_LABELS_ALL[_catFilter]:''}</div></div>
-      <button class="btn btn-green" data-action="open-import-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        New Item
-      </button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline" data-nav="invlog">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          Log
+        </button>
+        <button class="btn btn-green" data-action="open-import-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          New Item
+        </button>
+      </div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
       <div class="search-input" style="flex:1;min-width:200px">
@@ -1123,8 +1243,9 @@ function openCatItemModal(name) {
   const rows = (window._catalogGroups && window._catalogGroups.get(name)) || []
   const byHolder = new Map()
   for (const r of rows) {
-    if (!byHolder.has(r.current_holder)) byHolder.set(r.current_holder, {inv:0, rfp:0, duped:0, lost:0, codeRows:[]})
-    const b = byHolder.get(r.current_holder)
+    const key = (r.current_holder||'').toLowerCase()
+    if (!byHolder.has(key)) byHolder.set(key, {holder:r.current_holder, inv:0, rfp:0, duped:0, lost:0, codeRows:[]})
+    const b = byHolder.get(key)
     if (r.current_status === 'lost') { b.lost++; continue }
     if (r.is_duped && r.current_status === 'traded') continue
     if (r.current_status === 'traded') { b.rfp++; b.codeRows.push(r); continue }
@@ -1138,7 +1259,8 @@ function openCatItemModal(name) {
     const pb = r.pb_code ? ` <button class="link mono" style="font-size:10px;color:var(--orange)" data-action="filter-events" data-key="pb" data-val="${h(r.pb_code)}">${h(r.pb_code)}</button>` : ''
     return ss+pb
   }).join(' ')
-  const list = [...byHolder.entries()].filter(([,c])=>c.inv||c.rfp||c.duped||c.lost).map(([holder,c]) => {
+  const list = [...byHolder.values()].filter(c=>c.inv||c.rfp||c.duped||c.lost).map(c => {
+    const holder = c.holder
     const parts = []
     if (c.inv) parts.push(`<span class="badge badge-green">${c.inv} In Inventory</span>`)
     if (c.rfp) parts.push(`<span class="badge badge-orange">${c.rfp} Ready for Pullback</span>`)
@@ -1157,8 +1279,17 @@ function openCatItemModal(name) {
 
   const img = (window._catalogImages||{})[name]
   const unitVal = (window._catalogValues||{})[name]
+  // A pullback claim and its duped copy (doCreatePullbackAsset always creates both —
+  // one tracks who's chasing it, the other who physically holds it) are two DB rows
+  // for the SAME real item. The per-holder breakdown above intentionally counts both
+  // (shows both sides), but the Total up top was double-counting every such pair.
+  const claimIds = new Set(rows.filter(r=>!r.is_duped && r.item_holder).map(r=>r.id))
   let total = 0
-  for (const c of byHolder.values()) total += c.inv+c.rfp+c.duped+c.lost
+  for (const r of rows) {
+    if (r.current_status === 'pullbacked') continue
+    if (r.is_duped && r.linked_asset_id && claimIds.has(r.linked_asset_id)) continue
+    total++
+  }
   openModal(name, `
     ${img?`<div style="width:100%;aspect-ratio:2/1;background:var(--input);border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden;margin-bottom:12px"><img src="${h(img)}" style="width:100%;height:100%;object-fit:contain;image-rendering:pixelated;image-rendering:-moz-crisp-edges;image-rendering:crisp-edges"></div>`:''}
     <div style="margin-bottom:10px;font-size:12px;color:var(--muted)">Total: <strong style="color:var(--text)">${total}</strong>${unitVal!=null?` <span style="margin-left:8px">Value: <strong class="text-yellow">${(unitVal*total).toLocaleString()} BC</strong> <span style="color:var(--muted)">(${unitVal.toLocaleString()}/ea)</span></span>`:''}</div>
@@ -1188,7 +1319,11 @@ function renderBcModal() {
 
 /* — Scammed ———————————————————————————————— */
 let _scamSearch = ''
-let _scamFilter = 'ALL'
+// Defaults to hiding plain acquisitions (earned/hacked/bought/friendly — not real scams,
+// this is what cluttered the table with rows like "New Earned" and mostly "—" columns)
+// so Trades reads as actual trades by default. Still one click away via the filter chip;
+// the full acquisition trail lives in the Inventory Log instead.
+let _scamFilter = 'SCAMMED'
 const SCAM_LEGIT_TYPES = new Set(['earned','bought','friendly','hacked'])
 const SCAM_FILTER_LABELS = {ALL:'All', SCAMMED:'Scammed', EARNED:'Earned'}
 async function renderScammed(mc, search) {
@@ -1515,6 +1650,45 @@ function holderItemsCell(items, extraClass) {
   </span>`
 }
 
+/* — Holder Details (their actual inventory, not the event log) ——————————— */
+function openHolderItemsModal(holder) {
+  window._holderItemsHolder = holder
+  window._holderItemsList = null
+  window._holderItemsActive = null
+  renderHolderItemsModal()
+  sbGet(`/ss_items?select=id,item_name,pb_code&current_status=eq.active&is_duped=eq.false&current_holder=ilike.${encodeURIComponent(holder)}&order=item_name`)
+    .then(rows => { window._holderItemsList = rows||[]; renderHolderItemsModal() })
+    .catch(e => { window._holderItemsList = []; renderHolderItemsModal(); modalError(e.message) })
+}
+
+function renderHolderItemsModal() {
+  const holder = window._holderItemsHolder
+  const list = window._holderItemsList
+  const active = window._holderItemsActive
+  let body
+  if (list === null) {
+    body = `<div class="loading">Loading…</div>`
+  } else if (!list.length) {
+    body = `<div class="text-muted" style="text-align:center;padding:24px 0">Nothing In Inventory for ${h(holder)}.</div>`
+  } else {
+    const rows = list.map(a => `
+      <div class="ac-item" data-action="show-holder-item" data-id="${h(a.id)}" style="${active===a.id?'background:var(--accent)':''}">
+        ${itemThumb(a.item_name)}<span>${h(a.item_name)}</span>
+      </div>`).join('')
+    let infoHtml = ''
+    const a = active && list.find(x=>x.id===active)
+    if (a) {
+      infoHtml = `<div class="card" style="margin-top:12px"><div class="card-body" style="padding:12px">
+        <div class="sum-row"><span class="sum-label">Item</span><strong>${h(a.item_name)}</strong></div>
+        <div class="sum-row"><span class="sum-label">SS ID</span><button class="link mono" data-action="filter-events" data-key="asset" data-val="${h(a.id)}">${h(a.id)}</button></div>
+        ${a.pb_code?`<div class="sum-row"><span class="sum-label">PB ID</span><button class="link mono text-orange" data-action="filter-events" data-key="pb" data-val="${h(a.pb_code)}">${h(a.pb_code)}</button></div>`:''}
+      </div></div>`
+    }
+    body = `<div style="display:flex;flex-direction:column;gap:2px;max-height:360px;overflow:auto">${rows}</div>${infoHtml}`
+  }
+  openModal(`${holder} — Inventory`, body, [{label:'Close', fn:closeModal}])
+}
+
 let _holderSearch = ''
 async function renderHolders(mc, search) {
   if (search !== undefined) _holderSearch = search
@@ -1526,13 +1700,18 @@ async function renderHolders(mc, search) {
   ])
   const items = itemsRaw||[]
   const banned = new Set((bannedRaw||[]).map(r=>(r.holder||'').toLowerCase()))
-  const bcMap = new Map((bcRaw||[]).map(r=>[r.holder, r.amount]))
+  const bcMap = new Map((bcRaw||[]).map(r=>[(r.holder||'').toLowerCase(), r.amount]))
   const lastActivity = new Map()
-  const bump = (holder, ts) => { if (!holder || !ts) return; const cur=lastActivity.get(holder); if (!cur || ts>cur) lastActivity.set(holder, ts) }
+  const bump = (holder, ts) => { if (!holder || !ts) return; const key=holder.toLowerCase(); const cur=lastActivity.get(key); if (!cur || ts>cur) lastActivity.set(key, ts) }
+  // Grouped case-insensitively — "Ravenclaw221" and "ravenclaw221" are the same real
+  // person, and used to show up as two separate rows here. First-seen casing wins for
+  // display.
   const map=new Map()
   for(const a of items){
-    if(!map.has(a.current_holder))map.set(a.current_holder,{inv:0,rfp:0,lost:0,total:new Set(),invItems:[],rfpItems:[],lostItems:[]})
-    const r=map.get(a.current_holder)
+    if(!a.current_holder) continue
+    const key = a.current_holder.toLowerCase()
+    if(!map.has(key))map.set(key,{holder:a.current_holder,inv:0,rfp:0,lost:0,total:new Set(),invItems:[],rfpItems:[],lostItems:[]})
+    const r=map.get(key)
     if(a.current_status!=='lost')r.total.add(a.id)
     if(a.current_status==='active'&&!a.is_duped){r.inv++;r.invItems.push(a.item_name)}
     else if(a.current_status==='traded'&&!a.is_duped){r.rfp++;r.rfpItems.push(a.item_name)}
@@ -1540,7 +1719,7 @@ async function renderHolders(mc, search) {
     bump(a.current_holder, a.created_at)
   }
   for (const e of (evRaw||[])) bump(e.to_holder, e.timestamp)
-  let holders=[...map.entries()].map(([holder,v])=>({holder,inv:v.inv,rfp:v.rfp,lost:v.lost,invItems:v.invItems,rfpItems:v.rfpItems,lostItems:v.lostItems,total:v.total.size,banned:isBanned(banned,holder),lastActivity:lastActivity.get(holder)||''})).sort((a,b)=>b.lastActivity<a.lastActivity?-1:b.lastActivity>a.lastActivity?1:0)
+  let holders=[...map.entries()].map(([key,v])=>({holder:v.holder,inv:v.inv,rfp:v.rfp,lost:v.lost,invItems:v.invItems,rfpItems:v.rfpItems,lostItems:v.lostItems,total:v.total.size,banned:isBanned(banned,v.holder),lastActivity:lastActivity.get(key)||''})).sort((a,b)=>b.lastActivity<a.lastActivity?-1:b.lastActivity>a.lastActivity?1:0)
 
   const allHolders = holders
   if (_holderFilter==='RFP') holders = holders.filter(x=>x.rfp>0)
@@ -1560,8 +1739,8 @@ async function renderHolders(mc, search) {
     <td style="text-align:right;padding-right:28px">${holderItemsCell(hld.invItems, hld.inv>0?'text-green':'')}</td>
     <td style="text-align:right;padding-right:28px">${holderItemsCell(hld.rfpItems, hld.rfp>0?'text-orange':'')}</td>
     <td style="text-align:right;padding-right:28px">${holderItemsCell(hld.lostItems, hld.lost>0?'text-muted':'')}</td>
-    <td style="text-align:right;padding-right:28px">${bcMap.get(hld.holder)?`<span class="text-yellow">${bcMap.get(hld.holder).toLocaleString()}</span>`:''}</td>
-    <td style="text-align:right"><button class="link" data-action="filter-events" data-key="holder" data-val="${h(hld.holder)}">Details</button></td>
+    <td style="text-align:right;padding-right:28px">${bcMap.get(hld.holder.toLowerCase())?`<span class="text-yellow">${bcMap.get(hld.holder.toLowerCase()).toLocaleString()}</span>`:''}</td>
+    <td style="text-align:right"><button class="link" data-action="open-holder-items" data-holder="${h(hld.holder)}">Details</button></td>
   </tr>`}).join('')||'<tr class="empty-row"><td colspan="7">No holders.</td></tr>'
 
   mc.innerHTML=`
@@ -1617,7 +1796,7 @@ const EV_TYPE_GROUPS = [
 const REASON_FILTER_GROUPS = { NEW_ITEM:['CREATED','RECOVERED','IMPORTED'], LOST:['LOST'], RESTORED:['RESTORED'], HOLDER_CHANGE:['HOLDER_CHANGE'], DUPED_LOG:['DUPED_LOG'], EDITED:['EDITED'] }
 const EV_TYPE_LABELS = Object.fromEntries(EV_TYPE_GROUPS.flatMap(g=>[[g.allValue,`All ${g.label}`], ...g.options.map(o=>[o.v,o.l])]))
 
-function detailsCell(e) {
+function detailsCell(e, pbCode, linkedAssetId) {
   if (e.event_type === 'marketplace_sale') {
     const given = parseItemList(e.items_given)
     const received = e.items_received ? parseItemList(e.items_received) : []
@@ -1637,7 +1816,7 @@ function detailsCell(e) {
     </span>`
   }
   if (e.event_type === 'dupe') {
-    return `<span style="font-size:11px">Pullback: <strong>${h(e.from_holder||'—')}</strong> <span class="text-muted">·</span> Item: <strong>${h(e.to_holder||'—')}</strong></span>`
+    return `<span style="font-size:11px"><span class="text-muted">${h(e.from_holder||'—')}</span> → <strong>${h(e.to_holder||'—')}</strong>${pbCode?` <button class="link mono text-orange" style="font-size:10px" data-action="filter-events" data-key="pb" data-val="${h(pbCode)}">${h(pbCode)}</button>`:''}</span>`
   }
   if (e.event_type === 'pullback') {
     return `<span style="font-size:11px" class="text-muted">Recovered to <strong style="color:var(--text)">${h(e.to_holder||e.from_holder||'—')}</strong></span>`
@@ -1650,6 +1829,13 @@ function detailsCell(e) {
   }
   if (e.reason === 'EDITED') {
     return `<span style="font-size:11px" class="text-muted">${h(e.notes||'Edited')}</span>`
+  }
+  if (e.reason === 'RECOVERED') {
+    // "Mark Pulled Back" + "stays in inventory" mints a fresh SS id for the recovered
+    // copy, linked back to the original via linked_asset_id — without this, the new
+    // id just looked like an unrelated item with no visible connection to the pullback
+    // that produced it.
+    return `<span style="font-size:11px" class="text-muted">Held by <strong style="color:var(--text)">${h(e.to_holder||e.from_holder||'—')}</strong>${linkedAssetId?` <span class="text-muted">· recovered from</span> <button class="link mono" style="font-size:10px" data-action="filter-events" data-key="asset" data-val="${h(linkedAssetId)}">${h(linkedAssetId)}</button>`:''}</span>`
   }
   if (['CREATED','RECOVERED','DUPED_LOG','IMPORTED','RESTORED'].includes(e.reason)) {
     return `<span style="font-size:11px" class="text-muted">Held by <strong style="color:var(--text)">${h(e.to_holder||e.from_holder||'—')}</strong></span>`
@@ -1685,6 +1871,10 @@ async function renderEvents(mc) {
     const pbItems = await sbGet(`/ss_items?select=id&pb_code=eq.${encodeURIComponent(_evFilters.pb)}`) || []
     chainIds = pbItems.length ? await resolveItemChain(pbItems[0].id) : []
     q += chainIds.length ? `&item_id=in.(${chainIds.join(',')})` : `&item_id=eq.__none__`
+    // Reflect the resolved asset in the Asset ID box too, not just the PB code —
+    // otherwise the filter bar only shows the PB code with no obvious link to which
+    // SS item it actually resolved to.
+    if (pbItems.length) _evFilters.asset = pbItems[0].id
   }
   if(chainIds && chainIds.length){
     const chainItems = await sbGet(`/ss_items?select=id,pb_code&id=in.(${chainIds.join(',')})`).catch(()=>null) || []
@@ -1705,10 +1895,31 @@ async function renderEvents(mc) {
 
   const evItemIds=[...new Set(events.map(e=>e.item_id).filter(Boolean))]
   let evItemMap=new Map()
-  if(evItemIds.length){const evItems=await sbGet(`/ss_items?select=id,item_name&id=in.(${evItemIds.join(',')})`)||[];evItems.forEach(a=>evItemMap.set(a.id,a.item_name))}
+  if(evItemIds.length){const evItems=await sbGet(`/ss_items?select=id,item_name,pb_code,linked_asset_id&id=in.(${evItemIds.join(',')})`)||[];evItems.forEach(a=>evItemMap.set(a.id,a))}
+
+  // Marks everything that happened BEFORE an item's most recent "fresh start" (New
+  // Item in Inventory / Recovered Item / Imported) as old history, in red — so a
+  // scan of the Logbook immediately shows what's part of the item's CURRENT cycle
+  // vs. leftover history from before it last re-entered inventory.
+  const genesisByItem=new Map()
+  for(const e of events){
+    if(['CREATED','RECOVERED','IMPORTED'].includes(e.reason)){
+      const cur=genesisByItem.get(e.item_id)
+      if(!cur||e.timestamp>cur) genesisByItem.set(e.item_id,e.timestamp)
+    }
+  }
+  const isOldHistory=(itemId,ts)=>{const g=genesisByItem.get(itemId);return !!(g&&ts<g)}
+
+  // Acquiring an item (earned/hacked/bought/received in a trade) always logs a
+  // companion 'CREATED' event on top of the marketplace_sale itself — same real-world
+  // moment, two rows ("New Earned" + "New Item in Inventory"). The marketplace_sale
+  // row already conveys "this item now exists", so drop the redundant CREATED one.
+  const acquisitionItemIds=new Set(events.filter(e=>e.event_type==='marketplace_sale').map(e=>e.item_id).filter(Boolean))
 
   const bulkMap=new Map(), processed=[]
   for(const e of events){
+    if(e.reason==='CREATED'&&acquisitionItemIds.has(e.item_id)) continue
+    if(e.reason==='DUPED_LOG') continue
     if(e.reason&&e.reason.startsWith('BULK:')){
       if(!bulkMap.has(e.reason)){bulkMap.set(e.reason,{id:e.reason,evs:[],victim:e.scammed_user,timestamp:e.timestamp,bc:e.bc_amount,from_holder:e.from_holder,items_received:e.items_received,scam_type:e.scam_type});processed.push({_bulk:true,g:bulkMap.get(e.reason)})}
       bulkMap.get(e.reason).evs.push(e)
@@ -1720,7 +1931,8 @@ async function renderEvents(mc) {
       const g=entry.g, bc=g.evs.find(e=>e.bc_amount!=null)?.bc_amount
       const given=g.evs.map(e=>e.items_given||e.item_id).filter(Boolean)
       const received=g.evs.find(e=>e.items_received)?.items_received
-      return `<tr style="background:color-mix(in oklch,var(--red) 6%,transparent)">
+      const groupIsOld=g.evs.some(ev=>isOldHistory(ev.item_id,ev.timestamp))
+      return `<tr${groupIsOld?' style="background:color-mix(in oklch,var(--red) 6%,transparent)"':''}>
         <td>${eventBadge('marketplace_sale',g.id,g.scam_type)}</td>
         <td><span style="font-size:10px;color:var(--muted)">${g.evs.length} items</span></td>
         <td><div style="display:flex;flex-direction:column;gap:2px"><div>${tagList(given,'--red')}</div>${received||bc!=null?`<div>→ ${tagList(received?parseItemList(received):[],'--green')} ${bc!=null?`<span class="text-yellow" style="font-size:10px;font-weight:700">${bc.toLocaleString()} BC</span>`:''}</div>`:''}</div></td>
@@ -1731,13 +1943,14 @@ async function renderEvents(mc) {
       </tr>`
     }
     const e=entry
-    return `<tr>
+    const rowIsOld=isOldHistory(e.item_id,e.timestamp)
+    return `<tr${rowIsOld?' style="background:color-mix(in oklch,var(--red) 6%,transparent)"':''}>
     <td>${eventBadge(e.event_type,e.reason,e.scam_type)}</td>
     <td>
-      <button class="link mono" data-nav="asset/${h(e.item_id)}">${h(e.item_id)}</button>
-      <div class="item-cell" style="margin-top:2px">${itemThumb(evItemMap.get(e.item_id))}<span style="font-size:10px;color:var(--muted)">${h(evItemMap.get(e.item_id)||'—')}</span></div>
+      <button class="link mono" data-action="filter-events" data-key="asset" data-val="${h(e.item_id)}">${h(e.item_id)}</button>
+      <div class="item-cell" style="margin-top:2px">${itemThumb(evItemMap.get(e.item_id)?.item_name)}<span style="font-size:10px;color:var(--muted)">${h(evItemMap.get(e.item_id)?.item_name||'—')}</span></div>
     </td>
-    <td>${detailsCell(e)}</td>
+    <td>${detailsCell(e, evItemMap.get(e.item_id)?.pb_code, evItemMap.get(e.item_id)?.linked_asset_id)}</td>
     <td style="font-size:11px">${h(e.from_holder||e.to_holder||'—')}</td>
     <td>${e.scammed_user?`<span class="text-red">${h(e.scammed_user)}</span>`:'<span class="text-muted">—</span>'}</td>
     <td class="text-muted" style="font-size:10px">${fmtDate(e.timestamp,true)}</td>
@@ -1988,7 +2201,7 @@ async function renderAsset(mc, id) {
           <div class="sum-row"><span class="sum-label">Status</span>${statusBadge(asset.current_status)}</div>
           ${asset.is_duped?`<div class="sum-row"><span class="sum-label">Duped</span><span class="badge badge-zinc">Yes</span></div>`:''}
           ${asset.acquired_via?`<div class="sum-row"><span class="sum-label">Acquired via</span><span>${h({duped:'Duped',hacked:'Hacked',event:'Won (Event)',earned:'Earned',pullback:'Pullback'}[asset.acquired_via]||asset.acquired_via)}</span></div>`:''}
-          ${asset.linked_asset_id?`<div class="sum-row"><span class="sum-label">Linked</span><button class="link mono" data-nav="asset/${h(asset.linked_asset_id)}">${h(asset.linked_asset_id)}</button></div>`:''}
+          ${asset.linked_asset_id?`<div class="sum-row"><span class="sum-label">Linked</span><button class="link mono" data-action="filter-events" data-key="asset" data-val="${h(asset.linked_asset_id)}">${h(asset.linked_asset_id)}</button></div>`:''}
           ${totalBc>0?`<div class="sum-row"><span class="sum-label">Total BC</span><span class="text-yellow">${totalBc.toLocaleString()}</span></div>`:''}
           <div class="sum-row"><span class="sum-label">Scams</span><span class="${scams.length>0?'text-red':''}">${scams.length}</span></div>
           <div class="sum-row"><span class="sum-label">Counted</span><span>${asset.count_in_inventory?'Yes':'No'}</span></div>
@@ -2005,9 +2218,10 @@ async function renderAsset(mc, id) {
 /* — Edit Asset (settings gear, Pullbacks + Inventory + Details) — */
 function openEditAssetModal(assetId, currentHolder, currentStatus, currentDuped, itemName, context, currentItemHolder, currentNotes) {
   const isInv = context === 'inventory'
-  const opts = isInv
-    ? [{v:'active',l:'In Inventory'},{v:'pullbacked',l:'In Inventory (Pulled Back)'},{v:'lost',l:'Lost'}]
-    : [{v:'traded',l:'Ready for Pullback'},{v:'pullbacked',l:'Pulled Back'},{v:'lost',l:'Lost'}]
+  // Same full status set everywhere now — status changes (including back to In Inventory)
+  // shouldn't depend on which page you opened Edit from. doEditAsset already handles
+  // newStatus==='active' generically (logs RESTORED), so no backend change needed for this.
+  const opts = [{v:'active',l:'In Inventory'},{v:'traded',l:'Ready for Pullback'},{v:'pullbacked',l:'Pulled Back'},{v:'lost',l:'Lost'}]
   if (!opts.some(o=>o.v===currentStatus)) opts.unshift({v:currentStatus,l:statusBadge(currentStatus).replace(/<[^>]+>/g,'')})
   const wasNotKept = currentStatus==='pullbacked' && (currentNotes||'').includes('Pulled back for personal use')
   const staysDefaultChecked = currentStatus==='pullbacked' && !wasNotKept
@@ -2020,12 +2234,6 @@ function openEditAssetModal(assetId, currentHolder, currentStatus, currentDuped,
         ${opts.map(o=>`<option value="${o.v}"${o.v===currentStatus?' selected':''}>${o.l}</option>`).join('')}
       </select>
     </div>
-    ${isInv?`<div class="form-group">
-      <div class="check-item" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px" data-action="toggle-import-duped" id="m-edit-duped">
-        <div class="check-box${currentDuped?' checked':''}"></div>
-        <div class="check-info"><div style="font-size:12px">Duped</div></div>
-      </div>
-    </div>`:''}
     ${!isInv?`<div class="form-group" id="m-edit-stays-wrap" style="${currentStatus==='pullbacked'?'':'display:none'}">
       <label>If marking Pulled Back</label>
       <div class="check-item" style="border:1px solid var(--border);border-radius:6px;padding:8px 10px" data-action="toggle-import-duped" id="m-edit-stays">
@@ -2036,13 +2244,15 @@ function openEditAssetModal(assetId, currentHolder, currentStatus, currentDuped,
     <div class="form-group"><label>Notes</label><textarea id="m-notes" rows="2">${h(currentNotes||'')}</textarea></div>`,
   [{label:'Cancel',fn:closeModal},{label:'Save',cls:'btn-primary',fn:async()=>{
     const holder=document.getElementById('m-holder').value.trim()
-    const itemHolder=isInv?undefined:document.getElementById('m-item-holder').value.trim()
     const status=document.getElementById('m-status').value
-    const duped=isInv?document.getElementById('m-edit-duped').querySelector('.check-box').classList.contains('checked'):undefined
+    // Switching back to In Inventory means no more pullback/dupe relationship — clear the
+    // item holder even if the field still has old text in it, don't just trust whatever's
+    // sitting in the input.
+    const itemHolder=isInv?undefined:(status==='active'?'':document.getElementById('m-item-holder').value.trim())
     const staysInInventory=isInv?undefined:document.getElementById('m-edit-stays').querySelector('.check-box').classList.contains('checked')
     if(!holder)return modalError('Holder cannot be empty.')
     setBtn(1,'Saving…',true)
-    try{await doEditAsset(assetId,holder,status,document.getElementById('m-notes').value.trim(),duped,itemHolder,staysInInventory);closeModal();route()}
+    try{await doEditAsset(assetId,holder,status,document.getElementById('m-notes').value.trim(),undefined,itemHolder,staysInInventory);closeModal();route()}
     catch(e){modalError(e.message);setBtn(1,'Save',false)}
   }}])
 }
@@ -2075,14 +2285,19 @@ function openEditScamModal(eventId, ev) {
   window._scamEditId = eventId
   window._scamImportAccount = ev.from_holder || ''
   window._scamImportAssets = []
-  const givenNames = parseItemList(ev.items_given)
+  // For a batched trade (multiple items given), ev.items_given is only that ONE
+  // underlying event row's single item — window._evData never gets the merged
+  // "allGiven" string built for display in renderScammed. window._tradeRowData does
+  // carry the fully expanded given-items list (used by Trade Details), so prefer that
+  // here — otherwise Edit silently dropped every given item but the first row's.
+  const rowData = window._tradeRowData?.get(eventId)
+  const givenNames = rowData?.given?.length ? rowData.given : parseItemList(ev.items_given)
   const receivedNames = parseItemList(ev.items_received)
   window._scamImportGiven = namesToSlots(givenNames)
   window._scamImportReceived = namesToSlots(receivedNames)
   window._scamImportPicker = null
   window._scamImportPickerSearch = ''
   const victimPrefill = ev.scam_type==='friendly' ? ev.to_holder : ev.scammed_user
-  const rowData = window._tradeRowData?.get(eventId)
   window._scamEditNotesItemId = rowData?.claimNotesItemId || null
   window._scamEditPrefill = { victim:victimPrefill||'', bcGiven:ev.bc_given, bcReceived:ev.bc_amount, scamType:ev.scam_type||'traded', notes:(rowData?.claimNotes || ev.notes || ''), bcCounted:!!ev.bc_counted }
   openModal('Edit Trade', '', [{label:'Cancel',fn:closeModal},{label:'Save',cls:'btn-primary',fn:submitScamEdit}], true)
@@ -2576,6 +2791,7 @@ async function openNewAssetModal() {
         <div id="m-item-dropdown" class="ac-dropdown"></div>
       </div>
     </div>
+    <div class="form-group"><label>Aantal <span style="font-weight:400;color:var(--muted)">(hoeveel copies van dit item pullbacken, elk krijgt eigen code)</span></label><input type="number" id="m-pullback-qty" value="1" min="1"></div>
     <div class="form-group"><label>Notes</label><textarea id="m-notes" rows="2"></textarea></div>`,
   [{label:'Cancel',fn:closeModal},{label:'Import',cls:'btn-primary',fn:async()=>{
     const holder=document.getElementById('m-holder').value.trim(), itemHolder=document.getElementById('m-item-holder').value.trim()
@@ -2583,8 +2799,22 @@ async function openNewAssetModal() {
     const picked=(window._pullbackHolderAssets||[]).find(a=>a.id===assetId)
     if(!assetId||!picked)return modalError('Pick an item from the Pullback Holder\'s inventory.')
     if(!holder||!itemHolder)return modalError('Enter pullback holder and item holder.')
-    setBtn(1,'Importing…',true)
-    try{await doCreatePullbackAsset(assetId,picked.item_name,picked.current_holder||holder,itemHolder,document.getElementById('m-notes').value.trim());closeModal();route()}
+    const qty=Math.max(1,parseInt(document.getElementById('m-pullback-qty').value,10)||1)
+    // Same item name can sit on this holder multiple times (separate ss_items rows, each
+    // its own id) — a pullback consumes a real existing row, so qty>1 needs qty DISTINCT
+    // matching rows, not the same one reused. Picked one always goes first (it's the exact
+    // row the user clicked), the rest fill in by item name.
+    const sameNameOthers=(window._pullbackHolderAssets||[]).filter(a=>a.item_name===picked.item_name && a.id!==assetId)
+    const targets=[picked,...sameNameOthers].slice(0,qty)
+    if(targets.length<qty)return modalError(`Only ${targets.length} "${picked.item_name}" available In Inventory for ${holder}, can't pull back ${qty}.`)
+    const notes=document.getElementById('m-notes').value.trim()
+    try{
+      for(let i=0;i<targets.length;i++){
+        setBtn(1,targets.length>1?`Importing… (${i+1}/${targets.length})`:'Importing…',true)
+        await doCreatePullbackAsset(targets[i].id,targets[i].item_name,targets[i].current_holder||holder,itemHolder,notes)
+      }
+      closeModal();route()
+    }
     catch(e){modalError(e.message);setBtn(1,'Import',false)}
   }}])
 }
@@ -2636,14 +2866,27 @@ function openImportItemModal() {
 function openEditEventModal(eventId, ev) {
   ev = ev || {}
   if (ev.event_type === 'marketplace_sale') { openEditScamModal(eventId, ev); return }
+  const oldTo = ev.to_holder || null
   openModal('Edit Event',`
     <div class="form-group"><label>From</label><input type="text" id="m-ev-from" value="${h(ev.from_holder||'')}"></div>
+    <div class="form-group"><label>To</label><input type="text" id="m-ev-to" value="${h(ev.to_holder||'')}"></div>
     <div class="form-group"><label>Notes</label><textarea id="m-notes" rows="3">${h(ev.notes||'')}</textarea></div>`,
   [{label:'Cancel',fn:closeModal},{label:'Save',cls:'btn-primary',fn:async()=>{
     setBtn(1,'Saving…',true)
     try{
-      const patch = { from_holder: document.getElementById('m-ev-from').value.trim()||null, notes: document.getElementById('m-notes').value.trim()||null }
+      const newTo = document.getElementById('m-ev-to').value.trim()||null
+      const patch = { from_holder: document.getElementById('m-ev-from').value.trim()||null, to_holder: newTo, notes: document.getElementById('m-notes').value.trim()||null }
       await sbPatch(`/ss_item_events?id=eq.${encodeURIComponent(eventId)}`, patch)
+      // Fixing a mistyped holder here (e.g. "progamer1" should've been "gheloo3") is
+      // pointless if the actual item still points at the old, wrong name — so when this
+      // event is still the one that last set the item's current holder (current_holder
+      // still equals its OLD "to"), sync the real item too, not just the log text.
+      if (ev.item_id && oldTo && newTo && oldTo!==newTo) {
+        const cur = await sbGet(`/ss_items?id=eq.${encodeURIComponent(ev.item_id)}&select=current_holder`)
+        if (cur?.[0]?.current_holder === oldTo) {
+          await sbPatch(`/ss_items?id=eq.${encodeURIComponent(ev.item_id)}`, { current_holder: newTo })
+        }
+      }
       closeModal();route()
     }catch(e){modalError(e.message);setBtn(1,'Save',false)}
   }}])
@@ -2659,9 +2902,22 @@ function openDeleteEventModal(eventId) {
 }
 
 async function doDeleteEvent(eventId) {
-  const res = await sbGet(`/ss_item_events?id=eq.${encodeURIComponent(eventId)}&select=item_id,reason,event_type,scam_type,trade_code,bc_amount,bc_given,bc_counted,bc_given_counted,from_holder`)
+  const res = await sbGet(`/ss_item_events?id=eq.${encodeURIComponent(eventId)}&select=item_id,reason,event_type,scam_type,trade_code,bc_amount,bc_given,bc_counted,bc_given_counted,from_holder,to_holder`)
   const ev = res?.[0]
-  if (!ev || ev.event_type !== 'marketplace_sale') { await sbDel(`/ss_item_events?id=eq.${encodeURIComponent(eventId)}`); return }
+  if (!ev || ev.event_type !== 'marketplace_sale') {
+    // Deleting a "Moved" log row used to just remove the row — the item's
+    // current_holder stayed at whatever that event had set, silently drifting out of
+    // sync with a Logbook that no longer showed how it got there. Revert it too, but
+    // only if nothing newer already moved the item on (current_holder still matches
+    // this event's own "to").
+    if (ev && (ev.reason==='HOLDER_CHANGE'||ev.reason==='EDITED') && ev.item_id && ev.to_holder) {
+      const cur = await sbGet(`/ss_items?id=eq.${encodeURIComponent(ev.item_id)}&select=current_holder`)
+      if (cur?.[0]?.current_holder === ev.to_holder) {
+        await sbPatch(`/ss_items?id=eq.${encodeURIComponent(ev.item_id)}`, { current_holder: ev.from_holder||null })
+      }
+    }
+    await sbDel(`/ss_item_events?id=eq.${encodeURIComponent(eventId)}`); return
+  }
 
   const materialized = await sbGet(`/ss_items?select=id&notes=eq.${encodeURIComponent('Received from trade #'+(ev.trade_code||eventId))}`).catch(()=>null) || []
   for (const m of materialized) await doDeleteAsset(m.id)
@@ -2782,7 +3038,7 @@ function renderTradeDetailModal(eventId) {
     const holderDisplay = (holder && itemHolder && holder!==itemHolder) ? `${h(holder)} <span class="text-muted">→</span> ${h(itemHolder)}` : h(holder||itemHolder||'—')
     return `
       <div class="sum-row"><span class="sum-label">Item</span><strong>${h(name)}</strong></div>
-      ${ss?`<div class="sum-row"><span class="sum-label">SS ID</span><button class="link mono" data-nav="asset/${h(ss)}">${h(ss)}</button></div>`:''}
+      ${ss?`<div class="sum-row"><span class="sum-label">SS ID</span><button class="link mono" data-action="filter-events" data-key="asset" data-val="${h(ss)}">${h(ss)}</button></div>`:''}
       ${pb?`<div class="sum-row"><span class="sum-label">PB ID</span><button class="link mono text-orange" data-action="filter-events" data-key="pb" data-val="${h(pb)}">${h(pb)}</button></div>`:''}
       <div class="sum-row"><span class="sum-label">Item Holder</span><strong>${holderDisplay}</strong></div>
       <div class="sum-row"><span class="sum-label">Status</span>${status?statusBadge(status):'<span class="text-muted">—</span>'}</div>`
@@ -2790,13 +3046,24 @@ function renderTradeDetailModal(eventId) {
 
   let infoHtml = '<div class="text-muted" style="font-size:12px;text-align:center;padding:12px 0">Click an item to see what the Pullbacks tab has on it.</div>'
   if (activeName) {
-    if (activeName === a.item_name) {
+    // A slot with qty>1 (same item given multiple times) groups every occurrence into
+    // one clickable box — matching only the first "given" index (or, worse, always
+    // short-circuiting to the trade's own anchor item whenever its name happened to
+    // match) meant a x3 Typemachine slot showed just 1 SS/PB ID, always the same one.
+    // Collect every matching index instead — givenInfo already resolves each entry's
+    // real SS ID individually (including following is_duped -> linked_asset_id), so
+    // this naturally covers the anchor's own slot too, not just the other copies.
+    const infos = []
+    given.forEach((n,i) => { if (n===activeName && givenInfo?.[i]) infos.push(givenInfo[i]) })
+    if (infos.length) {
+      infoHtml = infos.map(info => buildInfo(activeName, info.ss, info.pb, info.holder, info.itemHolder, info.status)).join('<div style="height:1px;background:var(--border);margin:10px 0"></div>')
+    } else if (activeName === a.item_name) {
+      // Fallback for acquisition-type trades (bought/earned/hacked) — these have no
+      // "given" side at all, so the received/acquired item can only be resolved via
+      // the trade's own anchor asset, never via the given-list lookup above.
       infoHtml = buildInfo(a.item_name, ssId||a.id, pbCode, pullbackHolder, a.item_holder, a.current_status)
     } else {
-      const idx = given.indexOf(activeName)
-      const info = idx!==-1 ? givenInfo?.[idx] : null
-      infoHtml = info ? buildInfo(activeName, info.ss, info.pb, info.holder, info.itemHolder, info.status)
-        : `<div class="text-muted" style="font-size:12px;text-align:center;padding:12px 0">No pullback record tracked for "${h(activeName)}" specifically.</div>`
+      infoHtml = `<div class="text-muted" style="font-size:12px;text-align:center;padding:12px 0">No pullback record tracked for "${h(activeName)}" specifically.</div>`
     }
   }
 
@@ -2881,20 +3148,40 @@ async function doCreateAsset(itemName, holder, notes, acquiredVia, hackedFrom, b
 }
 
 async function doCreatePullbackAsset(assetId, itemName, pullbackHolder, itemHolder, notes) {
+  // If the account that's supposed to be physically holding this (itemHolder) is
+  // already banned, there's no realistic path to recover it — creating a fresh
+  // "active, trackable" duped copy under a banned account (as doBanHolder never ran
+  // against an item that didn't exist yet at ban time) just leaves a phantom
+  // available-looking item sitting there forever. Both halves start Lost instead.
+  const bannedRows = await sbGet('/banned_holders?select=holder').catch(()=>null) || []
+  const bannedSet = new Set(bannedRows.map(r=>(r.holder||'').toLowerCase()))
+  const itemHolderBanned = isBanned(bannedSet, itemHolder)
+
   const pbCode = await generatePbCode()
-  await sbPatch(`/ss_items?id=eq.${encodeURIComponent(assetId)}`, {item_holder:itemHolder,current_status:'traded',count_in_inventory:false,notes:notes||null,pb_code:pbCode})
+  const claimStatus = itemHolderBanned ? 'lost' : 'traded'
+  await sbPatch(`/ss_items?id=eq.${encodeURIComponent(assetId)}`, {item_holder:itemHolder,current_status:claimStatus,count_in_inventory:false,notes:notes||null,pb_code:pbCode})
   await sbPost('/ss_item_events',{item_id:assetId,event_type:'dupe',from_holder:pullbackHolder,to_holder:itemHolder,notes:notes||null})
+  // "(was: traded)" matches the same pattern doUnbanHolder looks for, so unbanning
+  // itemHolder later auto-restores this claim instead of leaving it stuck Lost.
+  if (itemHolderBanned) await sbPost('/ss_item_events',{item_id:assetId,event_type:'manual_update',reason:'LOST',from_holder:itemHolder,notes:`Item Holder ${itemHolder} already banned at pullback creation (was: traded)`})
 
   const dupedId=await generateAssetId()
-  await sbPost('/ss_items',{id:dupedId,item_name:itemName,current_holder:itemHolder,current_status:'active',count_in_inventory:true,is_duped:true,linked_asset_id:assetId,notes:`Duped copy of ${assetId}`})
+  const dupedStatus = itemHolderBanned ? 'lost' : 'active'
+  await sbPost('/ss_items',{id:dupedId,item_name:itemName,current_holder:itemHolder,current_status:dupedStatus,count_in_inventory:!itemHolderBanned,is_duped:true,linked_asset_id:assetId,notes:`Duped copy of ${assetId}`})
   await sbPost('/ss_item_events',{item_id:dupedId,event_type:'manual_update',reason:'DUPED_LOG',to_holder:itemHolder,notes:`Duped copy of ${assetId}`})
+  if (itemHolderBanned) await sbPost('/ss_item_events',{item_id:dupedId,event_type:'manual_update',reason:'LOST',from_holder:itemHolder,notes:`Item Holder ${itemHolder} already banned at pullback creation (was: active)`})
 }
 
 async function doChangeHolder(assetId, newHolder, notes) {
   const res=await sbGet(`/ss_items?id=eq.${encodeURIComponent(assetId)}&select=current_holder`)
   const prev=res?.[0]?.current_holder
   await sbPatch(`/ss_items?id=eq.${encodeURIComponent(assetId)}`,{current_holder:newHolder})
-  await sbPost('/ss_item_events',{item_id:assetId,event_type:'manual_update',reason:'HOLDER_CHANGE',from_holder:prev||null,to_holder:newHolder,notes:notes||null})
+  // Logged as EDITED, not a "Moved"/trade-flavored event — Change Holder is a manual
+  // correction tool (typos, admin fixes), not how a real transfer between two accounts
+  // should be recorded (that's Friendly Transfer, which properly logs a trade). Calling
+  // it "Moved" made a plain data fix look like an actual in-game handoff happened.
+  const combinedNotes=[`Holder: ${prev||'—'} → ${newHolder}`, notes||null].filter(Boolean).join(' | ')
+  await sbPost('/ss_item_events',{item_id:assetId,event_type:'manual_update',reason:'EDITED',from_holder:prev||null,to_holder:newHolder,notes:combinedNotes})
 }
 
 async function doEditAsset(assetId, newHolder, newStatus, notes, newDuped, newItemHolder, staysInInventory, personalUseNote) {
@@ -2997,8 +3284,14 @@ async function doDeleteAsset(assetId) {
 
 async function doBanHolder(holder) {
   await sbUpsert('/banned_holders?on_conflict=holder', { holder })
-  const items = await sbGet(`/ss_items?select=id,current_status,is_duped&current_holder=eq.${encodeURIComponent(holder)}&current_status=in.(active,pullbacked,traded)`) || []
+  const items = await sbGet(`/ss_items?select=id,current_status,is_duped,item_holder&current_holder=eq.${encodeURIComponent(holder)}&current_status=in.(active,pullbacked,traded)`) || []
   for (const item of items) {
+    // current_holder on a pullback claim is whoever is TRACKING the recovery, not who
+    // physically has the item — that's item_holder. Banning the tracker shouldn't mark
+    // the item Lost when it's still genuinely sitting in someone else's real inventory,
+    // untouched by this ban (already skipped duped claims in 'traded'; a non-duped
+    // claim with item_holder set is the exact same situation and was wrongly missed).
+    if (item.item_holder) continue
     if (item.is_duped && item.current_status === 'traded') continue
     await doMarkLost(item.id, `Account banned (was: ${item.current_status})`)
   }

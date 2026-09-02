@@ -137,8 +137,15 @@
   function _esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function _nextId() { return _blueprints.reduce((m, b) => Math.max(m, b.id || 0), 0) + 1; }
 
+  // Ring buffer behind the header's Bug Log button — lets the user grab exactly what
+  // happened during a run (timestamps + every _log message) and send it over, instead of
+  // trying to describe or screenshot a wall of console output.
+  const _debugLog = [];
+  const DEBUG_LOG_MAX = 1000;
   function _log(msg) {
     console.log('[RoomClone]', msg);
+    _debugLog.push('[' + new Date().toISOString().slice(11, 23) + '] ' + msg);
+    if (_debugLog.length > DEBUG_LOG_MAX) _debugLog.shift();
   }
 
   function _outId(name) {
@@ -520,14 +527,17 @@
   // Apply always asks the server for a fresh inventory first (RequestFurniInventory)
   // instead of trusting whatever window.Inventory happened to hold — this listener
   // fires _applyBlueprintNow once that fresh FurniList (all pages) has landed.
-  let _pendingApplyId = null, _pendingApplyTimer = null, _pendingApplyRetry = false, _pendingApplyIncludeWalls = false;
+  let _pendingApplyId = null, _pendingApplyTimer = null, _pendingApplyRetry = false, _pendingApplyIncludeWalls = false, _pendingApplyOnComplete = null, _pendingApplyOffset = null, _pendingApplyReconstructAbsolute = false;
   window.onPacket('FurniList', function(p) {
     if (_pendingApplyId === null || !p.parsed) return;
     if ((p.parsed.pageIndex + 1) < p.parsed.totalPages) return;
-    const id = _pendingApplyId, retry = _pendingApplyRetry, includeWalls = _pendingApplyIncludeWalls;
+    const id = _pendingApplyId, retry = _pendingApplyRetry, includeWalls = _pendingApplyIncludeWalls, onComplete = _pendingApplyOnComplete, offset = _pendingApplyOffset, reconstructAbsolute = _pendingApplyReconstructAbsolute;
     _pendingApplyId = null;
+    _pendingApplyOnComplete = null;
+    _pendingApplyOffset = null;
+    _pendingApplyReconstructAbsolute = false;
     if (_pendingApplyTimer) { clearTimeout(_pendingApplyTimer); _pendingApplyTimer = null; }
-    _applyBlueprintNow(id, retry, includeWalls);
+    _applyBlueprintNow(id, retry, includeWalls, onComplete, offset, reconstructAbsolute);
   });
 
   // Area capture — drives the real client's OWN native area-selection tool
@@ -869,13 +879,14 @@
 
   function confirmBuildAnchor(id) {
     if (_buildAnchorId !== id || !_buildPreviewOffset) return;
+    const offset = _buildPreviewOffset; // captured before clearing — this is an area build, offset is real and belongs to this one placement only
     _setWalkBlocked(false);
     _buildAnchorId = null;
     _buildPreviewOn = false;
     _buildPreviewOffset = null;
     _clearBuildPreview();
     _renderBuildTab();
-    applyBlueprint(id);
+    applyBlueprint(id, undefined, undefined, undefined, offset);
   }
 
   window.onPacket('RoomReady', function() { _setWalkBlocked(false); _buildAnchorId = null; _buildPreviewOn = false; _buildPreviewOffset = null; _clearBuildPreview(); });
@@ -884,7 +895,6 @@
     const blueprint = _blueprints.find(function(b) { return b.id === _buildAnchorId; });
     if (!blueprint || !blueprint.areaOrigin) { _setWalkBlocked(false); _buildAnchorId = null; _buildPreviewOn = false; _clearBuildPreview(); return; }
     _buildPreviewOffset = { dx: p.parsed.x - blueprint.areaOrigin.x, dy: p.parsed.y - blueprint.areaOrigin.y };
-    blueprint._buildOffset = _buildPreviewOffset;
     const count = _spawnBuildPreview(blueprint, _buildPreviewOffset);
     _log('Preview: ' + count + ' item(s) at (' + p.parsed.x + ',' + p.parsed.y + ') — click elsewhere to move it, Clear Preview to stop, or Build to place.');
     _renderBuildTab();
@@ -894,7 +904,71 @@
   // Progress bar + ETA while a blueprint is being placed. The full placement timeline
   // is already known synchronously right after scheduling (every item's setTimeout
   // delay is computed up front), so "total time" is exact, not a guess.
-  let _applyProgress = null; // { id, done, total, startedAt, totalMs, timer }
+  let _applyProgress = null; // { id, done, total, startedAt, totalMs, timer, statusText }
+
+  // Placement watchdog — same core idea as room-deleter.js: track every placement we sent
+  // by its inventory item id, resend whatever's still pending round after round, with no
+  // fixed round cap, until the map's empty, Abort/skip-ahead is hit, or 3 rounds in a row
+  // land zero new confirmations (see _confirmPendingPlacements) — resending clearly isn't
+  // working at that point, so it stops churning instead of spinning forever.
+  //
+  // What actually clears an entry is ObjectAdd — the server's live broadcast of a floor
+  // item newly appearing in the room (real capture: {in:ObjectAdd}{i:id}{i:typeId}{i:x}
+  // {i:y}{i:facing}{s:z}{s:sizeZ}...), matched against _placedFloorRecords below. This is
+  // the ONE packet that tells us both "did it actually place" AND "exactly where" in a
+  // single shot — FurniListRemove only proves the item left the inventory, not that it
+  // landed on the right tile (or landed at all, if it got swapped for a trade/etc.), which
+  // made the old end-of-run window.Room.floorItems poll unreliable: floorItems is keyed by
+  // ObjectAdd's own room-instance id, which is a DIFFERENT number from the inventory item
+  // id used here, so looking it up by invItem.id never matched real placements at all.
+  // FurniListRemove is kept only as a secondary nudge to stop resending an item that's
+  // known to have left the inventory even if its ObjectAdd got missed.
+  let _pendingPlacements = null; // Map<id, {z, state, send}>
+  let _placedFloorRecords = []; // [{id, typeId, x, y, z, state, facing, confirmed, landedX, landedY}]
+  window.onPacket('FurniListRemove', function(p) {
+    if (!_pendingPlacements || !p.parsed) return;
+    _pendingPlacements.delete(p.parsed.itemId);
+  });
+  window.onPacket('ObjectAdd', function(p) {
+    if (!_placedFloorRecords.length || !p.parsed) return;
+    const f = p.parsed;
+    // Exact (typeId, x, y) match first — the normal case, landed exactly where asked.
+    let rec = _placedFloorRecords.find(function(r) { return !r.confirmed && r.typeId === f.typeId && r.x === f.x && r.y === f.y; });
+    if (!rec) {
+      // No exact match — fall back to the oldest still-unconfirmed record of the same
+      // type. Covers the item landing on a DIFFERENT tile than requested (blocked/
+      // occupied destination): still recognized as "placed, just on the wrong tile"
+      // instead of silently never resolving and getting endlessly resent.
+      rec = _placedFloorRecords.find(function(r) { return !r.confirmed && r.typeId === f.typeId; });
+    }
+    if (!rec) return;
+    rec.confirmed = true;
+    rec.landedX = f.x;
+    rec.landedY = f.y;
+    rec.landedZ = f.z;
+    rec.landedFacing = f.facing;
+    const stateStr = f.stuff && f.stuff.state;
+    rec.landedState = (stateStr !== undefined && stateStr !== null && stateStr !== '') ? parseInt(stateStr, 10) : 0;
+    rec.roomId = f.id; // the room-instance id — needed for PickupObject, distinct from rec.id (the inventory item id)
+    if (_pendingPlacements) _pendingPlacements.delete(rec.id);
+  });
+
+  // Pickup watchdog for the position fix-up pass below — confirms via UnseenItems, which
+  // reliably fires even under lag, unlike waiting on the room's own removal broadcast.
+  // Format confirmed from a real capture: {in:UnseenItems}{i:1}{i:1}{i:1}{i:itemId} — only
+  // the last int (itemId) matters here.
+  let _pendingPickups = null; // Map<id, true>
+  window.onPacket('UnseenItems', function(p) {
+    if (!_pendingPickups || !p.raw) return;
+    try {
+      const r = window.makeReader(p.raw);
+      r.int(); r.int(); r.int();
+      const itemId = r.int();
+      _pendingPickups.delete(itemId);
+    } catch (e) {}
+  });
+  const PLACEMENT_CONFIRM_GRACE_MS = 2500;
+  const PLACEMENT_RETRY_GRACE_MS   = 1500;
 
   function _startApplyProgress(id, total, totalMs) {
     if (_applyProgress && _applyProgress.timer) clearInterval(_applyProgress.timer);
@@ -934,6 +1008,21 @@
   // immediately, so every still-pending callback (which can't see _buyProgress anymore
   // once it's null) can still tell it was aborted and skip sending.
   const _buyAbortedIds = new Set();
+
+  // Manual escape hatch for a retry loop that's stuck — unlimited retries mean a
+  // placement that will never confirm (e.g. server silently rejecting a resend) hangs
+  // forever instead of failing loudly. Pressing "Next step" stops the CURRENT
+  // confirm/retry wait (checked in _confirmPendingPlacements) and lets the run fall
+  // through to whatever comes next — the position check picks up and re-places anything
+  // still unconfirmed same as a genuinely-misplaced item, then Build Floor + Wall moves
+  // on to applying the real floor. Only flagged per-call (reset at the top of
+  // _confirmPendingPlacements), so it can be pressed again if a later wait also hangs.
+  function skipRetryToNextStep(id) {
+    if (_applyProgress && _applyProgress.id === id) {
+      _applyProgress.skipRetry = true;
+      _log('Skipping retries for blueprint #' + id + ' — picking up unconfirmed item(s) now.');
+    }
+  }
 
   function abortBuild(id) {
     if (_applyProgress && _applyProgress.id === id) _applyProgress.aborted = true;
@@ -1072,6 +1161,37 @@
     _sendFloorPropertiesAndBuild(id);
   }
 
+  // Fixed 64x64 all-height-0 floor, no voids — sent as the intermediate flat floor before
+  // every "Build Floor + Wall" placement, regardless of the blueprint's own captured
+  // shape/dimensions. Guarantees every tile a blueprint could ever need is present and
+  // placeable even if the target room currently has floor missing under part of it, and
+  // gives placement a known (0) destination terrain everywhere to reconstruct absolute
+  // heights against (see _effectiveZ above).
+  const BIG_FLAT_FLOOR_PLAN = new Array(64).fill('0'.repeat(64)).join('\n');
+
+  function _sendUpdateFloorProperties(ufpId, floorPlan, fp) {
+    const doorX = fp.doorX != null ? fp.doorX : 0;
+    const doorY = fp.doorY != null ? fp.doorY : 0;
+    const doorDir = fp.doorDir != null ? fp.doorDir : 2;
+    const wallThickness = fp.wallThickness != null ? fp.wallThickness : 0;
+    const floorThickness = fp.floorThickness != null ? fp.floorThickness : 0;
+    const wallHeight = fp.wallHeight != null ? fp.wallHeight : -1;
+    window.sendPacket('OUT', ufpId,
+      '{s:"' + _escapeExprString(floorPlan) + '"}' +
+      '{i:' + doorX + '}{i:' + doorY + '}{i:' + doorDir + '}' +
+      '{i:' + wallThickness + '}{i:' + floorThickness + '}{i:' + wallHeight + '}');
+  }
+
+  // Three phases: (1) flat (height-0) floor, same shape as captured — a known, always-
+  // placeable destination terrain; (2) place every floor/wall item, with each floor item's
+  // KamerConstructieTool height reconstructed back to its true captured absolute value
+  // (_effectiveZ: stored z + the SOURCE room's terrain height at that tile — see
+  // captureRoom) since destination terrain is 0 everywhere right now, so sending that
+  // reconstructed value directly reproduces the original absolute height exactly; (3) only
+  // once everything is confirmed placed, send the REAL captured floor plan to restore the
+  // actual terrain shape — safe to do after the fact, since a furni's height is baked in as
+  // an absolute value at PLACEMENT time, not live-recomputed off current terrain, so this
+  // reshape doesn't move anything that's already down.
   function _sendFloorPropertiesAndBuild(id) {
     const blueprint = _blueprints.find(function(b) { return b.id === id; });
     if (!blueprint || !blueprint.floorProps) return;
@@ -1082,35 +1202,31 @@
     // Diagnostic: prove which blueprint's floor data is actually going out — room id +
     // row count — before trusting whether this is a stale-capture bug or a wrong-card click.
     _log('Floor data for "' + blueprint.name + '" (captured room #' + blueprint.roomId + '): ' + String(fp.floorPlan || '').split(/\r\n|\r|\n/).length + ' row(s).');
-    const doorX = fp.doorX != null ? fp.doorX : 0;
-    const doorY = fp.doorY != null ? fp.doorY : 0;
-    const doorDir = fp.doorDir != null ? fp.doorDir : 2;
-    const wallThickness = fp.wallThickness != null ? fp.wallThickness : 0;
-    const floorThickness = fp.floorThickness != null ? fp.floorThickness : 0;
-    const wallHeight = fp.wallHeight != null ? fp.wallHeight : -1;
 
-    window.sendPacket('OUT', ufpId,
-      '{s:"' + _escapeExprString(fp.floorPlan) + '"}' +
-      '{i:' + doorX + '}{i:' + doorY + '}{i:' + doorDir + '}' +
-      '{i:' + wallThickness + '}{i:' + floorThickness + '}{i:' + wallHeight + '}');
+    const flatPlan = BIG_FLAT_FLOOR_PLAN;
+    _sendUpdateFloorProperties(ufpId, flatPlan, fp);
+    _log('Sent a flat (height 0) version of the floor shape first — placing floor + wall items on it shortly, then applying the real captured floor afterward.');
 
-    _log('Sent floor plan + wall height for "' + blueprint.name + '" — reshapes this room to match (only works if you own it). Placing floor + wall items shortly...');
-
-    // Diagnostic: the server rebroadcasts FloorHeightMap after a successful save — check
-    // a moment later whether window.Room.floorPlan (now whatever the server confirmed)
-    // actually matches what we sent, so a silent server-side rejection shows up in the
-    // log instead of just looking like "nothing happened".
-    const sentPlan = fp.floorPlan;
     setTimeout(function() {
       const got = window.Room && window.Room.floorPlan;
-      if (got === sentPlan) _log('Floor plan confirmed by server — matches what was sent.');
-      else _log('Floor plan NOT confirmed — server still reports a different plan than what was sent (rejected or ignored the change).');
+      if (got !== flatPlan) _log('Flat floor NOT confirmed — server still reports a different plan (rejected or ignored). Placement below may still land wrong.');
     }, 1000);
 
     // isRetry=true: the missing-item decision already happened in applyFloorProperties,
     // so this skips straight to placement instead of showing the warning a second time.
+    // reconstructAbsolute=true: see _effectiveZ — heights get reconstructed for this flat
+    // destination instead of sent as the raw source-relative stored value.
     setTimeout(function() {
-      applyBlueprint(id, true, true);
+      applyBlueprint(id, true, true, function() {
+        _sendUpdateFloorProperties(ufpId, fp.floorPlan, fp);
+        _log('All items placed — now applying the real captured floor plan for "' + blueprint.name + '".');
+        const sentPlan = fp.floorPlan;
+        setTimeout(function() {
+          const got = window.Room && window.Room.floorPlan;
+          if (got === sentPlan) _log('Real floor plan confirmed by server — matches what was captured.');
+          else _log('Real floor plan NOT confirmed — server still reports a different plan than what was sent (rejected or ignored the change).');
+        }, 1000);
+      }, null, true);
     }, 1500);
   }
 
@@ -1123,29 +1239,34 @@
     _log('Visiting room #' + blueprint.roomId + ' ("' + blueprint.name + '")...');
   }
 
-  function applyBlueprint(id, isRetry, includeWalls) {
+  function applyBlueprint(id, isRetry, includeWalls, onComplete, offset, reconstructAbsolute) {
     const blueprint = _blueprints.find(function(b) { return b.id === id; });
     if (!blueprint) return;
     if (!window.Room || !window.Room.id) { _log('Enter the target room first.'); return; }
 
     const reqId = _outId('RequestFurniInventory');
-    if (reqId === null) { _log('RequestFurniInventory not found in PKT — using current inventory instead.'); _applyBlueprintNow(id, isRetry, includeWalls); return; }
+    if (reqId === null) { _log('RequestFurniInventory not found in PKT — using current inventory instead.'); _applyBlueprintNow(id, isRetry, includeWalls, onComplete, offset, reconstructAbsolute); return; }
 
     _pendingApplyId = id;
     _pendingApplyRetry = !!isRetry;
     _pendingApplyIncludeWalls = !!includeWalls;
+    _pendingApplyOnComplete = onComplete || null;
+    _pendingApplyOffset = offset || null;
+    _pendingApplyReconstructAbsolute = !!reconstructAbsolute;
     window.sendPacket('OUT', reqId, '');
     _log('Requesting fresh inventory before applying...');
     if (_pendingApplyTimer) clearTimeout(_pendingApplyTimer);
     _pendingApplyTimer = setTimeout(function() {
       if (_pendingApplyId !== id) return;
       _pendingApplyId = null;
+      _pendingApplyOnComplete = null;
+      _pendingApplyOffset = null;
       _log('Inventory refresh timed out — applying with what we have.');
-      _applyBlueprintNow(id, isRetry, includeWalls);
+      _applyBlueprintNow(id, isRetry, includeWalls, onComplete, offset, reconstructAbsolute);
     }, 6000);
   }
 
-  function _applyBlueprintNow(id, isRetry, includeWalls) {
+  function _applyBlueprintNow(id, isRetry, includeWalls, onComplete, offset, reconstructAbsolute) {
     const blueprint = _blueprints.find(function(b) { return b.id === id; });
     if (!blueprint) return;
     if (!window.Room || !window.Room.id) { _log('Enter the target room first.'); return; }
@@ -1162,7 +1283,7 @@
         const totalMissingItems = stillMissing.reduce(function(s, m) { return s + m.count; }, 0);
         _showMissingWarning(totalMissingItems,
           function() { buyMissing(id, true, includeWalls); },
-          function() { _applyBlueprintNow(id, true, includeWalls); });
+          function() { _applyBlueprintNow(id, true, includeWalls, onComplete, offset, reconstructAbsolute); });
         return;
       }
     }
@@ -1201,17 +1322,15 @@
     // Either property can be left inactive (flag 0) to leave it untouched. It's a normal
     // packet, not chat, so there's no flood mute and no need to wait for it to "land"
     // before placing — it can fire right alongside PlaceObject.
-    function _sendConstructionTool(height, state) {
-      const heightActive = height !== null ? 1 : 0;
-      const heightScaled = height !== null ? Math.round(height * 100) : 0;
-      const stateActive = state !== null ? 1 : 0;
-      const stateVal = state !== null ? state : 0;
-      window.sendPacket('OUT', kctId,
-        '{b:' + heightActive + '}{i:' + heightScaled + '}' +
-        '{i:0}{b:0}' +
-        '{b:' + stateActive + '}{b:0}{b:0}{b:0}{b:' + stateVal + '}' +
-        '{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{b:0}{b:0}' +
-        '{b:false}{b:false}');
+    // Only used when reconstructAbsolute is set (Build Floor + Wall's flat-first phase):
+    // desired.z is stored relative to the SOURCE room's terrain at that tile (see
+    // captureRoom's comment), so on a destination that's been flattened to 0, sending it
+    // as-is would land items at (source-absolute − source-terrain) instead of their real
+    // captured height. Adding the source terrain back reconstructs the true absolute
+    // height, which is exactly right once the destination is flat everywhere.
+    function _effectiveZ(desired, reconstructAbsolute) {
+      if (!reconstructAbsolute || !blueprint.floorProps || !blueprint.floorProps.floorPlan) return desired.z;
+      return desired.z + _terrainHeightAt(blueprint.floorProps.floorPlan, desired.x, desired.y);
     }
 
     // Dry-run (no sending, no waiting) over the exact same walk, purely to know up front
@@ -1267,7 +1386,7 @@
       _renderBlueprints();
     }
 
-    if (placed === 0) return;
+    if (placed === 0) { if (onComplete) onComplete(); return; }
     _startApplyProgress(id, placed, estimatedMs);
 
     // Real placement — genuinely sequential with await, not a burst of pre-computed
@@ -1277,10 +1396,14 @@
     // matches that script's defaults (state/edit delay 210ms, place delay 95ms).
     const realPools = _buildInventoryPools();
     // Area blueprints get placed relative to a user-picked anchor tile instead of their
-    // original captured coordinates (see toggleBuildPreview) — full-room blueprints
-    // have no offset and place at their exact original x/y as before.
-    const offX = blueprint._buildOffset ? blueprint._buildOffset.dx : 0;
-    const offY = blueprint._buildOffset ? blueprint._buildOffset.dy : 0;
+    // original captured coordinates (see toggleBuildPreview) — full-room blueprints have
+    // no offset and place at their exact original x/y. This has to come from the explicit
+    // `offset` param, not a property stuck on the blueprint object — that used to persist
+    // across calls, so a full-room "Build Floor + Wall" run after an earlier area-preview
+    // build of the SAME blueprint would silently inherit that anchor's offset and shift
+    // every item's x/y by it.
+    const offX = offset ? offset.dx : 0;
+    const offY = offset ? offset.dy : 0;
     (async function() {
       // Cold-start race: the very first height/state packets fired right after the
       // RequestFurniInventory/FurniList wait were landing wrong while later ones in the
@@ -1288,15 +1411,18 @@
       // settle before the real placement begins.
       await _sleep(1000);
 
+      _pendingPlacements = new Map();
+      _placedFloorRecords = [];
       let lastSignature = '';
       for (let ii = 0; ii < orderedFloorItems.length; ii++) {
         if (_applyProgress && _applyProgress.id === id && _applyProgress.aborted) break;
         const desired = orderedFloorItems[ii];
         const state = desired.state || 0;
-        const signature = desired.z + '|' + state;
+        const z = _effectiveZ(desired, reconstructAbsolute);
+        const signature = z + '|' + state;
 
         if (kctId !== null && signature !== lastSignature) {
-          _sendConstructionTool(desired.z, state);
+          _sendConstructionTool(kctId, z, state);
           lastSignature = signature;
           await _sleep(210);
         }
@@ -1308,7 +1434,29 @@
         // Snapshot BEFORE sending so the wait below can tell "this placement's new item"
         // apart from anything already in the room with the same typeId/tile.
         const knownIds = desired.colorData && colorId !== null ? new Set(Object.keys(window.Room.floorItems || {}).map(Number)) : null;
-        window.sendPacket('OUT', pid, '{s:"' + invItem.placementId + ' ' + placeX + ' ' + placeY + ' ' + Math.round(desired.facing || 0) + '"}');
+        const facing = Math.round(desired.facing || 0);
+        const sendFloorPlace = function() {
+          window.sendPacket('OUT', pid, '{s:"' + invItem.placementId + ' ' + placeX + ' ' + placeY + ' ' + facing + '"}');
+        };
+        // z/state travel with the entry so a retry round (which can batch items from
+        // several different original signatures together) still re-arms the construction
+        // tool to the RIGHT height/state for each item before resending it, instead of
+        // reusing whatever the tool happened to last be set to mid-run.
+        //
+        // Keyed by invItem.id, not invItem.placementId — FurniListRemove (the success
+        // signal below, fired when a placed item leaves the inventory) reports itemId
+        // matching `id` (confirmed by core/parsers.js's own FurniListRemove handler, which
+        // deletes from window.Inventory.items using that same value, and that map is keyed
+        // by id). Keying this by placementId meant a successful placement's confirmation
+        // almost never matched, so it sat "pending" and got needlessly resent every retry
+        // round regardless of already having landed.
+        _pendingPlacements.set(invItem.id, { z: kctId !== null ? z : null, state: kctId !== null ? state : null, send: sendFloorPlace });
+        // Kept separately from _pendingPlacements (which gets entries deleted the moment
+        // they're confirmed) — the post-placement position check below needs every floor
+        // item's intended tile, including ones already confirmed placed. confirmed/landedX/
+        // landedY are filled in live by the ObjectAdd listener above.
+        _placedFloorRecords.push({ id: invItem.id, typeId: desired.typeId, x: placeX, y: placeY, z, state, facing, confirmed: false, landedX: null, landedY: null, landedZ: null, landedFacing: null, landedState: null, roomId: null });
+        sendFloorPlace();
         _tickApplyProgress(id);
         await _sleep(95);
 
@@ -1333,22 +1481,373 @@
         const invItem = pool && pool.length ? pool.shift() : null;
         if (!invItem) continue; // already accounted for in the dry-run missing report
         const wallStr = invItem.placementId + ' ' + desired.location;
-        window.sendPacket('OUT', pid, '{s:"' + wallStr + '"}');
+        const sendWallPlace = function() {
+          window.sendPacket('OUT', pid, '{s:"' + wallStr + '"}');
+        };
+        _pendingPlacements.set(invItem.id, { z: null, state: null, send: sendWallPlace }); // keyed by id, not placementId — see the floor-item _pendingPlacements.set above
+        sendWallPlace();
         _log('Wall placed: ' + _typeName(desired.typeId) + ' — "' + wallStr + '"');
         _tickApplyProgress(id);
         await _sleep(95);
       }
 
+      await _confirmPendingPlacements(id, kctId);
+      _pendingPlacements = null;
+
+      // Position check: everything that's confirmed placed has actually left the
+      // inventory, but that doesn't guarantee it landed on the RIGHT tile/height/state/
+      // rotation (blocked destinations, dropped packets, etc.). One fix-up pass isn't
+      // necessarily the end of it either — a re-place can itself land wrong the same way
+      // the original one did — so this keeps re-checking and re-fixing round after round
+      // until a round finds nothing wrong, two rounds in a row make no improvement (truly
+      // stuck — no point burning more rounds on it), Abort is hit, or a round cap is hit as
+      // a hard backstop. Only worth doing at all if the run wasn't aborted in the first
+      // place — an abort already left items unplaced on purpose.
+      const FIXUP_MAX_ROUNDS = 5;
+      if (!(_applyProgress && _applyProgress.id === id && _applyProgress.aborted)) {
+        let fixRound = 0;
+        let lastWrongCount = -1;
+        while (fixRound < FIXUP_MAX_ROUNDS && !(_applyProgress && _applyProgress.id === id && _applyProgress.aborted)) {
+          fixRound++;
+          let wrongCount;
+          try {
+            // A throw anywhere in the fix-up pass must not strand the run on "Fixing N…"
+            // forever with the construction tool left armed and no more packets ever going
+            // out — catch it here as a last resort so cleanup below still runs either way.
+            wrongCount = await _verifyAndFixPositions(id, pid, kctId, reconstructAbsolute);
+          } catch (e) {
+            _log('Position/state fix-up pass hit an error (' + (e && e.message ? e.message : e) + ') — stopped early, some items may still be wrong.');
+            break;
+          }
+          if (!wrongCount) {
+            if (fixRound > 1) _log('Everything confirmed exactly as asked after ' + fixRound + ' fix-up round(s).');
+            break;
+          }
+          if (wrongCount === lastWrongCount) {
+            _log(wrongCount + ' item(s) still not confirmed correctly after fix-up round ' + fixRound + ' with no improvement over the last — stopping.');
+            break;
+          }
+          lastWrongCount = wrongCount;
+          if (fixRound >= FIXUP_MAX_ROUNDS) {
+            _log(wrongCount + ' item(s) still not confirmed correctly after ' + FIXUP_MAX_ROUNDS + ' fix-up round(s) — stopping.');
+          }
+        }
+      }
+      if (_applyProgress && _applyProgress.id === id) _applyProgress.statusText = null;
+
       // Turn height/state back off once everything's placed, so the tool doesn't stay
       // armed and affect whatever gets placed next (manually or by a later apply run).
       if (kctId !== null) {
-        _sendConstructionTool(null, null);
+        _sendConstructionTool(kctId, null, null);
         await _sleep(210);
-        _sendConstructionTool(null, null);
+        _sendConstructionTool(kctId, null, null);
         await _sleep(210);
       }
       _finishApplyProgress(id);
+      if (onComplete) onComplete();
     })();
+  }
+
+  // Placement watchdog: give trailing confirmations a moment to land, then keep resending
+  // whatever's still pending in _pendingPlacements, round after round, unlimited — every
+  // entry has to end up confirmed (via the FurniListRemove listener above), so this keeps
+  // going regardless of whether a round made progress, stopping only once the pending map
+  // is empty, Abort is hit, or the user presses "Next step" (skipRetry — see
+  // skipRetryToNextStep) to bail out of a wait that's stuck. Shared between the initial
+  // Top-level (not nested in _applyBlueprintNow) — kctId travels in as a parameter instead
+  // of being closed over, since this is called from _confirmPendingPlacements and
+  // _verifyAndFixPositions too, both of which live outside that closure. It used to be
+  // defined only inside _applyBlueprintNow, which meant every call from those two functions
+  // threw "_sendConstructionTool is not defined" immediately — silently killing an entire
+  // retry round (and the fix-up pass's re-place loop) before a single packet went out.
+  function _sendConstructionTool(kctId, height, state) {
+    const heightActive = height !== null ? 1 : 0;
+    const heightScaled = height !== null ? Math.round(height * 100) : 0;
+    const stateActive = state !== null ? 1 : 0;
+    const stateVal = state !== null ? state : 0;
+    window.sendPacket('OUT', kctId,
+      '{b:' + heightActive + '}{i:' + heightScaled + '}' +
+      '{i:0}{b:0}' +
+      '{b:' + stateActive + '}{b:0}{b:0}{b:0}{b:' + stateVal + '}' +
+      '{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{i:0}{b:0}{b:0}' +
+      '{b:false}{b:false}');
+  }
+
+  // placement pass and the position fix-up pass below — both just fill _pendingPlacements
+  // differently before calling this. skipRetry is reset here on every call so it only
+  // cancels whichever wait was actually running when it was pressed, not every later one.
+  async function _confirmPendingPlacements(id, kctId) {
+    if (_applyProgress && _applyProgress.id === id) {
+      _applyProgress.skipRetry = false;
+      _applyProgress.statusText = 'Waiting for placement confirmations…';
+      _renderBlueprints();
+    }
+    await _sleep(PLACEMENT_CONFIRM_GRACE_MS);
+
+    let retryRound = 0;
+    // Blindly resending the exact same PlaceObject string forever only helps if the
+    // earlier confirmation just got lost/delayed — it does nothing for an item whose
+    // destination tile is genuinely blocked/occupied, since the server drops the resend
+    // just as silently every time. Detected here as "no shrinkage for 3 rounds in a row"
+    // (~4.5s+ of dead resends) — once that happens, stop hammering and fall through to
+    // the position check below instead, which picks the item up and re-places it fresh
+    // (a real state change, not a repeat of the exact thing that already isn't working).
+    let stagnantRounds = 0;
+    let stalledOut = false;
+    while (_pendingPlacements.size && !(_applyProgress && _applyProgress.id === id && (_applyProgress.aborted || _applyProgress.skipRetry))) {
+      retryRound++;
+      const sizeBeforeRound = _pendingPlacements.size;
+      // A throw anywhere below would otherwise kill this whole async function silently —
+      // the status text freezes on whatever round it died on, no more packets ever go
+      // out again, and nothing is logged to explain why. Render and send are each caught
+      // separately so a render bug can never block the actual resends, and either kind
+      // of failure gets logged instead of just looking like a hang.
+      const toRetry = Array.from(_pendingPlacements.values());
+      if (_applyProgress && _applyProgress.id === id) {
+        _applyProgress.statusText = 'Retrying ' + toRetry.length + ' unconfirmed placement(s) (round ' + retryRound + ')…';
+        // Rendering is cosmetic — if it throws (bad DOM state, whatever), the actual
+        // resends below must still go out, not get skipped because the status text
+        // couldn't be redrawn.
+        try { _renderBlueprints(); } catch (e) { _log('Render error (non-fatal): ' + (e && e.message ? e.message : e)); }
+      }
+      try {
+        if (kctId !== null) {
+          // Re-arm the construction tool per distinct z/state before resending the
+          // placements that need it — a retry round can mix items from several different
+          // original signatures, so the tool has to be set correctly for each group, not
+          // just left at whatever it was last set to mid-run.
+          const bySignature = new Map(); // "z|state" -> {z, state, sends: [fn]}
+          toRetry.forEach(function(entry) {
+            if (entry.z === null) return; // wall item, no construction tool involved
+            const key = entry.z + '|' + entry.state;
+            if (!bySignature.has(key)) bySignature.set(key, { z: entry.z, state: entry.state, sends: [] });
+            bySignature.get(key).sends.push(entry.send);
+          });
+          for (const group of bySignature.values()) {
+            _sendConstructionTool(kctId, group.z, group.state);
+            await _sleep(210);
+            group.sends.forEach(function(send) { send(); });
+          }
+          toRetry.filter(function(entry) { return entry.z === null; }).forEach(function(entry) { entry.send(); });
+        } else {
+          toRetry.forEach(function(entry) { entry.send(); });
+        }
+      } catch (e) {
+        _log('Retry round ' + retryRound + ' hit an error (' + (e && e.message ? e.message : e) + ') — will try again next round.');
+      }
+      await _sleep(PLACEMENT_RETRY_GRACE_MS);
+
+      if (_pendingPlacements.size === sizeBeforeRound) {
+        stagnantRounds++;
+        if (stagnantRounds >= 3) { stalledOut = true; break; }
+      } else {
+        stagnantRounds = 0;
+      }
+    }
+    // Retries are unlimited, so the only way out of the loop above with items still
+    // pending is Abort, a manual skip, or a detected stall — anything else means it
+    // emptied the map itself.
+    if (_pendingPlacements.size) {
+      const stoppedBy = (_applyProgress && _applyProgress.id === id && _applyProgress.aborted) ? 'aborted'
+        : stalledOut ? 'stopped (no confirmations landed for 3 rounds in a row — resending clearly wasn\'t working)'
+        : 'skipped ahead';
+      _log(_pendingPlacements.size + ' placement(s) still unconfirmed — build was ' + stoppedBy + ' before they could finish (after ' + retryRound + ' retry round(s)).');
+    }
+  }
+
+  // Checks every floor item this run placed against the live ObjectAdd-driven state on
+  // _placedFloorRecords (confirmed/landedX/landedY/landedZ/landedFacing/landedState/roomId
+  // — see the ObjectAdd listener above). Two distinct failure kinds, handled differently:
+  //   - confirmed but landed wrong (wrong tile, height, state, or rotation): the server DID
+  //     place it (we know its real room-instance id from ObjectAdd, captured as roomId —
+  //     NOT the same number as the inventory id, which is why PickupObject has to use
+  //     roomId here, not rec.id), just not as asked — pick it up first, then re-place.
+  //   - never confirmed at all: no ObjectAdd ever matched, so it never actually left the
+  //     inventory — nothing exists in the room to pick up, skip straight to re-placing it.
+  async function _verifyAndFixPositions(id, pid, kctId, reconstructAbsolute) {
+    const Z_EPSILON = 0.02; // server echoes z as a string — a little float slack avoids false positives
+    // Height/state only get verified when there's actually a construction tool to have set
+    // them in the first place — with none, the server just uses its own default and there's
+    // nothing wrong to detect (or fix) about that.
+    function _expectedLandedZ(rec) {
+      if (reconstructAbsolute) return rec.z; // destination was flat when this ran — nothing to add back
+      const terrainZ = window.Room && window.Room.floorPlan ? _terrainHeightAt(window.Room.floorPlan, rec.x, rec.y) : 0;
+      return rec.z + terrainZ;
+    }
+    const wrong = _placedFloorRecords.filter(function(rec) {
+      if (!rec.confirmed) return true;
+      if (rec.landedX !== rec.x || rec.landedY !== rec.y) return true;
+      if (rec.landedFacing !== rec.facing) return true;
+      if (kctId !== null && rec.landedState !== rec.state) return true;
+      if (kctId !== null && Math.abs(rec.landedZ - _expectedLandedZ(rec)) > Z_EPSILON) return true;
+      return false;
+    });
+    if (!wrong.length) return 0;
+
+    const needsPickup = wrong.filter(function(rec) { return rec.confirmed && rec.roomId !== null; });
+    const needsPlaceOnly = wrong.filter(function(rec) { return !(rec.confirmed && rec.roomId !== null); });
+    _log(wrong.length + ' item(s) not confirmed exactly as asked (' + needsPickup.length + ' placed but wrong tile/height/state/rotation, ' + needsPlaceOnly.length + ' never placed) — fixing.');
+    if (_applyProgress && _applyProgress.id === id) {
+      _applyProgress.skipRetry = false;
+      _applyProgress.statusText = 'Fixing ' + wrong.length + ' misplaced item(s)…';
+      _renderBlueprints();
+    }
+
+    let _stuckPickupRoomIds = new Set();
+    if (needsPickup.length) {
+      const pickupId = _outId('PickupObject');
+      if (pickupId === null) {
+        _log(needsPickup.length + ' item(s) landed on the wrong tile, but PickupObject not found in PKT — could not pick them up.');
+        _stuckPickupRoomIds = new Set(needsPickup.map(function(rec) { return rec.roomId; }));
+      } else {
+        _log('Picking up ' + needsPickup.length + ' item(s) (PickupObject=' + pickupId + ') before re-placing them.');
+        // Pickup watchdog — one PickupObject at a time, 150ms apart (a bit more slack than
+        // a normal placement send, since PickupObject seems more flood-sensitive), confirmed
+        // via UnseenItems. The old version fired the
+        // WHOLE remaining batch as a synchronous burst every 150ms — blasting dozens of
+        // packets in one tick like that gets most of them silently dropped by the server's
+        // own anti-flood limiting, which is exactly why only 6/82 ever confirmed in
+        // practice. Pacing them out one by one fixes that at the cost of a slower pass.
+        // Stops once the pending set is empty, Abort is hit, the user presses "Next step",
+        // or a full pass in a row confirms nothing new for 3 passes straight.
+        _pendingPickups = new Map();
+        needsPickup.forEach(function(rec) { _pendingPickups.set(rec.roomId, true); });
+        let pickupStagnantPasses = 0;
+        let lastPickupSize = _pendingPickups.size;
+        let pickupPass = 0;
+        while (_pendingPickups.size && !(_applyProgress && _applyProgress.id === id && (_applyProgress.aborted || _applyProgress.skipRetry))) {
+          pickupPass++;
+          const toPickup = Array.from(_pendingPickups.keys());
+          for (const pickId of toPickup) {
+            if (!_pendingPickups.has(pickId)) continue; // confirmed mid-pass — skip, no need to resend
+            if (_applyProgress && _applyProgress.id === id && (_applyProgress.aborted || _applyProgress.skipRetry)) break;
+            try {
+              window.sendPacket('OUT', pickupId, '{i:10}{i:' + pickId + '}');
+            } catch (e) {
+              _log('Pickup send error (non-fatal): ' + (e && e.message ? e.message : e));
+            }
+            await _sleep(150);
+          }
+          if (_pendingPickups.size === lastPickupSize) {
+            pickupStagnantPasses++;
+            if (pickupStagnantPasses >= 3) {
+              _log(_pendingPickups.size + ' item(s) never confirmed a pickup after ' + pickupPass + ' pass(es) — trying to place them anyway.');
+              break;
+            }
+          } else {
+            pickupStagnantPasses = 0;
+            lastPickupSize = _pendingPickups.size;
+          }
+        }
+        const pickedUpCount = needsPickup.length - _pendingPickups.size;
+        _log('Pickup pass done: ' + pickedUpCount + '/' + needsPickup.length + ' confirmed via UnseenItems.');
+        // Anything still stuck here never actually left the room — it's pointless (and,
+        // multiplied over dozens of items, very slow) to make the re-place loop below
+        // burn its full 3s wait on each one discovering that same thing. Mark them so
+        // that loop can skip straight past instead.
+        _stuckPickupRoomIds = new Set(_pendingPickups.keys());
+        _pendingPickups = null;
+      }
+    }
+    if (_applyProgress && _applyProgress.id === id && _applyProgress.aborted) return;
+
+    // Re-place every still-wrong item. Reset confirmed + every landed* field first so the
+    // ObjectAdd listener can match this new attempt fresh, instead of it looking like an
+    // already-resolved (if wrongly-placed) record forever.
+    //
+    // Drawn from a fresh typeId-keyed pool — exactly like the normal build pass's
+    // realPools/_buildInventoryPools — instead of waiting for one specific id to reappear.
+    // A picked-up item can come back under a completely different id than rec.id, so any
+    // item of the right typeId is used; rec.id is then kept in sync with whichever actual
+    // item gets sent, since the ObjectAdd listener and FurniListRemove both confirm by that.
+    await _sleep(300); // let any trailing FurniListAddOrUpdate for the pickups above land
+    const fixupPools = _buildInventoryPools();
+    const claimedIds = new Set(); // items already handed to an earlier rec this pass — see _waitForInventoryItemByType
+    _pendingPlacements = new Map();
+    let lastSignature = '';
+    let reQueued = 0;
+    for (const rec of wrong) {
+      if (_applyProgress && _applyProgress.id === id && _applyProgress.aborted) break;
+      // One bad item (a throw anywhere in here) must not kill the whole fix-up pass and
+      // strand the run silently on "Fixing N…" forever — log it and move on to the rest,
+      // same safety net _confirmPendingPlacements already has around its own resends.
+      try {
+        // Skip the wait entirely for anything we already know never got picked up — it's
+        // still sitting on the floor, so waiting on it can only time out.
+        if (_stuckPickupRoomIds.has(rec.roomId)) {
+          _log('Skipping re-place of ' + _typeName(rec.typeId) + ' — its pickup never confirmed, still on the floor.');
+          continue;
+        }
+        const pool = fixupPools.get(rec.typeId);
+        let invItem = pool && pool.length ? pool.shift() : null;
+        if (!invItem) {
+          // Pool came up empty — either every same-typeId item is already claimed by an
+          // earlier rec this pass, or this one's FurniListAddOrUpdate just hadn't landed
+          // yet at snapshot time. One short extra chance before giving up on it.
+          invItem = await _waitForInventoryItemByType(rec.typeId, claimedIds, 2000);
+        }
+        if (!invItem) {
+          _log('Could not re-place ' + _typeName(rec.typeId) + ' — no matching item ever reappeared in inventory.');
+          continue;
+        }
+        claimedIds.add(invItem.id);
+        rec.id = invItem.id; // stays in sync with whatever actually gets sent below
+        rec.confirmed = false;
+        rec.landedX = null;
+        rec.landedY = null;
+        rec.landedZ = null;
+        rec.landedFacing = null;
+        rec.landedState = null;
+        rec.roomId = null;
+        if (kctId !== null) {
+          const signature = rec.z + '|' + rec.state;
+          if (signature !== lastSignature) {
+            _sendConstructionTool(kctId, rec.z, rec.state);
+            lastSignature = signature;
+            await _sleep(210);
+          }
+        }
+        const send = function() {
+          window.sendPacket('OUT', pid, '{s:"' + invItem.placementId + ' ' + rec.x + ' ' + rec.y + ' ' + rec.facing + '"}');
+        };
+        _pendingPlacements.set(rec.id, { z: kctId !== null ? rec.z : null, state: kctId !== null ? rec.state : null, send });
+        send();
+        reQueued++;
+        await _sleep(95);
+      } catch (e) {
+        _log('Re-place of ' + _typeName(rec.typeId) + ' hit an error (' + (e && e.message ? e.message : e) + ') — skipping it, continuing with the rest.');
+      }
+    }
+    _log('Re-place pass done: ' + reQueued + '/' + wrong.length + ' item(s) resent, now waiting on confirmations.');
+    await _confirmPendingPlacements(id, kctId);
+    _pendingPlacements = null;
+    return wrong.length;
+  }
+
+  // Polls window.Inventory.items (kept live by parsers.js's FurniList/FurniListAddOrUpdate
+  // handlers) for a floor item of this typeId to reappear after being picked up. Matched by
+  // typeId, not id — a picked-up item can come back under a totally different id than
+  // either its original inventory id or its ObjectAdd room-instance id (both already proven
+  // to differ from each other — see _verifyAndFixPositions), so waiting on one specific id
+  // was structurally broken (every re-place timed out even right after a confirmed pickup).
+  // Any item of the right typeId is equally usable for placement, same as the normal build
+  // pass drawing from a typeId-keyed pool. Returns the item, or null on timeout.
+  // excludeIds: ids already claimed by an earlier rec in the same fix-up pass — without
+  // this, two records sharing a typeId could both resolve to the SAME still-in-inventory
+  // item (it isn't actually removed from window.Inventory.items until it's placed), sending
+  // its placementId twice instead of two different items once each.
+  function _waitForInventoryItemByType(typeId, excludeIds, timeoutMs) {
+    return new Promise(function(resolve) {
+      const deadline = Date.now() + timeoutMs;
+      (function poll() {
+        const found = Object.values((window.Inventory && window.Inventory.items) || {}).find(function(it) {
+          return it.type === 'S' && it.typeId === typeId && !excludeIds.has(it.id);
+        });
+        if (found) { resolve(found); return; }
+        if (Date.now() >= deadline) { resolve(null); return; }
+        setTimeout(poll, 60);
+      })();
+    });
   }
 
   // Polls window.Room.floorItems (kept live by parsers.js's 'Objects' handler) for the
@@ -1517,6 +2016,9 @@
       '.__rc_title{font:600 13px system-ui;color:#eceefb;flex:1}',
       '.__rc_close{cursor:pointer;color:#5c5e6b;font-size:16px;line-height:1;padding:2px 6px}',
       '.__rc_close:hover{color:#eceefb}',
+      '.__rc_bugbtn{cursor:pointer;color:#5c5e6b;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;border:1px solid #34363f;border-radius:5px;padding:3px 7px;margin-left:8px}',
+      '.__rc_bugbtn:hover{color:#eceefb;border-color:#5c5e6b}',
+      '.__rc_bugbtn.__rc_bugbtn_done{color:#7dd88a;border-color:#7dd88a}',
       '#__rc_body{max-height:520px;overflow-y:auto;display:flex;flex-direction:column}',
       '.__rc_section_label{font:700 9px/1 monospace;letter-spacing:1px;color:#5c5e6b;text-transform:uppercase}',
       '.__rc_muted{color:#82849a;font-size:10px;flex:1}',
@@ -1887,9 +2389,14 @@
   function _progressBarHtml(prog, label) {
     if (!prog) return '';
     const pct = prog.total ? Math.round((prog.done / prog.total) * 100) : 0;
-    const remainingMs = Math.max(0, (prog.startedAt + prog.totalMs) - Date.now());
-    const remainingS = Math.ceil(remainingMs / 1000);
-    const eta = remainingMs <= 0 ? 'finishing...' : (remainingS < 60 ? remainingS + 's left' : Math.floor(remainingS / 60) + 'm ' + (remainingS % 60) + 's left');
+    let eta;
+    if (prog.statusText) {
+      eta = prog.statusText;
+    } else {
+      const remainingMs = Math.max(0, (prog.startedAt + prog.totalMs) - Date.now());
+      const remainingS = Math.ceil(remainingMs / 1000);
+      eta = remainingMs <= 0 ? 'finishing...' : (remainingS < 60 ? remainingS + 's left' : Math.floor(remainingS / 60) + 'm ' + (remainingS % 60) + 's left');
+    }
     return '<div class="__rc_section_label2">' + label + '<span class="__rc_count_pill">' + prog.done + '/' + prog.total + '</span></div>' +
       '<div class="__rc_progress_bar"><div class="__rc_progress_fill" style="width:' + pct + '%"></div></div>' +
       '<div class="__rc_progress_text">' + eta + '</div>';
@@ -1977,6 +2484,9 @@
           : '') +
         '<div class="__rc_detail_actions">' +
           (isRunning ? '<button class="__rc_btn __rc_btn_danger_outline" data-action="abort">Abort</button>' : '') +
+          (buildProg && buildProg.statusText && (buildProg.statusText.indexOf('Retrying') === 0 || buildProg.statusText.indexOf('Fixing') === 0)
+            ? '<button class="__rc_btn __rc_btn_secondary" data-action="skipretry" title="Stop waiting here and move on to the next step">Next step</button>'
+            : '') +
           (blueprint.isArea
             ? '<button class="__rc_btn __rc_btn_secondary" data-action="confirmanchor"' + (hasAnchorPos ? '' : ' disabled') + '>Build</button>' +
               '<button class="__rc_btn __rc_btn_secondary" data-action="togglepreview">' + (previewOn ? 'Clear Preview' : 'Preview') + '</button>'
@@ -2002,6 +2512,7 @@
       else if (btn.dataset.action === 'applyfloor') applyFloorProperties(blueprint.id);
       else if (btn.dataset.action === 'buy') buyMissing(blueprint.id);
       else if (btn.dataset.action === 'abort') abortBuild(blueprint.id);
+      else if (btn.dataset.action === 'skipretry') skipRetryToNextStep(blueprint.id);
       else if (btn.dataset.action === 'delete') { deleteBlueprint(blueprint.id); _clearSelection(); }
     });
   }
@@ -2062,6 +2573,7 @@
         '<div class="__rc_hdr" id="__rc_hdr">' +
           '<span class="__rc_eyebrow">Gheloo</span>' +
           '<span class="__rc_title">Room Clone</span>' +
+          '<span class="__rc_bugbtn" id="__rc_bugbtn" title="Copy debug log">Bug Log</span>' +
           '<span class="__rc_close" id="__rc_close">&times;</span>' +
         '</div>' +
         '<div class="__rc_tabs">' +
@@ -2120,10 +2632,31 @@
     });
 
     window.__ghk_makeDraggable(panel, panel.querySelector('#__rc_hdr'), '__ghk_rc_pos', function(e) {
-      return e.target.id === '__rc_close';
+      return e.target.id === '__rc_close' || e.target.id === '__rc_bugbtn';
     });
 
     panel.querySelector('#__rc_close').addEventListener('click', function() { panel.style.display = 'none'; });
+    panel.querySelector('#__rc_bugbtn').addEventListener('click', function() {
+      const btn = panel.querySelector('#__rc_bugbtn');
+      const text = _debugLog.length ? _debugLog.join('\n') : '(no log entries yet)';
+      const done = function() {
+        btn.textContent = 'Copied!';
+        btn.classList.add('__rc_bugbtn_done');
+        setTimeout(function() { btn.textContent = 'Bug Log'; btn.classList.remove('__rc_bugbtn_done'); }, 1500);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function() { btn.textContent = 'Copy failed'; });
+      } else {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          done();
+        } catch (e) { btn.textContent = 'Copy failed'; }
+      }
+    });
     panel.querySelector('#__rc_quick_capture_btn').addEventListener('click', function() { captureRoom(); });
     panel.querySelector('#__rc_area_capture_btn').addEventListener('click', function() {
       if (_areaPicking) cancelAreaCapture(); else startAreaCapture();
