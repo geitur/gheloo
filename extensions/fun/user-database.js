@@ -2076,12 +2076,19 @@
       _closeScanMenu();
       _banCheckTogglePanel();
     });
+    // Capture phase, not bubble — a click on the game's own canvas/UI can call
+    // stopPropagation() in ITS OWN bubble-phase handler, which would stop a bubble-phase
+    // listener here from ever seeing that mousedown at all. That's exactly what leaves
+    // _scanMenuVisible stuck true (menu closes visually some other way, but this listener
+    // never runs to reset the flag) — the next click on the scan button then reads "still
+    // open" and closes it instead of opening it. A capture-phase listener runs before any
+    // element's own handler gets a chance to stop it, so it can't be defeated that way.
     document.addEventListener('mousedown', function(e) {
       if (!_scanMenuVisible) return;
       if (e.target === scanMenu || scanMenu.contains(e.target)) return;
       if (e.target.id === '__udb_scan_btn') return;
       _closeScanMenu();
-    });
+    }, true);
   }
   function _closeScanMenu() {
     if (scanMenu) scanMenu.style.display = 'none';
