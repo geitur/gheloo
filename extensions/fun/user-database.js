@@ -2056,8 +2056,10 @@
 
   // ── Scan mode chooser — the scan button opens this tiny menu instead of jumping
   // straight into the id-discovery scanner, since there are now two different scanners
-  // behind it.
+  // behind it. Open/closed state is tracked in its own flag rather than re-read off
+  // scanMenu.style.display, so there's no ambiguity about what "currently open" means.
   let scanMenu = null;
+  let _scanMenuVisible = false;
   function _buildScanMenu() {
     scanMenu = document.createElement('div');
     scanMenu.id = '__udb_scan_menu';
@@ -2067,28 +2069,37 @@
     document.body.appendChild(scanMenu);
     scanMenu.style.display = 'none';
     scanMenu.querySelector('#__udb_scan_menu_default').addEventListener('click', function() {
-      scanMenu.style.display = 'none';
+      _closeScanMenu();
       _scanTogglePanel();
     });
     scanMenu.querySelector('#__udb_scan_menu_bc').addEventListener('click', function() {
-      scanMenu.style.display = 'none';
+      _closeScanMenu();
       _banCheckTogglePanel();
     });
     document.addEventListener('mousedown', function(e) {
-      if (scanMenu.style.display === 'none') return;
+      if (!_scanMenuVisible) return;
       if (e.target === scanMenu || scanMenu.contains(e.target)) return;
       if (e.target.id === '__udb_scan_btn') return;
-      scanMenu.style.display = 'none';
+      _closeScanMenu();
     });
   }
-  function _scanMenuToggle() {
+  function _closeScanMenu() {
+    if (scanMenu) scanMenu.style.display = 'none';
+    _scanMenuVisible = false;
+  }
+  function _openScanMenu() {
     if (!scanMenu) _buildScanMenu();
-    if (scanMenu.style.display !== 'none') { scanMenu.style.display = 'none'; return; }
     const btn = panel.querySelector('#__udb_scan_btn');
     const rect = btn.getBoundingClientRect();
     scanMenu.style.top = (rect.bottom + 4) + 'px';
     scanMenu.style.left = Math.max(8, rect.right - 170) + 'px';
     scanMenu.style.display = 'flex';
+    _scanMenuVisible = true;
+    _log('scan menu opened at ' + scanMenu.style.left + ',' + scanMenu.style.top + ' (btn rect: ' + JSON.stringify(rect) + ')');
+  }
+  function _scanMenuToggle() {
+    if (_scanMenuVisible) { _closeScanMenu(); return; }
+    _openScanMenu();
   }
 
   // Discards the in-progress position instead of just pausing it — next time this mode
