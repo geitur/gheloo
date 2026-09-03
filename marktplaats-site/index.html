@@ -199,10 +199,11 @@
             <option value="traded">Meest verhandeld</option>
           </select>
           <select class="sort-select" id="offers-trade-range" hidden>
-            <option value="1">Laatste 24u</option>
-            <option value="7">Laatste 7 dagen</option>
-            <option value="30" selected>Laatste 30 dagen</option>
-            <option value="0">Alle tijd</option>
+            <option value="1">Vandaag</option>
+            <option value="10">Laatste 10 dagen</option>
+            <option value="30">Laatste 30 dagen</option>
+            <option value="90">Laatste 90 dagen</option>
+            <option value="0" selected>Alle tijd</option>
           </select>
         </div>
         <div class="view-toggle" id="offers-view-toggle"></div>
@@ -228,6 +229,7 @@
             <option value="price-desc">Duurste prijs eerst</option>
             <option value="price-asc">Minst dure prijs eerst</option>
             <option value="volatile">Meest verdachte sales</option>
+            <option value="name-asc">Naam A-Z</option>
           </select>
         </div>
         <div class="price-range-group">
@@ -267,10 +269,11 @@
             <option value="volatile">Meest verdachte items</option>
           </select>
           <select class="sort-select" id="items-trade-range" hidden>
-            <option value="1">Laatste 24u</option>
-            <option value="7">Laatste 7 dagen</option>
-            <option value="30" selected>Laatste 30 dagen</option>
-            <option value="0">Alle tijd</option>
+            <option value="1">Vandaag</option>
+            <option value="10">Laatste 10 dagen</option>
+            <option value="30">Laatste 30 dagen</option>
+            <option value="90">Laatste 90 dagen</option>
+            <option value="0" selected>Alle tijd</option>
           </select>
         </div>
         <div class="view-toggle" id="items-view-toggle"></div>
@@ -297,6 +300,7 @@
             <option value="price-asc">Minst dure prijs eerst</option>
             <option value="cancel-desc">Meest geannuleerd</option>
             <option value="cancel-asc">Minst geannuleerd</option>
+            <option value="name-asc">Naam A-Z</option>
           </select>
         </div>
         <div class="price-range-group">
@@ -328,6 +332,6 @@
   </div>
 </div>
 
-<script src="app.js?v=63"></script>
+<script src="app.js?v=65"></script>
 </body>
 </html>

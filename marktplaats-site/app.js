@@ -332,7 +332,7 @@
   let _itemsPageSize = 100;
   let _itemsView = loadViewPref('__mp_items_view', 'tile');
   let _itemsSort = 'default'; // 'default' = the category+alphabetical grouping loadItems() already sorts into
-  let _itemsTradeRangeDays = 30;
+  let _itemsTradeRangeDays = 0; // 0 = all-time — matches the "Alle tijd" default in the range select
 
   async function loadItems(silent) {
     const grid = document.getElementById('items-grid');
@@ -814,7 +814,7 @@
   let _offersPageSize = 100;
   let _offersView = loadViewPref('__mp_offers_view', 'tile');
   let _offersSort = 'newest'; // matches loadOffers()'s own order=offer_id.desc — see sortOffersList
-  let _offersTradeRangeDays = 30;
+  let _offersTradeRangeDays = 0; // 0 = all-time — matches the "Alle tijd" default in the range select
   let _offersMinDiscount = 0; // 0 = no filter
   let _offersDiscountBasisDays = 0; // which average discountPct() is computed against — 0 = all-time
 
@@ -1173,6 +1173,7 @@
       case 'price-desc': return _salesAll.slice().sort((a, b) => b.price - a.price);
       case 'price-asc': return _salesAll.slice().sort((a, b) => a.price - b.price);
       case 'volatile': return _salesAll.slice().sort((a, b) => volatilityFor(b.item_name) - volatilityFor(a.item_name));
+      case 'name-asc': return _salesAll.slice().sort((a, b) => a.item_name.localeCompare(b.item_name));
       default: return _salesAll;
     }
   }
@@ -1356,6 +1357,7 @@
       case 'price-asc': return list.slice().sort((a, b) => a.price - b.price);
       case 'cancel-desc': return list.slice().sort((a, b) => _cancelFreqFor(b.item_name) - _cancelFreqFor(a.item_name));
       case 'cancel-asc': return list.slice().sort((a, b) => _cancelFreqFor(a.item_name) - _cancelFreqFor(b.item_name));
+      case 'name-asc': return list.slice().sort((a, b) => a.item_name.localeCompare(b.item_name));
       default: return list;
     }
   }
