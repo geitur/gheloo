@@ -218,6 +218,16 @@ chrome.action.onClicked.addListener(function() {
 
 chrome.runtime.onStartup.addListener(checkForUpdate);
 chrome.runtime.onInstalled.addListener(checkForUpdate);
+
+// One-time flag for a genuinely fresh install (not an update to an existing one) — read
+// by core/bridge.js on the next leet.city page load and relayed into the MAIN world so
+// content.js/marktplaats.js can flip Machine ID Spoofer, Marktplaats scanner and
+// Marktplaats alerts on by default for a new user, instead of their historical
+// off-by-default. Left alone on 'update' so an existing user's own choice to turn any
+// of these off isn't overwritten by a version bump.
+chrome.runtime.onInstalled.addListener(function(details) {
+  if (details.reason === 'install') chrome.storage.local.set({ ghlApplyFreshDefaults: true });
+});
 chrome.alarms.create('ghelooUpdateCheck', { periodInMinutes: 180 });
 chrome.alarms.onAlarm.addListener(function(alarm) {
   if (alarm.name === 'ghelooUpdateCheck') checkForUpdate();

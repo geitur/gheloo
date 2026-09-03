@@ -173,6 +173,18 @@
     window._outgoingManipulators.push(function(raw) { try { return _midOnFrame(raw); } catch (e) { return undefined; } });
   }
 
+  // Fresh install only — relayed by core/bridge.js from a flag background.js sets on
+  // chrome.runtime.onInstalled (reason 'install'). Flips Machine ID Spoofer, Marktplaats
+  // scanner and Marktplaats alerts to on-by-default for a new user; marktplaats.js's
+  // setters below already run later in this same document_start batch, so they're
+  // defined by the time this (async, storage-roundtrip) message actually arrives.
+  window.addEventListener('message', function(e) {
+    if (e.source !== window || !e.data || e.data.type !== '__ghk_apply_fresh_defaults') return;
+    _midSetOn(true);
+    if (window.__mplivescan_setEnabled) window.__mplivescan_setEnabled(true);
+    if (window.__mpsrv_setEnabled) window.__mpsrv_setEnabled(true);
+  });
+
   function buildGhelooPanel() {
     const ICONS = {
       scripting: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6M12 19h8"/></svg>',
