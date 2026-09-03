@@ -368,6 +368,8 @@ function handleClick(e) {
     case 'ban-holder':        openBanHolderModal(el.dataset.holder); break
     case 'unban-holder':      openUnbanHolderModal(el.dataset.holder); break
     case 'rename-holder':     openRenameHolderModal(el.dataset.holder); break
+    case 'set-password':      openSetPasswordModal(el.dataset.holder); break
+    case 'new-holder':        openNewHolderModal(); break
     case 'seed-ss-items':     openSeedSSItemsModal(); break
     case 'change-holder':     openChangeHolderModal(id); break
     case 'scam':              openScamModal(id); break
@@ -1253,6 +1255,7 @@ function openCatItemModal(name) {
     if (r.item_holder) continue
     if (r.is_duped) { b.duped++; b.codeRows.push(r); continue }
     b.inv++
+    b.codeRows.push(r)
   }
   const codeChips = list => list.map(r => {
     const ss = `<button class="link mono" style="font-size:10px" data-action="filter-events" data-key="asset" data-val="${h(r.id)}">${h(r.id)}</button>`
@@ -1624,6 +1627,41 @@ function renameHolderBtn(name) {
   </button>`
 }
 
+function passwordBtn(name) {
+  return `<button class="btn btn-ghost btn-sm" title="Set password" data-action="set-password" data-holder="${h(name)}" style="padding:2px;margin-left:2px">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+  </button>`
+}
+
+async function openSetPasswordModal(holder) {
+  const existing = await sbGet(`/holders?select=password&holder=eq.${encodeURIComponent(holder)}`).catch(()=>null)
+  const currentPassword = existing?.[0]?.password || ''
+  openModal('Set Password', `
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Wachtwoord voor <strong class="mono" style="color:var(--text)">${h(holder)}</strong>. Zelf te bepalen, wordt gewoon opgeslagen zoals getypt.</p>
+    <div class="form-group"><label>Password</label><input type="text" id="m-holder-password" value="${h(currentPassword)}" autofocus placeholder="bv. Password123"></div>`,
+  [{label:'Cancel',fn:closeModal},{label:'Save',cls:'btn-primary',fn:async()=>{
+    const password = document.getElementById('m-holder-password').value.trim()
+    setBtn(1,'Saving…',true)
+    try { await doSetHolderPassword(holder, password); closeModal(); route() }
+    catch(e) { modalError(e.message); setBtn(1,'Save',false) }
+  }}])
+}
+
+function openNewHolderModal() {
+  openModal('New Account', `
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Voegt een account toe zonder items — verschijnt gewoon in deze lijst, klaar om later items aan toe te wijzen.</p>
+    <div class="form-group"><label>Naam *</label><input type="text" id="m-new-holder-name" autofocus placeholder="e.g. Kadet"></div>
+    <div class="form-group"><label>Password</label><input type="text" id="m-new-holder-password" placeholder="optioneel"></div>`,
+  [{label:'Cancel',fn:closeModal},{label:'Add',cls:'btn-primary',fn:async()=>{
+    const name = document.getElementById('m-new-holder-name').value.trim()
+    const password = document.getElementById('m-new-holder-password').value.trim()
+    if (!name) return modalError('Enter a name.')
+    setBtn(1,'Adding…',true)
+    try { await doCreateHolder(name, password); closeModal(); route() }
+    catch(e) { modalError(e.message); setBtn(1,'Add',false) }
+  }}])
+}
+
 function openRenameHolderModal(oldName) {
   openModal('Rename Account', `
     <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Renames <strong class="mono" style="color:var(--text)">${h(oldName)}</strong> everywhere — Inventory, Pullbacks, Trades, Belcredits, bans — to the new name.</p>
@@ -1692,15 +1730,20 @@ function renderHolderItemsModal() {
 let _holderSearch = ''
 async function renderHolders(mc, search) {
   if (search !== undefined) _holderSearch = search
-  const [itemsRaw, bannedRaw, evRaw, bcRaw] = await Promise.all([
+  const [itemsRaw, bannedRaw, evRaw, bcRaw, holdersRaw] = await Promise.all([
     sbGet('/ss_items?select=current_holder,current_status,id,is_duped,item_name,created_at').catch(()=>null),
     sbGet('/banned_holders?select=holder').catch(()=>null),
     sbGet('/ss_item_events?select=to_holder,timestamp&to_holder=not.is.null').catch(()=>null),
-    sbGet('/bc_balances?select=holder,amount').catch(()=>null)
+    sbGet('/bc_balances?select=holder,amount').catch(()=>null),
+    // holders table is what lets an account exist here with zero items (manually added,
+    // "nothing yet") — every other source below only ever produces a row as a byproduct
+    // of owning/having owned something. Table may not exist yet (see sql/holders.sql).
+    sbGet('/holders?select=holder,password').catch(()=>null)
   ])
   const items = itemsRaw||[]
   const banned = new Set((bannedRaw||[]).map(r=>(r.holder||'').toLowerCase()))
   const bcMap = new Map((bcRaw||[]).map(r=>[(r.holder||'').toLowerCase(), r.amount]))
+  const passwordMap = new Map((holdersRaw||[]).map(r=>[(r.holder||'').toLowerCase(), r.password||'']))
   const lastActivity = new Map()
   const bump = (holder, ts) => { if (!holder || !ts) return; const key=holder.toLowerCase(); const cur=lastActivity.get(key); if (!cur || ts>cur) lastActivity.set(key, ts) }
   // Grouped case-insensitively — "Ravenclaw221" and "ravenclaw221" are the same real
@@ -1719,7 +1762,13 @@ async function renderHolders(mc, search) {
     bump(a.current_holder, a.created_at)
   }
   for (const e of (evRaw||[])) bump(e.to_holder, e.timestamp)
-  let holders=[...map.entries()].map(([key,v])=>({holder:v.holder,inv:v.inv,rfp:v.rfp,lost:v.lost,invItems:v.invItems,rfpItems:v.rfpItems,lostItems:v.lostItems,total:v.total.size,banned:isBanned(banned,v.holder),lastActivity:lastActivity.get(key)||''})).sort((a,b)=>b.lastActivity<a.lastActivity?-1:b.lastActivity>a.lastActivity?1:0)
+  // Manually-added holders with no items/events yet — add them so they actually show up.
+  for (const hr of (holdersRaw||[])) {
+    if (!hr.holder) continue
+    const key = hr.holder.toLowerCase()
+    if (!map.has(key)) map.set(key, {holder:hr.holder,inv:0,rfp:0,lost:0,total:new Set(),invItems:[],rfpItems:[],lostItems:[]})
+  }
+  let holders=[...map.entries()].map(([key,v])=>({holder:v.holder,inv:v.inv,rfp:v.rfp,lost:v.lost,invItems:v.invItems,rfpItems:v.rfpItems,lostItems:v.lostItems,total:v.total.size,banned:isBanned(banned,v.holder),password:passwordMap.get(key)||'',lastActivity:lastActivity.get(key)||''})).sort((a,b)=>b.lastActivity<a.lastActivity?-1:b.lastActivity>a.lastActivity?1:0)
 
   const allHolders = holders
   if (_holderFilter==='RFP') holders = holders.filter(x=>x.rfp>0)
@@ -1731,6 +1780,7 @@ async function renderHolders(mc, search) {
     const isLostSentinel = hld.holder && hld.holder.trim().toLowerCase()==='lost'
     return `<tr>
     <td style="padding-right:28px"><button class="link${isLostSentinel?' text-muted':''}" data-action="filter-events" data-key="holder" data-val="${h(hld.holder)}">${h(hld.holder)}</button>${renameHolderBtn(hld.holder)}</td>
+    <td style="padding-right:28px">${hld.password?`<span class="mono">${h(hld.password)}</span>`:'<span class="text-muted">—</span>'}${passwordBtn(hld.holder)}</td>
     <td style="padding-right:28px">
       ${hld.banned
         ?`<button class="btn btn-outline btn-sm" data-action="unban-holder" data-holder="${h(hld.holder)}">Unban</button>`
@@ -1741,10 +1791,11 @@ async function renderHolders(mc, search) {
     <td style="text-align:right;padding-right:28px">${holderItemsCell(hld.lostItems, hld.lost>0?'text-muted':'')}</td>
     <td style="text-align:right;padding-right:28px">${bcMap.get(hld.holder.toLowerCase())?`<span class="text-yellow">${bcMap.get(hld.holder.toLowerCase()).toLocaleString()}</span>`:''}</td>
     <td style="text-align:right"><button class="link" data-action="open-holder-items" data-holder="${h(hld.holder)}">Details</button></td>
-  </tr>`}).join('')||'<tr class="empty-row"><td colspan="7">No holders.</td></tr>'
+  </tr>`}).join('')||'<tr class="empty-row"><td colspan="8">No holders.</td></tr>'
 
   mc.innerHTML=`
-    <div class="page-hdr"><div><div class="page-title">Holders</div><div class="page-sub">${holders.length}${_holderFilter!=='ALL'?' · '+HOLDER_FILTER_LABELS[_holderFilter]:''}${_holderSearch?' · "'+h(_holderSearch)+'"':''}</div></div></div>
+    <div class="page-hdr"><div><div class="page-title">Holders</div><div class="page-sub">${holders.length}${_holderFilter!=='ALL'?' · '+HOLDER_FILTER_LABELS[_holderFilter]:''}${_holderSearch?' · "'+h(_holderSearch)+'"':''}</div></div>
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:16px">
       <div class="card card-body" style="padding:16px"><div style="font-size:24px;font-weight:800;color:var(--primary)">${allHolders.length}</div><div class="text-muted" style="font-size:11px;margin-top:3px">Total Holders</div></div>
       <div class="card card-body" style="padding:16px"><div style="font-size:24px;font-weight:800;color:var(--green)">${allHolders.reduce((s,x)=>s+x.inv,0)}</div><div class="text-muted" style="font-size:11px;margin-top:3px">In Inventory</div></div>
@@ -1752,16 +1803,18 @@ async function renderHolders(mc, search) {
       <div class="card card-body" style="padding:16px"><div style="font-size:24px;font-weight:800;color:var(--zinc)">${allHolders.reduce((s,x)=>s+x.lost,0)}</div><div class="text-muted" style="font-size:11px;margin-top:3px">Lost</div></div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-      <div class="search-input" style="flex:1;min-width:200px">
+      <div class="search-input" style="flex:0 1 260px;min-width:160px">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input type="text" placeholder="Search holder…" value="${h(_holderSearch)}" data-input-action="holder-search">
       </div>
       <div class="filter-row" style="margin-bottom:0">
         ${Object.keys(HOLDER_FILTER_LABELS).map(f=>`<button class="filter-chip${_holderFilter===f?' active':''}" data-action="holder-filter" data-filter="${f}">${HOLDER_FILTER_LABELS[f]}</button>`).join('')}
       </div>
+      <div style="flex:1"></div>
+      <button class="btn btn-blue" data-action="new-holder">+ Nieuw Account</button>
     </div>
     <div class="tbl-wrap"><table>
-      <thead><tr><th style="padding-right:28px">Holder</th><th style="padding-right:28px">Status</th><th style="text-align:right;padding-right:28px">In Inventory</th><th style="text-align:right;padding-right:28px">Ready for Pullback</th><th style="text-align:right;padding-right:28px">Lost</th><th style="text-align:right;padding-right:28px">Belcredits</th><th></th></tr></thead>
+      <thead><tr><th style="padding-right:28px">Holder</th><th style="padding-right:28px">Wachtwoord</th><th style="padding-right:28px">Status</th><th style="text-align:right;padding-right:28px">In Inventory</th><th style="text-align:right;padding-right:28px">Ready for Pullback</th><th style="text-align:right;padding-right:28px">Lost</th><th style="text-align:right;padding-right:28px">Belcredits</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`
   wireTradeItemPopovers()
@@ -3332,7 +3385,21 @@ async function doRenameHolder(oldName, newName) {
     await sbDel(`/banned_holders?holder=eq.${enc}`)
   }
 
+  const oldHolderRow = await sbGet(`/holders?select=password&holder=eq.${enc}`).catch(()=>null)
+  if (oldHolderRow?.length) {
+    await sbUpsert('/holders?on_conflict=holder', {holder:newName, password:oldHolderRow[0].password})
+    await sbDel(`/holders?holder=eq.${enc}`)
+  }
+
   await invalidateDashboardHistory()
+}
+
+async function doSetHolderPassword(holder, password) {
+  await sbUpsert('/holders?on_conflict=holder', {holder, password: password||null})
+}
+
+async function doCreateHolder(holder, password) {
+  await doSetHolderPassword(holder, password)
 }
 
 async function doRestore(assetId, notes, status) {
