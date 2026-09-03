@@ -557,12 +557,17 @@
     window.Room.floorThickness = p.parsed.floorThickness;
   });
 
-  // MarketPlaceOffers (IN): public marketplace listings, sent in response to
-  // GetMarketplaceOffers. Byte layout reverse-engineered from two real captures (94 vs
-  // 93 total offers, diffed to isolate exactly one new entry) — every one of 94 records
-  // decoded cleanly against both captures with no misalignment, so this is confirmed,
-  // not guessed. Category 3 = multiple identical items grouped under one price; anything
-  // else (seen: 1) = a single item, whose price lives in a 2-byte field instead of int32.
+  // MarketPlaceOffers (IN, wireId 680): public marketplace listings, sent in response to
+  // GetMarketplaceOffers. Category 3 = multiple identical items grouped under one price;
+  // anything else (seen: 1) = a single item, whose price lives in a 2-byte field instead
+  // of int32. The final int of each record was originally logged as an unused "trailing
+  // flag" — a real capture (2026-09-02, category 1, "Paarse Machine (Rare)") proved it's
+  // actually the offer count: offerId 304381/price 15/avgPrice 72 decoded byte-for-byte
+  // against the native UI's own "Prijs: 15 BC (Gemiddeld: 72)", and that record's trailing
+  // int was 3 — exactly matching the native UI's "Aanbod: 3" for that same listing (every
+  // other record in the same capture had trailing=1, matching their own "Aanbod: 1"). The
+  // category-3 branch's separate count/cap fields are unconfirmed by any live capture and
+  // deliberately left untouched — no evidence they're wrong, so no reason to guess at them too.
   window.PacketParsers.IN.MarketPlaceOffers = raw => {
     const r = window.makeReader(raw); if (!r) return null;
     try {
@@ -579,15 +584,15 @@
           const price = r.int();
           r.int(); // always 0
           const avgPrice = r.int();
-          r.int(); // trailing flag
+          r.int(); // trailing flag — unconfirmed for this branch, see comment above
           offers.push({ offerId, flag, category, classId, count, cap, price, avgPrice });
         } else {
           r.int(); r.int(); // always 0, 0
           const price = r.short();
           r.int(); // always 0
           const avgPrice = r.int();
-          r.int(); // trailing flag
-          offers.push({ offerId, flag, category, classId, count: 1, cap: null, price, avgPrice });
+          const count = r.int(); // confirmed live: real offer count, not a discardable flag
+          offers.push({ offerId, flag, category, classId, count, cap: null, price, avgPrice });
         }
         if (offers.length >= total || offers.length > 500) break;
       }

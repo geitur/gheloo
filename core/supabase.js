@@ -1,7 +1,8 @@
 (function() {
   // Self-hosted Postgres + PostgREST (no Kong/Auth/Realtime/Storage — just the two
   // containers), replacing Supabase's managed free tier (500MB cap) with a 200GB Oracle
-  // Cloud Always Free VM. Runs on 141.148.224.129, project dir ~/gheloo-db on that VM
+  // Cloud Always Free VM. Runs on 141.148.230.254 (Ampere A1, migrated from the original
+  // 141.148.224.129 E2.1.Micro on 2026-09-02), project dir ~/gheloo-db on that VM
   // (docker-compose.yml + init.sql there define the two services and schema). Caddy
   // (/etc/caddy/Caddyfile on the VM) terminates TLS and strips the "/rest/v1" prefix
   // before proxying to PostgREST on :3000 — that's why this still hits /rest/v1/* even

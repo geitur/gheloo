@@ -2,6 +2,30 @@
   console.log('[MarktplaatsNotes] script loaded');
   if (document.getElementById('__mbn_style')) return;
 
+  // On/off toggle — Settings > Appearance > Marktplaats Notes (content.js). Defaults ON
+  // since this ran unconditionally before the toggle existed; adding the toggle shouldn't
+  // silently change behavior for anyone already using it.
+  const ENABLED_KEY = '__ghk_mbn_enabled';
+  let _on = true;
+  try {
+    const saved = localStorage.getItem(ENABLED_KEY);
+    if (saved !== null) _on = saved === 'true';
+  } catch (_) {}
+
+  window.__mbn_isEnabled = function() { return _on; };
+  window.__mbn_setEnabled = function(on) {
+    _on = !!on;
+    try { localStorage.setItem(ENABLED_KEY, String(_on)); } catch (_) {}
+    if (_on) {
+      _requestOwnOffers();
+      _syncNotes();
+    } else {
+      // Pull already-injected note inputs back out immediately instead of waiting for
+      // the next native re-render to happen to wipe them.
+      document.querySelectorAll('.__mbn_note').forEach(function(el) { el.remove(); });
+    }
+  };
+
   // Custom per-offer notes injected under your own marketplace listings ("Dit Meubi is
   // niet verkocht." / "Tijd over: ..."). MarketPlaceOwnOffers (parsed in core/parsers.js)
   // gives offerId + price + expiry per entry but NOT the item name/DOM row — there's no
@@ -145,12 +169,21 @@
   }
 
   function _syncNotes() {
+    if (!_on) return;
     const rows = Array.from(document.querySelectorAll('.nitro-catalog-layout-marketplace-grid .layout-grid-item')).filter(_isOwnOfferRow);
     if (!rows.length) return; // grid not open
     if (rows.length !== _lastOffers.length) {
       console.log('[MarktplaatsNotes] row/offer count mismatch:', rows.length, 'rows vs', _lastOffers.length, 'offers — requesting fresh snapshot');
       _requestOwnOffers();
-      return; // stale/missing snapshot — ask, retry on next mutation
+      // Retrying only on the next DOM mutation isn't enough — listing a new offer can
+      // render the grid once and then sit still, with nothing left to trigger another
+      // MutationObserver callback. The fresh MarketPlaceOwnOffers reply (once _requestOwnOffers
+      // actually lands one, past its own throttle) calls _syncNotes itself, but if THAT
+      // request got throttled away here, nothing was still watching — this timer is the
+      // fallback that keeps checking regardless, so a newly-listed offer isn't stuck
+      // without a note field until some unrelated mutation happens to fire again.
+      setTimeout(_syncNotes, 600);
+      return; // stale/missing snapshot for now
     }
     console.log('[MarktplaatsNotes] syncing', rows.length, 'rows');
     rows.forEach(function(row, i) {
@@ -199,7 +232,7 @@
     document.head.appendChild(style);
 
     if (window._selfName) _loadNotesForAccount(); // covers being (re)loaded after login already happened
-    _requestOwnOffers(); // covers being (re)loaded while the marketplace page is already open
+    if (_on) _requestOwnOffers(); // covers being (re)loaded while the marketplace page is already open
     _syncNotes();
     if (document.body && typeof MutationObserver !== 'undefined') {
       let scheduled = false;

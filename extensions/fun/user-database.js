@@ -35,19 +35,11 @@
 
   // Plain monochrome SVG icons (inherit currentColor) instead of emoji glyphs — emoji
   // render as colorful platform-specific pictures that clash with the rest of the UI.
-  const _ICON_DICE =
-    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-    + '<rect x="3" y="3" width="18" height="18" rx="3"/>'
-    + '<circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none"/>'
-    + '<circle cx="16" cy="8" r="1.2" fill="currentColor" stroke="none"/>'
-    + '<circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/>'
-    + '<circle cx="8" cy="16" r="1.2" fill="currentColor" stroke="none"/>'
-    + '<circle cx="16" cy="16" r="1.2" fill="currentColor" stroke="none"/>'
-    + '</svg>';
-  const _ICON_REPEAT =
-    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-    + '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>'
-    + '<polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>'
+  const _ICON_RADAR =
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    + '<circle cx="12" cy="12" r="8"/>'
+    + '<circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>'
+    + '<path d="M12 12L17 7"/>'
     + '</svg>';
   const _ICON_SEARCH =
     '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
@@ -60,6 +52,10 @@
   const _ICON_DB =
     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
     + '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>'
+    + '</svg>';
+  const _ICON_BAN =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    + '<circle cx="12" cy="12" r="9"/><line x1="6" y1="18" x2="18" y2="6"/>'
     + '</svg>';
 
   // previous_figure_ids are now references into a shared `figures` table (dedup —
@@ -117,9 +113,10 @@
   }
 
   // Wearing an outfit has a real server-side cooldown — throttle client-side too so
-  // spam-clicking the dice/avatar/thumbnails can't queue up requests the server would
-  // just reject anyway. Shared across every wear entry point (dice, main avatar,
-  // previous-outfit thumbnails), not just the dice button.
+  // spam-clicking the avatar/thumbnails can't queue up requests the server would just
+  // reject anyway. Shared across every wear entry point (main avatar, previous-outfit
+  // thumbnails). The dice/auto-random picker moved to its own tool — see
+  // extensions/fun/outfit-randomizer.js — which has its own independent cooldown.
   const WEAR_COOLDOWN_MS = 10000;
   let _wearCooldownUntil = 0;
 
@@ -161,70 +158,9 @@
     ring.style.strokeDashoffset = String(WEAR_RING_CIRCUMFERENCE);
     ring.style.opacity = '0';
   }
-  // Only the ring around whatever was actually clicked pulses — defaults to the dice
-  // ring when nothing specific was passed (dice/auto-random triggers).
+  // Only the ring around whatever was actually clicked pulses.
   function _startWearCooldownRing(ringEl) {
-    _animateRing(ringEl || (panel && panel.querySelector('#__udb_random_ring_circle')));
-  }
-
-  // Picks a random figure out of every logged user's current + previous outfits, then
-  // wears it the same way clicking an avatar/thumbnail does.
-  async function _randomOutfit() {
-    const btn      = panel.querySelector('#__udb_random_btn');
-    const statusEl = panel.querySelector('#__udb_scan_status');
-    if (btn) btn.disabled = true;
-    if (statusEl) statusEl.textContent = 'Picking a random outfit…';
-    await _ensureLoadedAsync();
-
-    // Dedup by outfit identity before picking — otherwise an outfit 500 different
-    // accounts wear would be 500x more likely to get picked than one only 1 account
-    // ever had. Current figures dedupe by their text (same string = same outfit);
-    // previous_figure_ids already dedupe by figures-table id. previous_figures (old,
-    // frozen text array) isn't read here — no longer gets new entries since the dedup
-    // migration.
-    const byKey = new Map();
-    _all.forEach(function(u) {
-      if (u.figure && !byKey.has(u.figure)) byKey.set(u.figure, { figure: u.figure, gender: u.gender });
-      (u.previous_figure_ids || []).forEach(function(id) {
-        const key = 'id:' + id;
-        if (!byKey.has(key)) byKey.set(key, { figureId: id, gender: u.gender });
-      });
-    });
-    const pool = Array.from(byKey.values());
-    if (!pool.length) {
-      if (btn) btn.disabled = false;
-      if (statusEl) statusEl.textContent = 'No outfits logged yet.';
-      return;
-    }
-    const pick = pool[Math.floor(Math.random() * pool.length)];
-    let figure = pick.figure;
-    if (!figure && pick.figureId != null) {
-      await _resolveFigureIds([pick.figureId]);
-      figure = _figureCache.get(pick.figureId);
-    }
-    if (btn) btn.disabled = false;
-    if (!figure) { if (statusEl) statusEl.textContent = 'Could not resolve that outfit, try again.'; return; }
-    // Silent — the cooldown ring around the dice is the feedback, not status text.
-    _wearFigure(figure, pick.gender, statusEl, { silent: true });
-    if (statusEl && statusEl.textContent === 'Picking a random outfit…') statusEl.textContent = '';
-  }
-
-  // Auto-random toggle: re-rolls a new random outfit every WEAR_COOLDOWN_MS, i.e. as
-  // often as the wear cooldown actually allows.
-  let _autoRandomTimer = null;
-  function _toggleAutoRandom() {
-    const btn = panel.querySelector('#__udb_random_auto_btn');
-    if (_autoRandomTimer) {
-      clearInterval(_autoRandomTimer);
-      _autoRandomTimer = null;
-      window.__udb_autoRandomActive = false;
-      if (btn) { btn.classList.remove('active'); btn.title = 'Auto-wear a random outfit every 6s'; }
-      return;
-    }
-    window.__udb_autoRandomActive = true;
-    _randomOutfit();
-    _autoRandomTimer = setInterval(_randomOutfit, WEAR_COOLDOWN_MS);
-    if (btn) { btn.classList.add('active'); btn.title = 'Stop auto-wearing random outfits'; }
+    _animateRing(ringEl);
   }
 
   // ── Data ─────────────────────────────────────────────────────────────────────────
@@ -1157,10 +1093,19 @@
       '.__udb_iconbtn{cursor:pointer;color:#82849a;font-size:14px;line-height:1;padding:2px 6px;background:none;border:none}',
       '.__udb_iconbtn:hover{color:#eceefb}',
       '.__udb_iconbtn.active{color:#2ecc71}',
-      '.__udb_random_wrap{position:relative;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;flex-shrink:0}',
-      '.__udb_random_wrap .__udb_iconbtn{padding:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center}',
-      '.__udb_random_ring{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;transform:rotate(-90deg)}',
-      '.__udb_random_ring circle{fill:none;stroke:#2ecc71;stroke-width:2;stroke-dasharray:56.549;stroke-dashoffset:56.549;opacity:0}',
+      // Native popover — reset the UA default (centered modal box: inset:0, margin:auto,
+      // a visible border, white background) down to a small anchored dropdown instead.
+      // display is deliberately NOT set on the base rule — [popover]'s UA-stylesheet
+      // display:none has to keep winning while closed. Setting display here (even to
+      // "none") makes it an author-origin normal rule, which beats a same-specificity
+      // UA-origin rule regardless of value, and the popover would render open the
+      // instant this stylesheet loads (live 2026-09-02: menu showing before any click).
+      // Only :popover-open flips it visible.
+      '.__udb_scan_popover{position:fixed;inset:auto;margin:0;padding:0;border:1px solid #23252f;background:#12131A;border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.55);overflow:hidden;min-width:170px;color:#eceefb;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}',
+      '.__udb_scan_popover:popover-open{display:flex;flex-direction:column}',
+      '.__udb_scan_popover button{all:unset;box-sizing:border-box;display:block;width:100%;padding:9px 12px;font-size:11px;font-weight:600;color:#eceefb;cursor:pointer}',
+      '.__udb_scan_popover button:hover{background:rgba(255,255,255,.06)}',
+      '.__udb_scan_popover button+button{border-top:1px solid #23252f}',
       '#__udb_scan_status{padding:0 14px 8px;font-size:10px;color:#A6B0FF;font-family:monospace}',
       '#__udb_scan_status:empty{display:none;padding:0}',
       '.__udb_close{cursor:pointer;color:#5c5e6b;font-size:16px;line-height:1;padding:2px 6px}',
@@ -1265,20 +1210,16 @@
       '.__udb_bh_row.__udb_bh_save_err input{border-color:#e74c3c!important;transition:border-color .15s}',
       '.__udb_bh_add{all:unset;display:block;cursor:pointer;text-align:center;font-size:11px;font-weight:700;color:#A6B0FF;padding:10px 14px;box-sizing:border-box}',
       '.__udb_bh_add:hover{background:rgba(255,255,255,.05)}',
-      '#__udb_scan_menu{position:fixed;z-index:1002;display:flex;flex-direction:column;background:#12131A;border:1px solid #23252f;border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.55);overflow:hidden;min-width:170px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}',
-      '#__udb_scan_menu button{all:unset;box-sizing:border-box;display:block;width:100%;padding:9px 12px;font-size:11px;font-weight:600;color:#eceefb;cursor:pointer}',
-      '#__udb_scan_menu button:hover{background:rgba(255,255,255,.06)}',
-      '#__udb_scan_menu button+button{border-top:1px solid #23252f}',
       '#__udb_bc{position:fixed;top:8px;right:664px;width:280px;z-index:1001;user-select:none;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:12px}',
       '#__udb_bc *{box-sizing:border-box}',
       '#__udb_bc_form{padding:12px 14px;display:flex;flex-direction:column;gap:10px}',
-      '.__udb_bc_mode_row{display:flex;gap:14px;font-size:11px;color:#82849a}',
-      '.__udb_bc_radio{display:flex;align-items:center;gap:5px;cursor:pointer}',
-      '.__udb_bc_radio input{width:auto;accent-color:#6C7CFF;padding:0}',
+      '.__udb_bc_sub{font-size:10px;color:#82849a;line-height:1.5}',
       '#__udb_bc_input{width:100%;min-height:110px;resize:vertical;background:#0A0B10;border:1px solid #23252f;border-radius:8px;color:#eceefb;padding:8px 9px;font-size:11px;font-family:monospace;outline:none}',
       '#__udb_bc_input:focus{border-color:#6C7CFF}',
-      '.__udb_bc_file_row{display:flex;align-items:center;gap:8px}',
-      '.__udb_bc_file_status{font-size:10px;color:#5c5e6b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.__udb_bc_upload_btn{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:6px;width:100%;cursor:pointer;text-align:center;font-size:12px;font-weight:700;color:#A6B0FF;padding:9px;border-radius:8px;border:1px dashed #6C7CFF;background:color-mix(in oklch,#6C7CFF 10%,transparent)}',
+      '.__udb_bc_upload_btn:hover{background:color-mix(in oklch,#6C7CFF 18%,transparent)}',
+      '.__udb_bc_upload_btn svg{width:13px;height:13px}',
+      '.__udb_bc_file_status{font-size:10px;color:#5c5e6b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}',
       '#__udb_bc_form label,#__udb_bc_stats label{display:flex;flex-direction:column;gap:4px;font-size:10px;color:#82849a;font-weight:600}',
       '#__udb_bc_form input,#__udb_bc_stats input{background:#0A0B10;border:1px solid #23252f;border-radius:8px;color:#eceefb;padding:7px 9px;font-size:12px;outline:none;box-sizing:border-box}',
       '#__udb_bc_stats{padding:12px 14px;display:none;flex-direction:column;gap:8px;font-size:11px}',
@@ -1305,12 +1246,11 @@
       + '<span class="__udb_eyebrow">Gheloo</span>'
       + '<span class="__udb_title" id="__udb_title_link" title="Open userlogger.databin.uk">User Database</span>'
       + '<span class="__udb_hdr_spacer"></span>'
-      + '<span class="__udb_random_wrap">'
-      + '<svg class="__udb_random_ring" viewBox="0 0 24 24"><circle id="__udb_random_ring_circle" cx="12" cy="12" r="9"/></svg>'
-      + '<button class="__udb_iconbtn" id="__udb_random_btn" title="Wear a random logged outfit">' + _ICON_DICE + '</button>'
-      + '</span>'
-      + '<button class="__udb_iconbtn" id="__udb_random_auto_btn" title="Auto-wear a random outfit every 6s">' + _ICON_REPEAT + '</button>'
-      + '<button class="__udb_iconbtn" id="__udb_scan_btn" title="Scan user IDs via GetExtendedProfile">&#9654;</button>'
+      + '<button class="__udb_iconbtn" id="__udb_scan_btn" popovertarget="__udb_scan_popover" title="Scan user ids — kies scanner">' + _ICON_RADAR + '</button>'
+      + '<div id="__udb_scan_popover" popover class="__udb_scan_popover">'
+      + '<button id="__udb_scan_menu_default">Standaard Checker</button>'
+      + '<button id="__udb_scan_menu_bc">Ban checker</button>'
+      + '</div>'
       + '<button class="__udb_iconbtn" id="__udb_loadall_btn" title="Load all accounts, including group/profile-only entries never seen in a room">' + _ICON_DB + '</button>'
       + '<button class="__udb_iconbtn" id="__udb_namechanges_btn" title="Name changes">&#8644;</button>'
       + '<span class="__udb_close" id="__udb_close">&times;</span>'
@@ -1333,8 +1273,7 @@
 
     window.__ghk_makeDraggable(panel, panel.querySelector('#__udb_hdr'), '__ghk_udb_pos', function(e) {
       return e.target.id === '__udb_close' || e.target.id === '__udb_namechanges_btn'
-        || e.target.id === '__udb_scan_btn' || e.target.id === '__udb_random_btn'
-        || e.target.id === '__udb_random_auto_btn' || e.target.id === '__udb_loadall_btn'
+        || e.target.id === '__udb_scan_btn' || e.target.id === '__udb_loadall_btn'
         || e.target.id === '__udb_title_link';
     });
 
@@ -1348,17 +1287,32 @@
       window.__udb_ensureLoaded();
       _renderNameChanges();
     });
-    panel.querySelector('#__udb_scan_btn').addEventListener('click', function(e) {
-      e.stopPropagation();
-      _scanMenuToggle();
+    // The scan button opens #__udb_scan_popover natively via its popovertarget attribute
+    // — no custom open/close JS at all. A native popover renders in the browser's top
+    // layer and dismisses on outside click / Escape as a platform behavior, so it can't
+    // be defeated by some other element's stopPropagation() the way a hand-rolled
+    // document-listener version was (see git history — that's what broke repeatedly).
+    // Positioning still needs a tiny bit of JS since this isn't anchor-positioned.
+    const scanPopover = panel.querySelector('#__udb_scan_popover');
+    scanPopover.addEventListener('toggle', function(e) {
+      if (e.newState !== 'open') return;
+      const rect = panel.querySelector('#__udb_scan_btn').getBoundingClientRect();
+      scanPopover.style.top = (rect.bottom + 4) + 'px';
+      scanPopover.style.left = Math.max(8, rect.right - 170) + 'px';
+    });
+    scanPopover.querySelector('#__udb_scan_menu_default').addEventListener('click', function() {
+      scanPopover.hidePopover();
+      _scanTogglePanel();
+    });
+    scanPopover.querySelector('#__udb_scan_menu_bc').addEventListener('click', function() {
+      scanPopover.hidePopover();
+      _banCheckTogglePanel();
     });
     panel.querySelector('#__udb_loadall_btn').addEventListener('click', function() {
       if (_loading) return;
       _loaded = false;
       _loadUsers(true);
     });
-    panel.querySelector('#__udb_random_btn').addEventListener('click', function() { _randomOutfit(); });
-    panel.querySelector('#__udb_random_auto_btn').addEventListener('click', function() { _toggleAutoRandom(); });
 
     // Delegated on the container, not per-row — with 30k+ users a fresh listener per
     // row was a chunk of the render lag on its own.
@@ -1428,7 +1382,7 @@
       '<div class="__udb_card">'
       + '<div class="__udb_hdr" id="__udb_range_hdr">'
       + '<span class="__udb_eyebrow">Gheloo</span>'
-      + '<span class="__udb_title">Scan van id tot id</span>'
+      + '<span class="__udb_title">Standaard Checker</span>'
       + '<span class="__udb_close" id="__udb_range_close">&times;</span>'
       + '</div>'
       + '<div id="__udb_range_form">'
@@ -1536,6 +1490,7 @@
     if (!(_scanMode === 'range' && _scanCurrentId !== null)) document.getElementById('__udb_range_cooldown').value = _scanIntervalMs;
     _updateRangePanelView();
     rangePanel.style.display = 'flex';
+    if (window.__ghk_bringToFront) window.__ghk_bringToFront(rangePanel);
   }
 
   // ── Blackholes panel — manually-declared id ranges every scanner always skips, on top
@@ -1704,9 +1659,9 @@
   // across all 5 lands it in the results list.
   const BC_DELAY_KEY = 'gheloo_udb_bc_delay_ms';
   const BC_ATTEMPTS_KEY = 'gheloo_udb_bc_attempts';
-  let _bcDelayMs = parseInt(localStorage.getItem(BC_DELAY_KEY), 10) || 300;
+  let _bcDelayMs = parseInt(localStorage.getItem(BC_DELAY_KEY), 10) || 150;
   if (_bcDelayMs < SCAN_INTERVAL_MIN_MS) _bcDelayMs = SCAN_INTERVAL_MIN_MS;
-  let _bcMaxAttempts = parseInt(localStorage.getItem(BC_ATTEMPTS_KEY), 10) || 5;
+  let _bcMaxAttempts = parseInt(localStorage.getItem(BC_ATTEMPTS_KEY), 10) || 10;
   if (_bcMaxAttempts < 1) _bcMaxAttempts = 1;
 
   let _bcQueue      = [];   // [{id, name|null}]
@@ -1754,36 +1709,20 @@
     }
   });
 
-  // 'ids' mode: accepts bare ids (one per line) or "name<TAB>id" / "id<TAB>name" pairs —
-  // exactly the shape of a userdb TSV export. Whichever token on the line is purely
-  // digits is taken as the id; whatever's left (if anything) becomes the display name.
-  // A line with no numeric token (e.g. a "username\tid" header row) is silently dropped.
-  // 'names' mode: every line is a plain username (first tab-separated column if there
-  // happen to be more, e.g. pasting a full accounts-site export) — no id yet, that gets
-  // resolved against userlogger by _bcResolveNames before the check actually starts.
-  // The two modes exist because a habbo name can itself be all-digits (seen live in a
-  // real accounts export, e.g. "124120559191220") — indistinguishable from a real id by
-  // pattern alone, so guessing silently probed that number as if it were one and always
-  // missed. Letting the user say which the list actually is avoids that misread.
-  function _bcParseInput(text, mode) {
+  // Every line is a plain username (first tab-separated column if there happen to be
+  // more, e.g. pasting a full accounts-site export with credits/notes trailing after it)
+  // — no id yet, that gets resolved against userlogger by _bcResolveNames before the
+  // check actually starts. Ids aren't accepted directly any more: a habbo name can
+  // itself be all-digits (seen live in a real accounts export, e.g. "124120559191220"),
+  // indistinguishable from a real id by pattern alone — always resolving by name avoids
+  // that misread instead of needing the user to say which the pasted list is.
+  function _bcParseInput(text) {
     const out = [];
     (text || '').split(/\r?\n/).forEach(function(line) {
       line = line.trim();
       if (!line) return;
-      if (mode === 'names') {
-        const name = line.split(/\t/)[0].trim();
-        if (name) out.push({ id: null, name: name });
-        return;
-      }
-      const tokens = line.split(/\t+|\s{2,}|,/).map(function(t) { return t.trim(); }).filter(Boolean);
-      const parts = tokens.length > 1 ? tokens : line.split(/\s+/);
-      let id = null;
-      const nameParts = [];
-      parts.forEach(function(t) {
-        if (id === null && /^\d+$/.test(t)) id = parseInt(t, 10);
-        else if (t) nameParts.push(t);
-      });
-      if (id !== null) out.push({ id: id, name: nameParts.join(' ') || null });
+      const name = line.split(/\t/)[0].trim();
+      if (name) out.push({ id: null, name: name });
     });
     return out;
   }
@@ -1941,16 +1880,11 @@
       + '<span class="__udb_close" id="__udb_bc_close">&times;</span>'
       + '</div>'
       + '<div id="__udb_bc_form">'
-      + '<div class="__udb_bc_mode_row">'
-      + '<label class="__udb_bc_radio"><input type="radio" name="__udb_bc_mode" value="ids" checked> Ids</label>'
-      + '<label class="__udb_bc_radio"><input type="radio" name="__udb_bc_mode" value="names"> Namen <span style="opacity:.6">(opzoeken via userlogger)</span></label>'
-      + '</div>'
-      + '<textarea id="__udb_bc_input" placeholder="Bij \'Ids\': ids, of een lijst als &#10;naam[TAB]id&#10;per regel.&#10;Bij \'Namen\': gewoon een lijst usernames, één per regel."></textarea>'
-      + '<div class="__udb_bc_file_row">'
+      + '<div class="__udb_bc_sub">Namen worden opgezocht via userlogger — plak een lijst usernames, één per regel (een volledige export met tabs erin mag ook, alleen de eerste kolom telt).</div>'
+      + '<textarea id="__udb_bc_input" placeholder="username1&#10;username2&#10;username3&#10;…"></textarea>'
       + '<input type="file" id="__udb_bc_file" accept=".txt,.tsv,.csv" style="display:none">'
-      + '<button class="__udb_range_known" id="__udb_bc_file_btn" type="button">Upload .txt</button>'
+      + '<button class="__udb_bc_upload_btn" id="__udb_bc_file_btn" type="button">' + _ICON_DB + ' Upload .txt</button>'
       + '<span class="__udb_bc_file_status" id="__udb_bc_file_status"></span>'
-      + '</div>'
       + '<label>Delay tussen pogingen (ms)<input type="number" id="__udb_bc_delay" min="' + SCAN_INTERVAL_MIN_MS + '" value="' + _bcDelayMs + '"></label>'
       + '<label>Aantal pogingen voor "niet gevonden"<input type="number" id="__udb_bc_attempts" min="1" value="' + _bcMaxAttempts + '"></label>'
       + '<button class="__udb_range_start" id="__udb_bc_start_btn">Start</button>'
@@ -1997,8 +1931,7 @@
       if (delay) _setBcDelayMs(delay);
       const attempts = parseInt(bcPanel.querySelector('#__udb_bc_attempts').value, 10);
       if (attempts) _setBcMaxAttempts(attempts);
-      const mode = (bcPanel.querySelector('input[name="__udb_bc_mode"]:checked') || {}).value || 'ids';
-      let queue = _bcParseInput(bcPanel.querySelector('#__udb_bc_input').value, mode);
+      let queue = _bcParseInput(bcPanel.querySelector('#__udb_bc_input').value);
       if (!queue.length) { window.alert('Geen geldige regels gevonden in de lijst.'); return; }
 
       bcPanel.querySelector('#__udb_bc_form').style.display = 'none';
@@ -2009,17 +1942,15 @@
       _bcRenderProgress();
 
       _bcSkippedNames = [];
-      if (mode === 'names') {
-        const { resolved, unresolved } = await _bcResolveNames(queue);
-        queue = resolved;
-        _bcSkippedNames = unresolved;
-        _bcRenderProgress();
-        if (!queue.length) {
-          bcPanel.querySelector('#__udb_bc_form').style.display = 'flex';
-          bcPanel.querySelector('#__udb_bc_stats').style.display = 'none';
-          window.alert('Geen van deze namen gevonden op userlogger.');
-          return;
-        }
+      const { resolved, unresolved } = await _bcResolveNames(queue);
+      queue = resolved;
+      _bcSkippedNames = unresolved;
+      _bcRenderProgress();
+      if (!queue.length) {
+        bcPanel.querySelector('#__udb_bc_form').style.display = 'flex';
+        bcPanel.querySelector('#__udb_bc_stats').style.display = 'none';
+        window.alert('Geen van deze namen gevonden op userlogger.');
+        return;
       }
       _bcStart(queue);
     });
@@ -2052,61 +1983,7 @@
     if (!bcPanel) return;
     if (bcPanel.style.display !== 'none') { bcPanel.style.display = 'none'; return; }
     bcPanel.style.display = 'flex';
-  }
-
-  // ── Scan mode chooser — the scan button opens this tiny menu instead of jumping
-  // straight into the id-discovery scanner, since there are now two different scanners
-  // behind it. Open/closed state is tracked in its own flag rather than re-read off
-  // scanMenu.style.display, so there's no ambiguity about what "currently open" means.
-  let scanMenu = null;
-  let _scanMenuVisible = false;
-  function _buildScanMenu() {
-    scanMenu = document.createElement('div');
-    scanMenu.id = '__udb_scan_menu';
-    scanMenu.innerHTML =
-      '<button id="__udb_scan_menu_default">Standaard scanner</button>'
-      + '<button id="__udb_scan_menu_bc">Ban checker</button>';
-    document.body.appendChild(scanMenu);
-    scanMenu.style.display = 'none';
-    scanMenu.querySelector('#__udb_scan_menu_default').addEventListener('click', function() {
-      _closeScanMenu();
-      _scanTogglePanel();
-    });
-    scanMenu.querySelector('#__udb_scan_menu_bc').addEventListener('click', function() {
-      _closeScanMenu();
-      _banCheckTogglePanel();
-    });
-    // Capture phase, not bubble — a click on the game's own canvas/UI can call
-    // stopPropagation() in ITS OWN bubble-phase handler, which would stop a bubble-phase
-    // listener here from ever seeing that mousedown at all. That's exactly what leaves
-    // _scanMenuVisible stuck true (menu closes visually some other way, but this listener
-    // never runs to reset the flag) — the next click on the scan button then reads "still
-    // open" and closes it instead of opening it. A capture-phase listener runs before any
-    // element's own handler gets a chance to stop it, so it can't be defeated that way.
-    document.addEventListener('mousedown', function(e) {
-      if (!_scanMenuVisible) return;
-      if (e.target === scanMenu || scanMenu.contains(e.target)) return;
-      if (e.target.id === '__udb_scan_btn') return;
-      _closeScanMenu();
-    }, true);
-  }
-  function _closeScanMenu() {
-    if (scanMenu) scanMenu.style.display = 'none';
-    _scanMenuVisible = false;
-  }
-  function _openScanMenu() {
-    if (!scanMenu) _buildScanMenu();
-    const btn = panel.querySelector('#__udb_scan_btn');
-    const rect = btn.getBoundingClientRect();
-    scanMenu.style.top = (rect.bottom + 4) + 'px';
-    scanMenu.style.left = Math.max(8, rect.right - 170) + 'px';
-    scanMenu.style.display = 'flex';
-    _scanMenuVisible = true;
-    _log('scan menu opened at ' + scanMenu.style.left + ',' + scanMenu.style.top + ' (btn rect: ' + JSON.stringify(rect) + ')');
-  }
-  function _scanMenuToggle() {
-    if (_scanMenuVisible) { _closeScanMenu(); return; }
-    _openScanMenu();
+    if (window.__ghk_bringToFront) window.__ghk_bringToFront(bcPanel);
   }
 
   // Discards the in-progress position instead of just pausing it — next time this mode

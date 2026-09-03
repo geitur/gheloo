@@ -28,6 +28,28 @@
     _exts.filter(e => e.enabled !== false).forEach(_runSingleExtension);
   }
 
+  // Find-or-create an extension entry by NAME and (re)run it — used by the
+  // "Open Macro Editor" button in macros.js to pin a fetched script into the
+  // normal Extensions list instead of requiring a manual copy-paste into
+  // this panel every time it's updated. Always overwrites the stored code
+  // with whatever was just fetched, so re-clicking the button always pins
+  // the current version — an already-running instance only actually picks
+  // that up on its own next run (page reload), same as this tool's own
+  // built-in "nieuwe versie, nu updaten?" flow already expects.
+  window.__ext_upsertAndRun = function(name, code) {
+    _load();
+    let ext = _exts.find(e => e.name === name);
+    if (ext) {
+      ext.code = code;
+      ext.enabled = true;
+    } else {
+      ext = { id: _nextId(), name, code, enabled: true };
+      _exts.push(ext);
+    }
+    _save();
+    if (!window.__ext_cleanups[ext.id]) _runSingleExtension(ext); // not already active this page-load — start it
+  };
+
   function buildExtPanel() {
     const style = document.createElement('style');
     style.textContent = [

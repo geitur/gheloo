@@ -40,12 +40,13 @@
         "extensions/rooms/poster-mover.js",
         "extensions/rooms/room-deleter.js",
         "extensions/fun/user-database.js",
+        "extensions/fun/outfit-randomizer.js",
         "extensions/fun/mimic.js",
         "extensions/fun/friendbot.js",
+        "extensions/fun/marktplaats.js",
         "extensions/exploits/marktplaats.js",
         "extensions/exploits/photo-library.js",
         "extensions/settings/room-history.js",
-        "extensions/settings/marktplaats-alerts.js",
         "extensions/settings/marktplaats-notes.js"],
       "run_at": "document_start",
       "world": "MAIN",
@@ -56,7 +57,13 @@
       "js": ["core/bridge.js"],
       "run_at": "document_start",
       "all_frames": true
+    },
+    {
+      "matches": ["https://www.leet.city/ruilwaarde"],
+      "js": ["extensions/fun/marktplaats-scan-worker.js"],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ],
-  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://userlogger.databin.uk/*", "https://api.github.com/*", "https://github.com/*", "https://*.githubusercontent.com/*", "https://ipapi.co/*"]
+  "host_permissions": ["https://www.leet.city/*", "https://qwcfsqsrtegyvvwkzcgb.supabase.co/*", "https://userlogger.databin.uk/*", "https://marktplaats.databin.uk/*", "https://api.github.com/*", "https://github.com/*", "https://*.githubusercontent.com/*", "https://ipapi.co/*"]
 }

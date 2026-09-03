@@ -27,4 +27,18 @@
       window.postMessage({ type: '__ghk_rv_bundle', ok: !!(response && response.ok), error: response && response.error, diag: response && response.diag }, '*');
     });
   });
+
+  // Marktplaats Scanner (extensions/fun/marktplaats.js) runs in the MAIN world and has no
+  // chrome.tabs access — relays open/close through background.js the same way as every
+  // other MAIN-world -> extension-API call in this file.
+  window.addEventListener('message', function(e) {
+    if (e.source !== window || !e.data) return;
+    if (e.data.type === '__ghk_mp_scan_start') {
+      chrome.runtime.sendMessage({ type: 'mp_scan_start' }, function(resp) {
+        window.postMessage({ type: '__ghk_mp_scan_started', tabIds: (resp && resp.tabIds) || [] }, '*');
+      });
+    } else if (e.data.type === '__ghk_mp_scan_stop') {
+      chrome.runtime.sendMessage({ type: 'mp_scan_stop' });
+    }
+  });
 })();

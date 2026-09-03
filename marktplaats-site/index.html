@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="stylesheet" href="design.css?v=9">
+<title>Marktplaats</title>
+<style>
+/* Page-specific only — shared tokens/shell/buttons/cards/tables/pagination/forms/modal/
+   cat-grid live in design.css. Only this page's own bits stay here. */
+.page{display:none}
+.page.active{display:block}
+
+/* design.css's #sidebar is a plain flex child with no bounded height, so on a page with
+   enough content to scroll (this one, with long Items/Sales lists) it scrolls away with the
+   rest of the page instead of staying put — pinning it here rather than in the shared
+   stylesheet so it doesn't change behavior on every other databin.uk site. */
+#sidebar{position:sticky;top:0;height:100vh}
+
+/* — Sidebar status blocks (Marktplaats Logger / ruilwaarde proxy-scan) — [hidden]
+   overrides are required here: an author-stylesheet `display` declaration at equal
+   specificity to the UA's `[hidden]{display:none}` wins by cascade order regardless of the
+   attribute, so setting el.hidden alone silently did nothing on these two. */
+.proxy-scan-mount{padding:12px 16px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)}
+.proxy-scan-mount[hidden]{display:none}
+.proxy-scan-mount .ps-line{display:flex;align-items:center;gap:6px}
+.proxy-scan-mount .ps-status{display:block;margin:2px 0 6px 13px;color:var(--text);font-weight:600}
+.proxy-scan-mount .ps-time{display:block;margin:2px 0 8px 13px}
+.proxy-scan-mount .btn{width:100%}
+.sb-logger-status{display:flex;align-items:center;gap:7px;padding:12px 16px;border-top:1px solid var(--border);font-size:11.5px;color:var(--muted);cursor:default}
+.sb-logger-status[hidden]{display:none}
+.scan-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+
+/* — Filter bar: search + sort controls + view toggle on one row (view-toggle pinned right
+   via margin-left:auto, everything else flows left) — the old justify-content:space-between
+   spread these across the full width with a huge gap instead. Category chips (.filter-row)
+   get their own row right below, not crammed into this one — same structure on all three
+   pages now. */
+.filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.filter-bar .search-input{flex-shrink:0}
+.view-toggle{display:flex;gap:4px;flex-shrink:0;margin-left:auto}
+
+/* Sort dropdown (+ optional time-range dropdown, shown only for "Meest verhandeld") —
+   same compact auto-width treatment as the pager's page-size-select, just inline here
+   instead of absolutely positioned. */
+.sort-group{display:flex;gap:6px;flex-shrink:0}
+.sort-select{width:auto;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;outline:none;cursor:pointer}
+.sort-select:focus{border-color:var(--primary)}
+
+/* Sales Feed price-range filter — two small number inputs either side of a dash. */
+.price-range-group{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.price-range-input{width:90px;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;outline:none}
+.price-range-input:focus{border-color:var(--primary)}
+.price-range-sep{color:var(--muted);font-size:12px}
+.date-range-input{width:135px;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px;outline:none;color-scheme:dark}
+.date-range-input:focus{border-color:var(--primary)}
+.view-toggle-btn{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .12s}
+.view-toggle-btn:hover{color:var(--text);border-color:var(--muted)}
+.view-toggle-btn.active{background:color-mix(in oklch,var(--primary) 15%,transparent);border-color:color-mix(in oklch,var(--primary) 30%,transparent);color:var(--primary)}
+.view-toggle-btn svg{width:15px;height:15px}
+
+/* — Items list — one row per item, same column-style layout as the Sales Feed below — */
+.item-row{display:flex;align-items:center;gap:10px;padding:9px 14px;width:100%;border:none;border-bottom:1px solid color-mix(in oklch,var(--border) 50%,transparent);background:none;text-align:left;cursor:pointer;font:inherit;color:inherit}
+.item-row:last-child{border-bottom:none}
+.item-row:hover{background:color-mix(in oklch,var(--accent) 50%,transparent)}
+.item-row-name{flex:1;font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item-row-cat{font-size:11px;color:var(--muted);flex-shrink:0;width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item-row-value{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;flex-shrink:0;width:150px;text-align:right}
+.item-row-value.coins{color:var(--gold)}
+.item-row-value.credits{color:var(--primary)}
+.item-row-value.plaincredits{color:var(--teal)}
+.item-row-custom{font-size:11px;color:var(--muted);margin-left:6px}
+.item-value-unit{font-size:9px;font-weight:700;opacity:.75;text-transform:uppercase}
+
+/* — Sales feed — */
+.sale-row{display:flex;align-items:center;gap:10px;padding:9px 14px;width:100%;border:none;border-bottom:1px solid color-mix(in oklch,var(--border) 50%,transparent);background:none;text-align:left;cursor:pointer;font:inherit;color:inherit}
+.sale-row:last-child{border-bottom:none}
+.sale-row:hover{background:color-mix(in oklch,var(--accent) 50%,transparent)}
+.sale-row.new{border-bottom:2px solid var(--red)}
+.cat-card.new-sale{border-color:var(--red);background:color-mix(in oklch,var(--red) 10%,var(--card))}
+.sales-new-badge{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--red);margin-bottom:8px}
+.sales-new-badge[hidden]{display:none}
+.sales-new-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--red);flex-shrink:0}
+.sale-icon{width:22px;height:22px;border-radius:4px;object-fit:contain;background:var(--input);border:1px solid var(--border);flex-shrink:0;image-rendering:pixelated}
+.sale-icon-ph{width:22px;height:22px;border-radius:4px;background:var(--input);border:1px solid var(--border);flex-shrink:0}
+.sale-time{display:flex;flex-direction:column;gap:1px;font-size:11px;color:var(--muted);width:130px;flex-shrink:0;font-variant-numeric:tabular-nums}
+.sale-offerid{font-size:9px;opacity:.75}
+.sale-item{flex:1;font-size:13px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sale-price{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;flex-shrink:0}
+.sale-suspicious{color:var(--red)}
+
+/* — Tile view (the "tegel volgorde" alternative to the row list above) — items and sales
+   both reuse design.css's .cat-grid/.cat-card, just with their own badge/meta bits — */
+.item-value{position:absolute;top:6px;left:6px;background:var(--card);border:1px solid var(--border);color:var(--text);font-size:10px;font-weight:700;padding:2px 6px;border-radius:20px}
+.item-value.coins{border-color:color-mix(in oklch,var(--gold) 45%,transparent);color:var(--gold)}
+.item-value.credits{border-color:color-mix(in oklch,var(--primary) 45%,transparent);color:var(--primary)}
+.item-value.plaincredits{border-color:color-mix(in oklch,var(--teal) 45%,transparent);color:var(--teal)}
+.sale-tile-price{position:absolute;top:6px;left:6px;background:var(--card);border:1px solid var(--border);color:var(--text);font-size:10px;font-weight:700;padding:2px 6px;border-radius:20px}
+.sale-tile-time{font-size:10px;color:var(--muted);margin-top:1px}
+.sale-tile-offerid{font-size:9px;color:var(--muted);opacity:.75;margin-top:1px}
+/* Discount badge (price vs. this offer's own avg_price, straight from the game's packet)
+   — tiered colors for a discount, plain red for a markup (see discountColor() in app.js). */
+.discount-badge{position:absolute;top:6px;right:6px;color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:20px}
+.discount-badge-inline{display:inline-block;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:20px;margin-left:6px;vertical-align:middle}
+
+/* — Item detail modal — */
+.detail-stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.detail-stat{flex:1;min-width:110px;background:var(--input);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.detail-stat-lbl{font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px}
+.detail-stat-val{font-size:18px;font-weight:800}
+#detail-chart-wrap{margin-bottom:16px}
+.detail-sale-pct{font-size:10.5px;color:var(--red);margin-left:6px}
+.detail-sale-flag{flex-shrink:0;font-size:13px;line-height:1;border-radius:6px;padding:4px 6px}
+.detail-sale-flag:hover{color:var(--red);background:color-mix(in oklch,var(--red) 12%,transparent)}
+.detail-sale-flag.active{color:var(--red);background:color-mix(in oklch,var(--red) 12%,transparent)}
+.detail-sales-hdr{font-size:12px;font-weight:700;margin-bottom:8px;display:flex;gap:16px;justify-content:space-between}
+.detail-list-tab{cursor:pointer;color:var(--muted);padding-bottom:4px;border-bottom:2px solid transparent}
+.detail-list-tab:hover{color:var(--text)}
+.detail-list-tab.active{color:var(--text);border-bottom-color:var(--primary)}
+.detail-sale-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid color-mix(in oklch,var(--border) 50%,transparent);font-size:12px}
+.detail-sale-row:last-child{border-bottom:none}
+.detail-sale-row.suspicious{color:var(--red)}
+.detail-sale-num{color:var(--muted);font-size:10.5px;width:40px;flex-shrink:0}
+.detail-sale-price{font-weight:700;font-variant-numeric:tabular-nums;flex:1}
+.detail-sale-offerid{color:var(--muted);font-size:10.5px;flex-shrink:0}
+/* Sale price vs. that item's own all-time average — plain red (sold above avg, a markup) /
+   green (sold below avg, a bargain), no tiering (unlike the Offers discount badge). */
+.vsavg-badge{position:absolute;top:6px;right:6px;font-size:10px;font-weight:700;padding:2px 6px;border-radius:20px;color:#fff}
+.vsavg-badge.up{background:var(--red)}
+.vsavg-badge.down{background:var(--green)}
+.vsavg-badge.flat{background:var(--muted)}
+.vsavg-inline{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:20px;margin-left:6px;vertical-align:middle;color:#fff}
+.vsavg-inline.up{background:var(--red)}
+.vsavg-inline.down{background:var(--green)}
+.vsavg-inline.flat{background:var(--muted)}
+.detail-sale-time{color:var(--muted);font-size:11px;flex-shrink:0}
+#chart-tooltip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:11px;white-space:nowrap;opacity:0;transition:opacity .1s;z-index:10}
+</style>
+</head>
+<body>
+<div id="shell">
+  <aside id="sidebar">
+    <div class="sb-header">
+      <div class="brand-row">
+        <div class="brand-mark">G</div>
+        <div>
+          <div class="eyebrow">Gheloo</div>
+          <div class="title">Marktplaats</div>
+        </div>
+      </div>
+      <a class="hub-back" href="https://hub.databin.uk/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>Terug naar Hub</a>
+    </div>
+    <nav id="tabs">
+      <button class="tab active" data-tab="offers">Marktplaats Offers<span class="nav-dot"></span></button>
+      <button class="tab" data-tab="cancelled">Geannuleerde Offers<span class="nav-dot"></span></button>
+      <button class="tab" data-tab="sales">Marktplaats Sales<span class="nav-dot"></span></button>
+      <button class="tab" data-tab="items">Items<span class="nav-dot"></span></button>
+    </nav>
+    <div class="sb-logger-status" id="offers-logger-card"><span class="scan-dot" style="background:var(--muted)"></span><span>Marktplaats Logger</span></div>
+    <div class="proxy-scan-mount" hidden>
+      <div class="proxy-scan-status-inner"></div>
+    </div>
+  </aside>
+
+  <div id="main">
+    <div class="page active" data-page="offers">
+      <div class="page-hdr">
+        <div>
+          <div class="page-title">Marktplaats Offers</div>
+          <div class="page-sub">Live aanbod op de echte marktplaats — wat nu te koop staat, in-game.</div>
+        </div>
+      </div>
+      <div class="filter-bar">
+        <input class="search-input" id="offers-search" placeholder="Zoek op item...">
+        <div class="sort-group">
+          <select class="sort-select" id="offers-discount-basis" title="Gemiddelde waartegen korting berekend wordt">
+            <option value="0">Gem.: All-time</option>
+            <option value="90">Gem.: 90 dagen</option>
+            <option value="10">Gem.: 10 dagen</option>
+            <option value="custom">Gem.: Custom...</option>
+          </select>
+          <input class="price-range-input" id="offers-discount-basis-custom" type="number" min="1" placeholder="Dagen" style="width:64px" hidden>
+          <select class="sort-select" id="offers-discount-filter">
+            <option value="0">Alle kortingen</option>
+            <option value="20">20%+ korting</option>
+            <option value="30">30%+ korting</option>
+            <option value="40">40%+ korting</option>
+            <option value="50">50%+ korting</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <input class="price-range-input" id="offers-discount-custom" type="number" min="0" max="100" placeholder="% korting" style="width:80px" hidden>
+          <select class="sort-select" id="offers-sort">
+            <option value="newest">Nieuwste aangeboden</option>
+            <option value="oldest">Oudste aangeboden</option>
+            <option value="price-desc">Duurste prijs eerst</option>
+            <option value="price-asc">Minst dure prijs eerst</option>
+            <option value="discount-desc">Meeste korting eerst</option>
+            <option value="traded">Meest verhandeld</option>
+          </select>
+          <select class="sort-select" id="offers-trade-range" hidden>
+            <option value="1">Laatste 24u</option>
+            <option value="7">Laatste 7 dagen</option>
+            <option value="30" selected>Laatste 30 dagen</option>
+            <option value="0">Alle tijd</option>
+          </select>
+        </div>
+        <div class="view-toggle" id="offers-view-toggle"></div>
+      </div>
+      <div class="filter-row" id="offers-filter-row"></div>
+      <div id="offers-list" class="tbl-wrap"></div>
+      <div class="pagination" id="offers-pagination"></div>
+    </div>
+
+    <div class="page" data-page="sales">
+      <div class="page-hdr">
+        <div>
+          <div class="page-title">Marktplaats Sales</div>
+          <div class="page-sub">Alle marktplaats-sales, chronologisch (nieuwste eerst).</div>
+        </div>
+      </div>
+      <div class="filter-bar">
+        <input class="search-input" id="sales-search" placeholder="Zoek op item...">
+        <div class="sort-group">
+          <select class="sort-select" id="sales-sort">
+            <option value="newest">Nieuwste eerst</option>
+            <option value="oldest">Oudste eerst</option>
+            <option value="price-desc">Duurste prijs eerst</option>
+            <option value="price-asc">Minst dure prijs eerst</option>
+            <option value="volatile">Meest verdachte sales</option>
+          </select>
+        </div>
+        <div class="price-range-group">
+          <input class="price-range-input" id="sales-price-min" type="number" min="0" placeholder="Min BC">
+          <span class="price-range-sep">&ndash;</span>
+          <input class="price-range-input" id="sales-price-max" type="number" min="0" placeholder="Max BC">
+        </div>
+        <div class="price-range-group">
+          <input class="date-range-input" id="sales-date-from" type="date">
+          <span class="price-range-sep">&ndash;</span>
+          <input class="date-range-input" id="sales-date-to" type="date">
+        </div>
+        <div class="view-toggle" id="sales-view-toggle"></div>
+      </div>
+      <div class="filter-row" id="sales-filter-row"></div>
+      <div class="sales-new-badge" id="sales-new-badge" hidden><span class="dot"></span><span id="sales-new-text"></span></div>
+      <div id="sales-list" class="tbl-wrap"></div>
+      <div class="pagination" id="sales-pagination"></div>
+    </div>
+
+    <div class="page" data-page="items">
+      <div class="page-hdr">
+        <div>
+          <div class="page-title">Items</div>
+          <div class="page-sub" id="items-sub">Ruilwaarde + volledige sales-historie per item, opgebouwd uit elke scan.</div>
+        </div>
+      </div>
+      <div class="filter-bar">
+        <input class="search-input" id="items-search" placeholder="Zoek op naam...">
+        <div class="sort-group">
+          <select class="sort-select" id="items-sort">
+            <option value="default">Volgorde</option>
+            <option value="traded">Meest verhandeld</option>
+            <option value="last-traded">Laatst verhandeld</option>
+            <option value="price-desc">Duurste eerst</option>
+            <option value="price-asc">Goedkoopste eerst</option>
+            <option value="volatile">Meest verdachte items</option>
+          </select>
+          <select class="sort-select" id="items-trade-range" hidden>
+            <option value="1">Laatste 24u</option>
+            <option value="7">Laatste 7 dagen</option>
+            <option value="30" selected>Laatste 30 dagen</option>
+            <option value="0">Alle tijd</option>
+          </select>
+        </div>
+        <div class="view-toggle" id="items-view-toggle"></div>
+      </div>
+      <div class="filter-row" id="items-filter-row"></div>
+      <div id="items-grid" class="tbl-wrap"></div>
+      <div class="pagination" id="items-pagination"></div>
+    </div>
+
+    <div class="page" data-page="cancelled">
+      <div class="page-hdr">
+        <div>
+          <div class="page-title">Geannuleerde Offers</div>
+          <div class="page-sub">Aanbod dat van de marktplaats gehaald werd zonder te verkopen — niet op de Marktplaats Sales.</div>
+        </div>
+      </div>
+      <div class="filter-bar">
+        <input class="search-input" id="cancelled-search" placeholder="Zoek op item...">
+        <div class="sort-group">
+          <select class="sort-select" id="cancelled-sort">
+            <option value="newest">Recentst geannuleerd</option>
+            <option value="oldest">Langst geleden geannuleerd</option>
+            <option value="price-desc">Duurste prijs eerst</option>
+            <option value="price-asc">Minst dure prijs eerst</option>
+            <option value="count-desc">Grootste aantal eerst</option>
+            <option value="count-asc">Kleinste aantal eerst</option>
+          </select>
+        </div>
+        <div class="price-range-group">
+          <input class="price-range-input" id="cancelled-price-min" type="number" min="0" placeholder="Min BC">
+          <span class="price-range-sep">&ndash;</span>
+          <input class="price-range-input" id="cancelled-price-max" type="number" min="0" placeholder="Max BC">
+        </div>
+        <div class="price-range-group">
+          <input class="date-range-input" id="cancelled-date-from" type="date">
+          <span class="price-range-sep">&ndash;</span>
+          <input class="date-range-input" id="cancelled-date-to" type="date">
+        </div>
+        <div class="view-toggle" id="cancelled-view-toggle"></div>
+      </div>
+      <div class="filter-row" id="cancelled-filter-row"></div>
+      <div id="cancelled-list" class="tbl-wrap"></div>
+      <div class="pagination" id="cancelled-pagination"></div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-overlay">
+  <div id="modal-box" style="max-width:620px">
+    <div class="modal-hdr">
+      <h3 id="modal-title"></h3>
+      <button class="modal-close" id="modal-close-btn">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script src="app.js?v=58"></script>
+</body>
+</html>

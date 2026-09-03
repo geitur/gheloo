@@ -70,6 +70,11 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
       <span class="site-name">Furnis</span>
       <span class="site-desc">Gedeelde catalogus-scan van alle Gheloo-gebruikers doorzoeken.</span>
     </a>
+    <a class="site-card" href="https://marktplaats.databin.uk/">
+      <span class="site-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l1.5-5h15L21 9"/><path d="M4 9h16v10a1 1 0 01-1 1H5a1 1 0 01-1-1V9z"/><path d="M9 13a3 3 0 006 0"/></svg></span>
+      <span class="site-name">Marktplaats</span>
+      <span class="site-desc">Ruilwaarde-scans: items, sales-historie en een chronologische sales-feed.</span>
+    </a>
   </div>
 </div>
 <div id="db-usage"></div>
@@ -78,10 +83,9 @@ body{display:flex;align-items:center;justify-content:center;padding:24px}
 <script>
 (function () {
   const SB_URL = '/rest/v1';
-  // Whole-disk usage (not just Postgres) — VM's actual boot volume is ~46.6GB
-  // (`df -h /` on the box; Oracle Always Free allows up to 200GB total block
-  // storage, but the default boot volume is 50GB unless manually resized/extra
-  // volumes attached, which hasn't happened here). /usr/local/bin/disk-usage.sh
+  // Whole-disk usage (not just Postgres) — VM's boot volume was resized to the
+  // full 200GB Always Free allowance on 2026-09-02 (was 50GB on the old, since
+  // migrated, VM). /usr/local/bin/disk-usage.sh
   // runs `df /` every 5min via cron and writes this file — that cron interval is the
   // real refresh rate, this just polls often enough to pick up each new write.
   function pollDiskUsage() {

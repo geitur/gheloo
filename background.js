@@ -1,6 +1,58 @@
+// Marktplaats Scanner — one background tab per category, each running
+// extensions/fun/marktplaats-scan-worker.js (matched via manifest.json against
+// leet.city/ruilwaarde) tagged by a #ghscan=<slug> hash so that file knows which category
+// tab to click and never touches a tab a user opened by hand.
+var MP_SCAN_CATEGORIES = ['club-cadeau', 'ltd', 'rares', 'ss'];
+var MP_SCAN_URL_BASE = 'https://www.leet.city/ruilwaarde';
+
+function mpSleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
+// chrome.tabs.remove() has been seen live to just not close a tab (still shows up in the
+// next tabs.query a moment later — a busy/loading tab occasionally ignores the first
+// remove) — this re-queries and retries the removal instead of firing it once and trusting
+// it worked, giving up only after several real attempts.
+function closeAllScanTabsUntilGone(maxAttempts) {
+  maxAttempts = maxAttempts || 5;
+  function attempt(n) {
+    return chrome.tabs.query({ url: MP_SCAN_URL_BASE + '*' }).then(function(tabs) {
+      if (!tabs.length) return;
+      return Promise.all(tabs.map(function(t) { return chrome.tabs.remove(t.id).catch(function() {}); }))
+        .then(function() { return mpSleep(300); })
+        .then(function() {
+          if (n >= maxAttempts) return; // a tab that survives this many removes isn't going to close — stop hammering it
+          return attempt(n + 1);
+        });
+    });
+  }
+  return attempt(1);
+}
+
 chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
   if (msg && msg.type === 'apply_figure_to_tab') {
     chrome.tabs.sendMessage(msg.tabId, { type: 'apply_figure', figure: msg.figure, gender: msg.gender });
+  }
+  if (msg && msg.type === 'mp_scan_start') {
+    // Close any scan tabs already open before opening fresh ones — toggling Scanner on
+    // twice in a row (or an extension reload re-triggering the saved "on" state while old
+    // tabs from before the reload are still alive) used to just pile up a second set of 4
+    // tabs on top of the first, all scanning the same 4 categories in parallel with
+    // themselves.
+    closeAllScanTabsUntilGone().then(function() {
+      return Promise.all(MP_SCAN_CATEGORIES.map(function(slug) {
+        return chrome.tabs.create({ url: MP_SCAN_URL_BASE + '#ghscan=' + slug, active: false });
+      }));
+    }).then(function(tabs) {
+      sendResponse({ tabIds: tabs.map(function(t) { return t.id; }) });
+    }).catch(function() {
+      sendResponse({ tabIds: [] });
+    });
+    return true; // keep the message channel open for the async sendResponse above
+  }
+  if (msg && msg.type === 'mp_scan_stop') {
+    // Queried by URL instead of trusting passed-in tab ids — those only ever lived in the
+    // hotel tab's in-memory state, so a reload between start and stop would otherwise leave
+    // the scan tabs orphaned with nothing able to close them.
+    closeAllScanTabsUntilGone();
   }
   if (msg && msg.type === 'get_room_viewer_bundle') {
     var tabId = sender.tab && sender.tab.id;

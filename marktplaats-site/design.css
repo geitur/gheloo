@@ -1,0 +1,227 @@
+/* Gheloo shared design system — same tokens, shell, buttons, tables, forms, badges,
+   pagination and modal on every databin.uk site, so they read as one product instead of
+   five separately-styled pages. Deurwaarder was the most complete/mature version of this
+   system; this file is that set, generalized to also cover the class names other sites
+   already use for the same concepts (.tab as well as .nav-item, etc.) so no site's HTML/JS
+   needed rewriting to adopt it — only each site's local <style> block shrank, keeping just
+   what's genuinely page-specific. Copied verbatim into every site's own folder (no
+   cross-origin stylesheet dependency between subdomains). */
+
+:root {
+  --bg:       oklch(0.08 0.014 265);
+  --card:     oklch(0.115 0.012 265);
+  --sidebar:  oklch(0.105 0.013 265);
+  --primary:  oklch(0.68 0.19 265);
+  --border:   oklch(0.24 0.013 265);
+  --text:     oklch(0.94 0.006 265);
+  --muted:    oklch(0.56 0.016 265);
+  --accent:   oklch(0.21 0.015 265);
+  --input:    oklch(0.19 0.012 265);
+  --radius:   8px;
+  --green:    oklch(0.65 0.18 160);
+  --red:      oklch(0.65 0.22 25);
+  --orange:   oklch(0.65 0.18 60);
+  --pink:     oklch(0.65 0.18 320);
+  --purple:   oklch(0.65 0.20 300);
+  --teal:     oklch(0.65 0.18 185);
+  --zinc:     oklch(0.56 0.016 265);
+  --yellow:   oklch(0.78 0.16 95);
+  --gold:     oklch(0.78 0.16 95);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* — Shell / sidebar — */
+#shell{display:flex;min-height:100vh}
+#sidebar{width:220px;flex-shrink:0;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.sb-header{padding:18px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
+.brand-row{display:flex;align-items:center;gap:10px}
+.brand-mark{width:30px;height:30px;border-radius:8px;background:color-mix(in oklch,var(--primary) 18%,transparent);color:var(--primary);display:flex;align-items:center;justify-content:center;font:800 13px system-ui;flex-shrink:0}
+.eyebrow{font:700 9px/1 monospace;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:3px}
+.title{font:700 15px/1.2 system-ui;color:var(--text)}
+.hub-back{display:flex;align-items:center;gap:6px;margin:14px 0 0 -7px;padding:5px 7px;border-radius:6px;color:var(--muted);font-size:12px;font-weight:600;text-decoration:none;transition:all .12s;width:fit-content;flex-shrink:0}
+.hub-back:hover{background:var(--accent);color:var(--text)}
+.hub-back svg{width:12px;height:12px;flex-shrink:0}
+
+#tabs,#sb-nav{padding:12px;display:flex;flex-direction:column;gap:1px;overflow-y:auto;flex:1}
+#sb-nav{gap:20px}
+.nav-section-lbl{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);padding:0 8px 4px;opacity:.7}
+.nav-group{display:flex;flex-direction:column;gap:1px}
+.tab,.nav-item{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:8px;cursor:pointer;color:var(--muted);font-size:13px;font-weight:500;text-decoration:none;border:none;background:none;width:100%;text-align:left;user-select:none;transition:all .12s}
+.tab svg,.nav-item svg{width:16px;height:16px;flex-shrink:0}
+.tab:hover,.nav-item:hover{background:var(--accent);color:var(--text)}
+.tab.active,.nav-item.active{background:color-mix(in oklch,var(--primary) 15%,transparent);color:var(--primary);font-weight:600}
+/* .nav-item's dot is a trailing status marker (pushed to the row's right edge); .tab's dot
+   is a leading category-color swatch (accounts-site) and must stay put inline, not float
+   right — same base circle, different placement. */
+.tab .dot,.nav-item .dot{width:6px;height:6px;border-radius:50%;background:var(--primary);flex-shrink:0}
+.nav-item .dot{margin-left:auto}
+.tab .dot{width:8px;height:8px}
+.tab .count{margin-left:auto;font-size:11px;color:var(--muted);font-weight:700}
+
+/* Small active-page marker, right-aligned in the nav row — present in every tab's markup,
+   only visible (opacity) once that tab carries .active. Separate from .tab .dot (accounts'
+   leading category-color swatch) since the two occupy the same row for different reasons. */
+.nav-dot{width:6px;height:6px;border-radius:50%;background:var(--primary);margin-left:auto;flex-shrink:0;opacity:0;transition:opacity .12s}
+.tab.active .nav-dot,.nav-item.active .nav-dot{opacity:1}
+
+.sb-action{padding:12px 12px 0}
+.sb-action-link{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;padding:10px 12px;border-radius:8px;background:color-mix(in oklch,var(--primary) 15%,transparent);border:1px solid color-mix(in oklch,var(--primary) 30%,transparent);color:var(--primary);font-size:12.5px;font-weight:700;text-decoration:none;transition:background .12s;box-sizing:border-box}
+.sb-action-link:hover{background:color-mix(in oklch,var(--primary) 25%,transparent)}
+.sb-action-link svg{width:13px;height:13px;flex-shrink:0}
+
+/* — Main / page header — */
+#main{flex:1;padding:24px 28px;min-width:0}
+.page-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.page-title{font-size:20px;font-weight:700;color:var(--text)}
+.page-sub{font-size:12px;color:var(--muted);margin-top:3px}
+.page-hdr-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.loading{color:var(--muted);font-size:13px;padding:48px;text-align:center}
+.error-msg{color:var(--red);background:color-mix(in oklch,var(--red) 10%,transparent);border:1px solid color-mix(in oklch,var(--red) 30%,transparent);border-radius:8px;padding:12px 16px;margin:16px 0;font-size:13px}
+
+/* — Buttons — */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:7px;font:600 12px/1 inherit;cursor:pointer;border:1px solid transparent;transition:all .12s;white-space:nowrap}
+.btn svg{width:13px;height:13px;flex-shrink:0}
+.btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-outline{background:transparent;border-color:var(--border);color:var(--muted)}
+.btn-outline:hover{border-color:var(--primary);color:var(--primary)}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--muted);padding:5px 8px}
+.btn-ghost:hover{color:var(--text);background:var(--accent)}
+.btn-danger{background:color-mix(in oklch,var(--red) 15%,transparent);border-color:color-mix(in oklch,var(--red) 30%,transparent);color:var(--red)}
+.btn-danger:hover{background:color-mix(in oklch,var(--red) 25%,transparent)}
+.btn-green{background:color-mix(in oklch,var(--green) 15%,transparent);border-color:color-mix(in oklch,var(--green) 30%,transparent);color:var(--green)}
+.btn-green:hover{background:color-mix(in oklch,var(--green) 25%,transparent)}
+.btn-blue{background:color-mix(in oklch,var(--primary) 15%,transparent);border-color:color-mix(in oklch,var(--primary) 30%,transparent);color:var(--primary)}
+.btn-blue:hover{background:color-mix(in oklch,var(--primary) 25%,transparent)}
+.btn-red{background:var(--red);color:#fff;border-color:var(--red)}
+.btn-red:hover{filter:brightness(1.08)}
+.btn-sm{padding:4px 8px;font-size:11px}
+.btn-sm svg{width:11px;height:11px}
+button:disabled{opacity:.5;cursor:not-allowed}
+
+/* — Cards (either flavor: header/body substructure, or plain h3+content) — */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:16px}
+.card-header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.card-title{font-size:13px;font-weight:600}
+.card-sub{font-size:11px;color:var(--muted)}
+.card-body{padding:16px}
+.card h3{font-size:13px;font-weight:700;margin-bottom:4px;padding:18px 18px 0}
+.card > h3:first-child{padding-top:18px}
+.card .desc{font-size:12px;color:var(--muted);margin:0 18px 12px;line-height:1.5}
+
+/* — Forms — */
+label{font-size:11px;font-weight:600;color:var(--muted)}
+input,textarea,select{background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:8px 10px;font:14px inherit;outline:none;width:100%;box-sizing:border-box;transition:border-color .12s}
+input:focus,textarea:focus,select:focus{border-color:var(--primary)}
+input::placeholder,textarea::placeholder{color:var(--muted)}
+textarea{resize:vertical;min-height:60px;width:100%}
+/* Paste/import boxes (JSON, bulk text) — opt in with this class, not the textarea default,
+   so prose fields like a "Notes" box on deurwaarder don't render in monospace too. */
+textarea.mono-input,textarea#import-text,textarea#paste-input,textarea#inv-paste-input,textarea#imp-paste-input{min-height:120px;font-family:ui-monospace,monospace;font-size:12px}
+select{cursor:pointer}
+.row{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.search-input{background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-size:12px;outline:none;width:240px}
+.search-input:focus{border-color:var(--primary)}
+
+/* — Filter chips — */
+.filter-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.filter-chip{padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .1s}
+.filter-chip:hover{border-color:var(--primary);color:var(--primary)}
+.filter-chip.active{background:var(--primary);border-color:var(--primary);color:#fff}
+.chart-hide-suspicious-btn{flex-shrink:0;padding:4px 10px;border-radius:20px;font-size:10.5px;font-weight:600;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .1s}
+.chart-hide-suspicious-btn:hover{border-color:var(--red);color:var(--red)}
+.chart-hide-suspicious-btn.active{background:var(--red);border-color:var(--red);color:#fff}
+
+/* — Tables — */
+.tbl-wrap{border:1px solid var(--border);border-radius:var(--radius);overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead th,th{text-align:left;padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);background:color-mix(in oklch,var(--card) 50%,var(--bg));border-bottom:1px solid var(--border);white-space:nowrap}
+tbody td,td{padding:9px 14px;border-bottom:1px solid color-mix(in oklch,var(--border) 50%,transparent);vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:color-mix(in oklch,var(--accent) 50%,transparent)}
+.mono{font-family:ui-monospace,monospace;font-size:11px}
+.empty-row td{text-align:center;color:var(--muted);padding:48px!important;font-size:13px}
+.link{color:var(--primary);cursor:pointer;text-decoration:none;background:none;border:none;font:inherit;font-size:inherit;padding:0}
+.link:hover{text-decoration:underline}
+.sort-th{cursor:pointer;user-select:none;display:flex;align-items:center;gap:5px}
+.sort-th:hover{color:var(--text)}
+.sort-th svg{width:10px;height:10px;opacity:.35;transition:opacity .1s,transform .1s}
+.sort-th.sort-asc svg{opacity:1;color:var(--primary)}
+.sort-th.sort-desc svg{opacity:1;color:var(--primary);transform:rotate(180deg)}
+.copy-btn{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;border:1px solid var(--border);background:var(--input);color:var(--muted);cursor:pointer;transition:all .12s;flex-shrink:0}
+.copy-btn:hover{border-color:var(--primary);color:var(--primary)}
+.copy-btn.copied{border-color:var(--green);color:var(--green)}
+.copy-btn svg{width:13px;height:13px}
+.item-cell{display:flex;align-items:center;gap:8px}
+.row-thumb{width:22px;height:22px;border-radius:4px;object-fit:contain;background:var(--input);border:1px solid var(--border);flex-shrink:0;vertical-align:middle;image-rendering:pixelated}
+.icon-cell img{width:24px;height:24px;object-fit:contain;image-rendering:pixelated;vertical-align:middle}
+
+/* — Badges — */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;white-space:nowrap}
+.badge-green,.badge.match{background:color-mix(in oklch,var(--green) 15%,transparent);color:var(--green)}
+.badge-orange{background:color-mix(in oklch,var(--orange) 12%,transparent);color:var(--orange)}
+.badge-red,.badge.nomatch{background:color-mix(in oklch,var(--red) 15%,transparent);color:var(--red)}
+.badge-zinc,.badge.neutral{background:color-mix(in oklch,var(--zinc) 12%,transparent);color:var(--zinc)}
+.badge-blue{background:color-mix(in oklch,var(--primary) 12%,transparent);color:var(--primary)}
+.badge-teal{background:color-mix(in oklch,var(--teal) 12%,transparent);color:var(--teal)}
+.badge-purple{background:color-mix(in oklch,var(--purple) 12%,transparent);color:var(--purple)}
+.badge.neutral{background:color-mix(in oklch,var(--primary) 15%,transparent);color:var(--primary)}
+
+/* — Stat cards — */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:20px}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.stat-val{font-size:24px;font-weight:800;line-height:1;margin-bottom:3px}
+.stat-lbl{font-size:11px;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.3px}
+
+/* — Pagination — */
+.pagination{position:relative;display:flex;align-items:center;justify-content:center;gap:6px;margin-top:14px;flex-wrap:wrap}
+.pagination .page-info{font-size:12px;color:var(--muted);margin:0 6px}
+.page-jump{width:50px;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;text-align:center;outline:none}
+.page-jump:focus{border-color:var(--primary)}
+.page-jump::-webkit-outer-spin-button,.page-jump::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.page-jump{-moz-appearance:textfield}
+.no-spin::-webkit-outer-spin-button,.no-spin::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.no-spin{-moz-appearance:textfield}
+.page-size-select{position:absolute;right:0;top:50%;transform:translateY(-50%);width:auto;background:var(--input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 8px;font-size:12px;outline:none;cursor:pointer}
+.page-size-select:focus{border-color:var(--primary)}
+
+/* — Inventory / catalog grid — */
+.cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.cat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:10px;cursor:pointer;transition:border-color .12s;position:relative;text-align:left}
+.cat-card:hover{border-color:var(--primary)}
+.cat-thumb{width:100%;aspect-ratio:1;border-radius:6px;background:var(--input);display:flex;align-items:center;justify-content:center;overflow:hidden;margin-bottom:8px;padding:10%}
+.cat-thumb img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated}
+.cat-thumb-ph{color:var(--muted);font-size:20px;font-weight:700}
+.cat-name{font-size:11px;font-weight:600;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:28px;color:var(--text)}
+.cat-qty{position:absolute;top:6px;right:6px;background:var(--primary);color:#fff;font-size:12px;font-weight:800;padding:2px 8px;border-radius:20px;line-height:1.3;border:2px solid var(--card)}
+.cat-grid-lg{grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
+.cat-grid-lg .cat-card{padding:12px}
+.cat-grid-lg .cat-name{font-size:12px;min-height:32px}
+
+/* — Modal — */
+#modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center;padding:16px}
+#modal-overlay.open{display:flex}
+#modal-box{background:var(--card);border:1px solid var(--border);border-radius:12px;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.modal-hdr{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border);flex-shrink:0}
+.modal-hdr h3{font-size:15px;font-weight:700;flex:1;margin:0}
+.modal-close{background:none;border:none;cursor:pointer;color:var(--muted);padding:4px;border-radius:5px;font-size:18px;line-height:1;transition:color .1s}
+.modal-close:hover{color:var(--text)}
+.modal-body{flex:1;overflow-y:auto;padding:16px 18px}
+.modal-footer{padding:14px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;flex-shrink:0}
+.modal-error{color:var(--red);background:color-mix(in oklch,var(--red) 10%,transparent);border:1px solid color-mix(in oklch,var(--red) 30%,transparent);border-radius:6px;padding:10px 12px;font-size:12px;margin-top:10px}
+
+/* — Breadcrumb / detail grid (used by a couple of the heavier pages) — */
+.breadcrumb{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-bottom:16px}
+.breadcrumb svg{width:12px;height:12px;color:var(--muted)}
+.detail-grid{display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start}
+.summary-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius)}
+.summary-card-hdr{padding:12px 16px;border-bottom:1px solid var(--border);font-size:12px;font-weight:600}
+.summary-card-body{padding:0 16px}
+.sum-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid color-mix(in oklch,var(--border) 50%,transparent);font-size:12px}
+.sum-row:last-child{border-bottom:none}
+.sum-label{color:var(--muted)}

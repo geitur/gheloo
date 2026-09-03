@@ -86,6 +86,48 @@
       if (_panelLeft !== null) { panel.style.right='auto'; panel.style.left=_panelLeft+'px'; panel.style.top=_panelTop+'px'; }
     }
 
+    // "Open Macro Editor" — the full node-graph Gheloo Macro Editor is a
+    // separate, much bigger tool that deliberately does NOT live in this
+    // extension's own source (that's the whole point of hosting it on
+    // Supabase: it can ship updates without a gheloo-logger release at
+    // all). This just fetches whatever's currently the latest published
+    // version and pins it into the normal Extensions list (window.
+    // __ext_upsertAndRun, see extensions/userext/manager.js) — same
+    // find-or-create-by-name + always-refresh-the-code behavior as
+    // re-pasting it into that panel by hand used to require, minus the
+    // copy-paste. window.__gheloo_auto_open (read by the editor's own
+    // ensureRoomToolsIcon) is what makes it actually open right away
+    // instead of just quietly registering in the background.
+    const MACRO_EDITOR_SUPABASE_URL = 'https://argxsgmqhrqoicfaqngt.supabase.co/rest/v1';
+    const MACRO_EDITOR_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFyZ3hzZ21xaHJxb2ljZmFxbmd0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNjI1NDgsImV4cCI6MjEwMDgzODU0OH0.eeyd52VAqu7xCTX2tsE1krzAbBvhFe2E2lxRdyfxcII';
+    async function _openBigMacro() {
+      const btn = panel.querySelector('#__mac_openbig');
+      if (!btn || btn.disabled) return;
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Laden...';
+      try {
+        const res = await fetch(MACRO_EDITOR_SUPABASE_URL + '/extension_release?select=version,code&order=version.desc&limit=1', {
+          headers: { apikey: MACRO_EDITOR_SUPABASE_ANON_KEY, Authorization: 'Bearer ' + MACRO_EDITOR_SUPABASE_ANON_KEY },
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const rows = await res.json();
+        const code = rows[0] && rows[0].code;
+        if (!code) throw new Error('geen code gevonden in extension_release');
+        window.__gheloo_loaded_version = rows[0].version;
+        window.__gheloo_auto_open = true;
+        if (!window.__ext_upsertAndRun) throw new Error('Extensions manager niet geladen');
+        window.__ext_upsertAndRun('Gheloo Macro Editor', code);
+        panel.style.display = 'none'; // uit de weg — de editor toont zichzelf
+      } catch (err) {
+        console.error('[Macros] Open Macro Editor mislukt:', err);
+        alert('Ophalen mislukt: ' + (err && err.message || err));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
+
     function _render() {
       const existing = (_editing != null && _editing !== -1) ? (_macros.find(x => x.id === _editing) || {}) : {};
       const isPacket = (existing.type||'text') === 'packet';
@@ -100,6 +142,7 @@
           '<div id="__mac_body">' +
             '<div id="__mac_toolbar">' +
               '<small class="__mac_muted">' + _macros.length + ' macro' + (_macros.length===1?'':'s') + '</small>' +
+              '<button id="__mac_openbig" class="__mac_btn __mac_btn_sm __mac_btn_secondary" title="Haalt de nieuwste versie op en pint hem als Extension">Open Macro Editor</button>' +
               '<button id="__mac_addbtn" class="__mac_btn __mac_btn_sm __mac_btn_primary">+ Add</button>' +
             '</div>' +
             '<div id="__mac_list">' + _renderList() + '</div>' +
@@ -118,6 +161,7 @@
 
       panel.querySelector('#__mac_hclose').addEventListener('click', () => { panel.style.display = 'none'; });
       panel.querySelector('#__mac_addbtn').addEventListener('click', () => { _editing = -1; _render(); });
+      panel.querySelector('#__mac_openbig').addEventListener('click', _openBigMacro);
 
       panel.querySelectorAll('.__mac_edit').forEach(btn => {
         btn.addEventListener('click', () => { _editing = parseInt(btn.dataset.id); _render(); });
