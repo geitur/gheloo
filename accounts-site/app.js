@@ -393,21 +393,10 @@
       filtered = filtered.filter((r) => r.username.toLowerCase().includes(q) || (r.password || '').toLowerCase().includes(q));
     }
 
-    if (_query) {
-      // Searching: closest match first (exact, then starts-with, then contains — checked
-      // across both username and password, whichever field matches best for that row),
-      // column sort takes a back seat while a query is active.
-      const q = _query.toLowerCase();
-      const fieldScore = (val) => {
-        const v = (val || '').toLowerCase();
-        if (v === q) return 0;
-        if (v.indexOf(q) === 0) return 1;
-        if (v.indexOf(q) !== -1) return 2;
-        return 3;
-      };
-      const score = (r) => Math.min(fieldScore(r.username), fieldScore(r.password));
-      filtered.sort((a, b) => score(a) - score(b) || a.username.localeCompare(b.username));
-    } else if (_sortKey === 'created_at') {
+    // A picked column sort always wins, search or no search — search is just a filter on
+    // which rows show up, not a reason to override how they're ordered. Relevance-sort only
+    // kicks in while searching WITHOUT an explicit column sort chosen.
+    if (_sortKey === 'created_at') {
       const dir = _sortDir === 'desc' ? -1 : 1;
       filtered.sort((a, b) => ((new Date(a.created_at || 0) - new Date(b.created_at || 0)) * dir) || a.username.localeCompare(b.username));
     } else if (_sortKey === 'note') {
@@ -418,6 +407,19 @@
     } else if (_sortKey) {
       const dir = _sortDir === 'desc' ? -1 : 1;
       filtered.sort((a, b) => (((a[_sortKey] ?? -Infinity) - (b[_sortKey] ?? -Infinity)) * dir) || a.username.localeCompare(b.username));
+    } else if (_query) {
+      // Closest match first (exact, then starts-with, then contains — checked across both
+      // username and password, whichever field matches best for that row).
+      const q = _query.toLowerCase();
+      const fieldScore = (val) => {
+        const v = (val || '').toLowerCase();
+        if (v === q) return 0;
+        if (v.indexOf(q) === 0) return 1;
+        if (v.indexOf(q) !== -1) return 2;
+        return 3;
+      };
+      const score = (r) => Math.min(fieldScore(r.username), fieldScore(r.password));
+      filtered.sort((a, b) => score(a) - score(b) || a.username.localeCompare(b.username));
     } else {
       filtered.sort((a, b) => a.username.localeCompare(b.username));
     }
