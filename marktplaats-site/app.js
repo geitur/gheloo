@@ -879,15 +879,18 @@
     const timeTxt = s && s.lastRun ? relTime(s.lastRun.finishedAt) : '—';
     // Belgian time explicitly (not the viewer's own timezone) — the schedule itself is
     // defined in Brussels wall-clock time (see ruilwaarde-proxy-scan/schedule.js), so
-    // showing anything else here would just be confusing next to it.
+    // showing anything else here would just be confusing next to it. Hour:minute only — the
+    // weekday added noise without adding information for a scan that's always within a day.
     const nextTxt = s && s.nextScanAt
-      ? new Date(s.nextScanAt).toLocaleString('nl-BE', { timeZone: 'Europe/Brussels', weekday: 'short', hour: '2-digit', minute: '2-digit' })
+      ? new Date(s.nextScanAt).toLocaleString('nl-BE', { timeZone: 'Europe/Brussels', hour: '2-digit', minute: '2-digit' })
       : '—';
     const html = '<div class="ps-line"><span class="scan-dot" style="background:' + dotColor + '"></span><span>Ruilwaarde proxy-scan</span></div>'
-      + '<span class="ps-status">' + esc(label) + '</span>'
       + '<span class="ps-time">Laatst gescand: ' + esc(timeTxt) + '</span>'
+      + '<span class="ps-status">' + esc(label) + '</span>'
       + '<span class="ps-time">Volgende: ' + esc(nextTxt) + '</span>'
-      + '<button class="btn btn-outline proxy-scan-btn"' + (running ? ' disabled' : '') + '>Scan</button>';
+      + '<button class="btn btn-blue proxy-scan-btn"' + (running ? ' disabled' : '') + '>'
+      + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>'
+      + 'Scan</button>';
     document.querySelectorAll('.proxy-scan-status-inner').forEach((el) => { el.innerHTML = html; });
   }
 

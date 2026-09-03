@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="favicon.png">
-<link rel="stylesheet" href="design.css?v=9">
+<link rel="stylesheet" href="design.css?v=12">
 <title>Marktplaats</title>
 <style>
 /* Page-specific only — shared tokens/shell/buttons/cards/tables/pagination/forms/modal/
@@ -25,9 +25,9 @@
 .proxy-scan-mount{padding:12px 16px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)}
 .proxy-scan-mount[hidden]{display:none}
 .proxy-scan-mount .ps-line{display:flex;align-items:center;gap:6px}
-.proxy-scan-mount .ps-status{display:block;margin:2px 0 6px 13px;color:var(--text);font-weight:600}
-.proxy-scan-mount .ps-time{display:block;margin:2px 0 8px 13px}
-.proxy-scan-mount .btn{width:100%}
+.proxy-scan-mount .ps-status{display:block;margin:2px 0 0 13px;color:var(--text);font-weight:600}
+.proxy-scan-mount .ps-time{display:block;margin:2px 0 0 13px;line-height:1.5}
+.proxy-scan-mount .btn{width:100%;margin-top:8px}
 .sb-logger-status{display:flex;align-items:center;gap:7px;padding:12px 16px;border-top:1px solid var(--border);font-size:11.5px;color:var(--muted);cursor:default}
 .sb-logger-status[hidden]{display:none}
 .scan-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
@@ -152,10 +152,10 @@
       <a class="hub-back" href="https://hub.databin.uk/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>Terug naar Hub</a>
     </div>
     <nav id="tabs">
-      <button class="tab active" data-tab="offers">Marktplaats Offers<span class="nav-dot"></span></button>
-      <button class="tab" data-tab="cancelled">Geannuleerde Offers<span class="nav-dot"></span></button>
-      <button class="tab" data-tab="sales">Marktplaats Sales<span class="nav-dot"></span></button>
-      <button class="tab" data-tab="items">Items<span class="nav-dot"></span></button>
+      <button class="tab active" data-tab="offers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>Marktplaats Offers<span class="nav-dot"></span></button>
+      <button class="tab" data-tab="cancelled"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>Geannuleerde Offers<span class="nav-dot"></span></button>
+      <button class="tab" data-tab="sales"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Marktplaats Sales<span class="nav-dot"></span></button>
+      <button class="tab" data-tab="items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>Items<span class="nav-dot"></span></button>
     </nav>
     <div class="sb-logger-status" id="offers-logger-card"><span class="scan-dot" style="background:var(--muted)"></span><span>Marktplaats Logger</span></div>
     <div class="proxy-scan-mount" hidden>
@@ -328,6 +328,6 @@
   </div>
 </div>
 
-<script src="app.js?v=59"></script>
+<script src="app.js?v=63"></script>
 </body>
 </html>
