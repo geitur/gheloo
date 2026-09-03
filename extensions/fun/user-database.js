@@ -1214,6 +1214,10 @@
       '#__udb_bc *{box-sizing:border-box}',
       '#__udb_bc_form{padding:12px 14px;display:flex;flex-direction:column;gap:10px}',
       '.__udb_bc_sub{font-size:10px;color:#82849a;line-height:1.5}',
+      '.__udb_bc_mode{display:flex;gap:6px}',
+      '.__udb_bc_mode_btn{all:unset;box-sizing:border-box;flex:1;cursor:pointer;text-align:center;font-size:11px;font-weight:700;padding:7px;border-radius:8px;background:#0A0B10;border:1px solid #23252f;color:#82849a}',
+      '.__udb_bc_mode_btn:hover{color:#eceefb}',
+      '.__udb_bc_mode_btn.active{background:color-mix(in oklch,#6C7CFF 18%,transparent);border-color:#6C7CFF;color:#A6B0FF}',
       '#__udb_bc_input{width:100%;min-height:110px;resize:vertical;background:#0A0B10;border:1px solid #23252f;border-radius:8px;color:#eceefb;padding:8px 9px;font-size:11px;font-family:monospace;outline:none}',
       '#__udb_bc_input:focus{border-color:#6C7CFF}',
       '.__udb_bc_upload_btn{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;gap:6px;width:100%;cursor:pointer;text-align:center;font-size:12px;font-weight:700;color:#A6B0FF;padding:9px;border-radius:8px;border:1px dashed #6C7CFF;background:color-mix(in oklch,#6C7CFF 10%,transparent)}',
@@ -1664,6 +1668,7 @@
   let _bcMaxAttempts = parseInt(localStorage.getItem(BC_ATTEMPTS_KEY), 10) || 10;
   if (_bcMaxAttempts < 1) _bcMaxAttempts = 1;
 
+  let _bcMode       = 'names'; // 'names' | 'ids' — which parser/whether _bcResolveNames runs
   let _bcQueue      = [];   // [{id, name|null}]
   let _bcIdx        = 0;
   let _bcActive     = false;
@@ -1712,17 +1717,23 @@
   // Every line is a plain username (first tab-separated column if there happen to be
   // more, e.g. pasting a full accounts-site export with credits/notes trailing after it)
   // — no id yet, that gets resolved against userlogger by _bcResolveNames before the
-  // check actually starts. Ids aren't accepted directly any more: a habbo name can
-  // itself be all-digits (seen live in a real accounts export, e.g. "124120559191220"),
-  // indistinguishable from a real id by pattern alone — always resolving by name avoids
-  // that misread instead of needing the user to say which the pasted list is.
-  function _bcParseInput(text) {
+  // check actually starts. A habbo name can itself be all-digits (seen live in a real
+  // accounts export, e.g. "124120559191220"), indistinguishable from a real id by pattern
+  // alone — that's exactly why this doesn't auto-guess, mode is an explicit toggle the
+  // user picks (accounts-site's own ID column, added since, is a real source of ids now).
+  function _bcParseInput(text, mode) {
     const out = [];
     (text || '').split(/\r?\n/).forEach(function(line) {
       line = line.trim();
       if (!line) return;
-      const name = line.split(/\t/)[0].trim();
-      if (name) out.push({ id: null, name: name });
+      const first = line.split(/\t/)[0].trim();
+      if (!first) return;
+      if (mode === 'ids') {
+        const id = parseInt(first, 10);
+        if (!isNaN(id) && String(id) === first) out.push({ id: id, name: null });
+      } else {
+        out.push({ id: null, name: first });
+      }
     });
     return out;
   }
@@ -1740,7 +1751,7 @@
     const toResolve = entries.filter(function(e) { return e.id == null && e.name; });
     if (!toResolve.length) return { resolved: already, unresolved: [] };
 
-    const foundId = new Map();
+    const foundId = new Map(); // lower(name) -> { id, name } — keyed lowercase so casing typos don't miss
     for (let i = 0; i < toResolve.length; i += BC_RESOLVE_BATCH) {
       const batch = toResolve.slice(i, i + BC_RESOLVE_BATCH);
       _bcSetStatus('Ids opzoeken op userlogger… (' + Math.min(i + BC_RESOLVE_BATCH, toResolve.length) + '/' + toResolve.length + ')');
@@ -1749,7 +1760,7 @@
         const res = await fetch(SUPABASE_URL + '/rest/v1/users?select=id,name&name=' + encodeURIComponent(filt), { headers: HEADERS });
         if (res.ok) {
           const rows = await res.json();
-          rows.forEach(function(r) { foundId.set(r.name, r.id); });
+          rows.forEach(function(r) { foundId.set(r.name.toLowerCase(), { id: r.id, name: r.name }); });
         } else {
           _log('ban-check name resolve failed: HTTP ' + res.status);
         }
@@ -1757,11 +1768,31 @@
       if (i + BC_RESOLVE_BATCH < toResolve.length) await _bcSleep(BC_RESOLVE_GAP_MS);
     }
 
+    // in.() above is a case-sensitive equality match, so a pasted name whose casing
+    // differs from what's stored (e.g. "kimberley" vs "Kimberley") comes back as a miss
+    // even though the account exists — retry just those leftovers one at a time with a
+    // case-insensitive ilike instead of writing them off as unresolved/banned.
+    const stillMissing = toResolve.filter(function(e) { return !foundId.has(e.name.toLowerCase()); });
+    for (let i = 0; i < stillMissing.length; i++) {
+      const e = stillMissing[i];
+      const pattern = e.name.replace(/[%_\\]/g, '\\$&');
+      try {
+        const res = await fetch(SUPABASE_URL + '/rest/v1/users?select=id,name&name=ilike.' + encodeURIComponent(pattern) + '&limit=1', { headers: HEADERS });
+        if (res.ok) {
+          const rows = await res.json();
+          if (rows.length) foundId.set(e.name.toLowerCase(), { id: rows[0].id, name: rows[0].name });
+        } else {
+          _log('ban-check ilike fallback failed for ' + e.name + ': HTTP ' + res.status);
+        }
+      } catch (err) { _log('ban-check ilike fallback failed for ' + e.name + ': ' + err.message); }
+      if ((i + 1) % 10 === 0) await _bcSleep(BC_RESOLVE_GAP_MS);
+    }
+
     const resolved = already.slice();
     const unresolved = [];
     toResolve.forEach(function(e) {
-      const id = foundId.get(e.name);
-      if (id != null) resolved.push({ id: id, name: e.name });
+      const hit = foundId.get(e.name.toLowerCase());
+      if (hit) resolved.push({ id: hit.id, name: hit.name });
       else unresolved.push(e);
     });
     return { resolved: resolved, unresolved: unresolved };
@@ -1880,7 +1911,11 @@
       + '<span class="__udb_close" id="__udb_bc_close">&times;</span>'
       + '</div>'
       + '<div id="__udb_bc_form">'
-      + '<div class="__udb_bc_sub">Namen worden opgezocht via userlogger — plak een lijst usernames, één per regel (een volledige export met tabs erin mag ook, alleen de eerste kolom telt).</div>'
+      + '<div class="__udb_bc_mode">'
+      + '<button type="button" class="__udb_bc_mode_btn active" data-mode="names">Namen</button>'
+      + '<button type="button" class="__udb_bc_mode_btn" data-mode="ids">IDs</button>'
+      + '</div>'
+      + '<div class="__udb_bc_sub" id="__udb_bc_sub">Namen worden opgezocht via userlogger — plak een lijst usernames, één per regel (een volledige export met tabs erin mag ook, alleen de eerste kolom telt).</div>'
       + '<textarea id="__udb_bc_input" placeholder="username1&#10;username2&#10;username3&#10;…"></textarea>'
       + '<input type="file" id="__udb_bc_file" accept=".txt,.tsv,.csv" style="display:none">'
       + '<button class="__udb_bc_upload_btn" id="__udb_bc_file_btn" type="button">' + _ICON_DB + ' Upload .txt</button>'
@@ -1911,6 +1946,22 @@
     });
     bcPanel.querySelector('#__udb_bc_close').addEventListener('click', function() { bcPanel.style.display = 'none'; });
 
+    bcPanel.querySelectorAll('.__udb_bc_mode_btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        _bcMode = btn.dataset.mode;
+        bcPanel.querySelectorAll('.__udb_bc_mode_btn').forEach(function(b) { b.classList.toggle('active', b.dataset.mode === _bcMode); });
+        const sub = bcPanel.querySelector('#__udb_bc_sub');
+        const input = bcPanel.querySelector('#__udb_bc_input');
+        if (_bcMode === 'ids') {
+          sub.textContent = 'Rechtstreeks checken op id — geen opzoekstap nodig. Plak een lijst numerieke ids, één per regel.';
+          input.placeholder = '3854960\n3628331\n3717306\n…';
+        } else {
+          sub.textContent = 'Namen worden opgezocht via userlogger — plak een lijst usernames, één per regel (een volledige export met tabs erin mag ook, alleen de eerste kolom telt).';
+          input.placeholder = 'username1\nusername2\nusername3\n…';
+        }
+      });
+    });
+
     bcPanel.querySelector('#__udb_bc_file_btn').addEventListener('click', function() {
       bcPanel.querySelector('#__udb_bc_file').click();
     });
@@ -1931,8 +1982,11 @@
       if (delay) _setBcDelayMs(delay);
       const attempts = parseInt(bcPanel.querySelector('#__udb_bc_attempts').value, 10);
       if (attempts) _setBcMaxAttempts(attempts);
-      let queue = _bcParseInput(bcPanel.querySelector('#__udb_bc_input').value);
-      if (!queue.length) { window.alert('Geen geldige regels gevonden in de lijst.'); return; }
+      let queue = _bcParseInput(bcPanel.querySelector('#__udb_bc_input').value, _bcMode);
+      if (!queue.length) {
+        window.alert(_bcMode === 'ids' ? 'Geen geldige numerieke ids gevonden in de lijst.' : 'Geen geldige regels gevonden in de lijst.');
+        return;
+      }
 
       bcPanel.querySelector('#__udb_bc_form').style.display = 'none';
       bcPanel.querySelector('#__udb_bc_stats').style.display = 'flex';
@@ -1942,15 +1996,19 @@
       _bcRenderProgress();
 
       _bcSkippedNames = [];
-      const { resolved, unresolved } = await _bcResolveNames(queue);
-      queue = resolved;
-      _bcSkippedNames = unresolved;
-      _bcRenderProgress();
-      if (!queue.length) {
-        bcPanel.querySelector('#__udb_bc_form').style.display = 'flex';
-        bcPanel.querySelector('#__udb_bc_stats').style.display = 'none';
-        window.alert('Geen van deze namen gevonden op userlogger.');
-        return;
+      // ids mode already has everything it needs to start probing — no userlogger lookup
+      // to do, that step (and its "not found there" outcome) only applies to names.
+      if (_bcMode !== 'ids') {
+        const { resolved, unresolved } = await _bcResolveNames(queue);
+        queue = resolved;
+        _bcSkippedNames = unresolved;
+        _bcRenderProgress();
+        if (!queue.length) {
+          bcPanel.querySelector('#__udb_bc_form').style.display = 'flex';
+          bcPanel.querySelector('#__udb_bc_stats').style.display = 'none';
+          window.alert('Geen van deze namen gevonden op userlogger.');
+          return;
+        }
       }
       _bcStart(queue);
     });
