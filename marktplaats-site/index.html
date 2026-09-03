@@ -174,22 +174,6 @@
       <div class="filter-bar">
         <input class="search-input" id="offers-search" placeholder="Zoek op item...">
         <div class="sort-group">
-          <select class="sort-select" id="offers-discount-basis" title="Gemiddelde waartegen korting berekend wordt">
-            <option value="0">Gem.: All-time</option>
-            <option value="90">Gem.: 90 dagen</option>
-            <option value="10">Gem.: 10 dagen</option>
-            <option value="custom">Gem.: Custom...</option>
-          </select>
-          <input class="price-range-input" id="offers-discount-basis-custom" type="number" min="1" placeholder="Dagen" style="width:64px" hidden>
-          <select class="sort-select" id="offers-discount-filter">
-            <option value="0">Alle kortingen</option>
-            <option value="20">20%+ korting</option>
-            <option value="30">30%+ korting</option>
-            <option value="40">40%+ korting</option>
-            <option value="50">50%+ korting</option>
-            <option value="custom">Custom...</option>
-          </select>
-          <input class="price-range-input" id="offers-discount-custom" type="number" min="0" max="100" placeholder="% korting" style="width:80px" hidden>
           <select class="sort-select" id="offers-sort">
             <option value="newest">Nieuwste aangeboden</option>
             <option value="oldest">Oudste aangeboden</option>
@@ -204,6 +188,22 @@
             <option value="30">Laatste 30 dagen</option>
             <option value="90">Laatste 90 dagen</option>
             <option value="0" selected>Alle tijd</option>
+          </select>
+          <select class="sort-select" id="offers-discount-filter">
+            <option value="0">Alle kortingen</option>
+            <option value="20">20%+ korting</option>
+            <option value="30">30%+ korting</option>
+            <option value="40">40%+ korting</option>
+            <option value="50">50%+ korting</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <input class="price-range-input" id="offers-discount-custom" type="number" min="0" max="100" placeholder="% korting" style="width:80px" hidden>
+          <select class="sort-select" id="offers-discount-basis" title="Gemiddelde waartegen korting berekend wordt">
+            <option value="1">Gem.: Vandaag</option>
+            <option value="10">Gem.: 10 dagen</option>
+            <option value="30">Gem.: 30 dagen</option>
+            <option value="90">Gem.: 90 dagen</option>
+            <option value="0" selected>Gem.: Alle tijd</option>
           </select>
         </div>
         <div class="view-toggle" id="offers-view-toggle"></div>
@@ -332,6 +332,6 @@
   </div>
 </div>
 
-<script src="app.js?v=65"></script>
+<script src="app.js?v=66"></script>
 </body>
 </html>

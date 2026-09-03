@@ -1532,22 +1532,12 @@
     });
 
     const basisEl = document.getElementById('offers-discount-basis');
-    const basisCustomEl = document.getElementById('offers-discount-basis-custom');
     function _applyDiscountBasis(days) {
       _offersDiscountBasisDays = days;
       loadDiscountAvgPrices(days).then(renderOffers);
     }
     basisEl.addEventListener('change', () => {
-      basisCustomEl.hidden = basisEl.value !== 'custom';
-      if (basisEl.value === 'custom') {
-        basisCustomEl.focus();
-        _applyDiscountBasis(Math.max(1, parseInt(basisCustomEl.value, 10) || 30));
-      } else {
-        _applyDiscountBasis(parseInt(basisEl.value, 10));
-      }
-    });
-    basisCustomEl.addEventListener('change', () => {
-      _applyDiscountBasis(Math.max(1, parseInt(basisCustomEl.value, 10) || 30));
+      _applyDiscountBasis(parseInt(basisEl.value, 10));
     });
 
     document.getElementById('sales-filter-row').addEventListener('click', (e) => {
