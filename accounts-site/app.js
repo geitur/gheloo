@@ -567,7 +567,7 @@
     tbody.innerHTML = pageRows.map((r) => (
       '<tr>'
       + '<td class="plain-cell">' + markBtn(r) + '</td>'
-      + '<td class="plain-cell">' + (r.game_id != null ? copyText(String(r.game_id), '') : '—') + '</td>'
+      + '<td>' + (r.game_id != null ? copyText(String(r.game_id), '') : '<span class="plain-cell">—</span>') + '</td>'
       + '<td>' + copyText(r.username, _query) + '</td>'
       + '<td>' + copyText(r.password, _query) + '</td>'
       + '<td class="plain-cell">' + (r.account != null ? r.account.toLocaleString() : '—') + '</td>'
