@@ -419,7 +419,7 @@
         if (va == null && vb == null) return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
         if (va == null) return 1; // no value sinks to the end within its group
         if (vb == null) return -1;
-        return dir * (vb - va);
+        return dir * (va - vb);
       });
     }
     return filtered;
@@ -497,7 +497,7 @@
 
     let sales, cancelled;
     try {
-      sales = await sbGet('/mp_sales?item_name=eq.' + encodeURIComponent(name) + '&select=offer_id,price,currency,sold_at,manual_suspicious&order=sold_at.desc&limit=1000');
+      sales = await sbGet('/mp_sales?item_name=eq.' + encodeURIComponent(name) + '&select=offer_id,price,currency,sold_at,manual_suspicious&order=sold_at.desc,offer_id.desc&limit=1000');
     } catch (e) {
       body.innerHTML = '<div class="error-msg">Fout bij laden: ' + esc(e.message) + '</div>';
       return;
@@ -1189,7 +1189,10 @@
       // filter doesn't turn into an inner join that could hide a sale whose item_name has
       // no mp_items row yet.
       const embedJoin = _salesCategories.size > 0 ? 'mp_items!inner' : 'mp_items';
-      let path = '/mp_sales?select=offer_id,item_name,price,currency,sold_at,' + embedJoin + '(icon_url,category)&order=sold_at.desc&limit=20000';
+      // Ties on sold_at (same-minute sales, common since the source only has minute
+      // precision) have no deterministic order from Postgres alone — a second key stops
+      // them from silently swapping places between polls.
+      let path = '/mp_sales?select=offer_id,item_name,price,currency,sold_at,' + embedJoin + '(icon_url,category)&order=sold_at.desc,offer_id.desc&limit=20000';
       if (_salesCategories.size === 1) {
         const label = CATEGORIES.find((c) => c.slug === Array.from(_salesCategories)[0]).label;
         path += '&mp_items.category=eq.' + encodeURIComponent(label);
@@ -1328,6 +1331,19 @@
     return sortCancelledList(filtered);
   }
 
+  // How often an item (by name) shows up across EVERY cancelled offer, not just the
+  // currently-filtered list — "meest/minst geannuleerd" ranks the furniture itself, so the
+  // count has to stay stable while the user filters/searches, not shrink along with the view.
+  function _cancelFreqFor(itemName) {
+    if (!_cancelFreqCache || _cancelFreqCache.source !== _cancelledAll) {
+      const map = new Map();
+      _cancelledAll.forEach((r) => map.set(r.item_name, (map.get(r.item_name) || 0) + 1));
+      _cancelFreqCache = { source: _cancelledAll, map };
+    }
+    return _cancelFreqCache.map.get(itemName) || 0;
+  }
+  let _cancelFreqCache = null;
+
   // 'newest' needs no re-sort — _cancelledAll already arrives ordered cancelled_at.desc from
   // loadCancelledFeed()'s own query, and filtering preserves that order.
   function sortCancelledList(list) {
@@ -1335,8 +1351,8 @@
       case 'oldest': return list.slice().sort((a, b) => (a.cancelled_at < b.cancelled_at ? -1 : a.cancelled_at > b.cancelled_at ? 1 : 0));
       case 'price-desc': return list.slice().sort((a, b) => b.price - a.price);
       case 'price-asc': return list.slice().sort((a, b) => a.price - b.price);
-      case 'count-desc': return list.slice().sort((a, b) => b.count - a.count);
-      case 'count-asc': return list.slice().sort((a, b) => a.count - b.count);
+      case 'cancel-desc': return list.slice().sort((a, b) => _cancelFreqFor(b.item_name) - _cancelFreqFor(a.item_name));
+      case 'cancel-asc': return list.slice().sort((a, b) => _cancelFreqFor(a.item_name) - _cancelFreqFor(b.item_name));
       default: return list;
     }
   }
