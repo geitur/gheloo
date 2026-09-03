@@ -12,6 +12,167 @@
     if (el && _installedVersion) el.textContent = 'v' + _installedVersion;
   });
 
+  // ── Machine ID (Proxy tab) ──────────────────────────────────────────────────
+  // leet.city sends its device fingerprint in OUT 2490 (UniqueIDMessageComposer)
+  // string[1] plus an unregistered OUT 1488 string[0], shape "TEST4-IID-<u32>-<u32>".
+  // A machine / super ban keys on that value; the native client stores one id per
+  // BROWSER, so every alt in a browser shares it. With "Per-account ID" on we instead
+  // send an id derived deterministically from the logged-in account, so each account
+  // has its own fixed machine id. 2490 string[0] is blank on the real client and is
+  // left blank on rewrite.
+  //
+  // The account is identified from the leet.city access token (a JWT whose "sub" claim
+  // is the numeric account id, e.g. 4525109) — found by scanning localStorage / cookies,
+  // same origin as /hotel. The token rotates but "sub" is stable, and the last resolved
+  // id is cached so a login before the token is readable still works.
+  const _MID_FRAMES = { 2490: [1], 1488: [0] };
+  let _midOn = false, _midReal = '';
+  try { _midOn = localStorage.getItem('ghl.midAccount') === '1'; } catch (e) {}
+  try { _midReal = localStorage.getItem('ghl.midReal') || ''; } catch (e) {}
+  const _midTD = new TextDecoder(), _midTE = new TextEncoder();
+
+  // FNV-1a 32-bit -> unsigned decimal string
+  function _midFnv(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return h >>> 0;
+  }
+  function _midDecodeJwtSub(tok) {
+    const parts = String(tok).split('.');
+    if (parts.length !== 3) return null;
+    try {
+      const b = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const json = JSON.parse(decodeURIComponent(escape(atob(b + '==='.slice((b.length + 3) % 4)))));
+      const sub = json && (json.sub != null ? json.sub : json.id);
+      return sub != null ? String(sub) : null;
+    } catch (e) { return null; }
+  }
+  // Best-effort: locate the numeric leet.city account id available before/at login.
+  function _midResolveAccountId() {
+    const seen = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const v = localStorage.getItem(localStorage.key(i));
+        if (v) seen.push(v);
+      }
+    } catch (e) {}
+    try { (document.cookie || '').split(';').forEach(function(c) { seen.push(c.split('=').slice(1).join('=')); }); } catch (e) {}
+    for (let i = 0; i < seen.length; i++) {
+      const s = (seen[i] || '').trim().replace(/^"|"$/g, '');
+      // bare JWT
+      if (/^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(s)) {
+        const sub = _midDecodeJwtSub(s);
+        if (sub) return sub;
+      }
+      // JSON blob holding accessToken / id / username
+      if (s.charAt(0) === '{' && s.indexOf('eyJ') !== -1) {
+        try {
+          const o = JSON.parse(s);
+          const t = o.accessToken || o.token || (o.playerData && o.playerData.token);
+          const sub = t ? _midDecodeJwtSub(t) : null;
+          if (sub) return sub;
+          if (o.id != null && (o.username || (o.playerData && o.playerData.username))) return String(o.id);
+        } catch (e) {}
+      }
+    }
+    return null;
+  }
+  let _midAcct = '';
+  try { _midAcct = localStorage.getItem('ghl.midAcct') || ''; } catch (e) {}
+  function _midTryResolve(where) {
+    const a = _midResolveAccountId();
+    if (a && a !== _midAcct) {
+      _midAcct = a;
+      try { localStorage.setItem('ghl.midAcct', a); } catch (e) {}
+      console.log('[mid] account id detected (' + where + '): ' + a + '  -> ' + _midAccountId(a));
+      if (window.__ghl_midRender) window.__ghl_midRender();
+      return true;
+    }
+    if (!a && !_midAcct) console.warn('[mid] no leet.city account token found in localStorage/cookies yet');
+    return !!_midAcct;
+  }
+
+  function _midAccountId(acct) {
+    if (!acct) return '';
+    return 'TEST4-IID-' + _midFnv('leet-mid:' + acct) + '-' + _midFnv(acct + ':leet-mid');
+  }
+  function _midSetOn(on) {
+    _midOn = !!on;
+    try { localStorage.setItem('ghl.midAccount', _midOn ? '1' : '0'); } catch (e) {}
+    if (window.__ghl_midRender) window.__ghl_midRender();
+  }
+  function _midResolve() {
+    if (!_midOn) return null;
+    if (!_midAcct) _midTryResolve('frame'); // token may have landed after page load
+    return _midAcct ? _midAccountId(_midAcct) : null;
+  }
+  _midTryResolve('load');
+  // token/cookie may be written slightly after document_start — retry a few times
+  let _midTries = 0;
+  const _midPoll = setInterval(function() {
+    if (_midAcct || ++_midTries > 20) { clearInterval(_midPoll); return; }
+    _midTryResolve('poll');
+  }, 500);
+  function _midOnFrame(raw) {
+    if (!raw || raw.byteLength < 6) return undefined;
+    const dv = new DataView(raw), header = dv.getUint16(4), idxs = _MID_FRAMES[header];
+    if (!idxs) return undefined;
+
+    const u8 = new Uint8Array(raw), fields = [];
+    let p = 6;
+    while (p + 2 <= raw.byteLength) {
+      const l = dv.getUint16(p);
+      if (p + 2 + l > raw.byteLength) return undefined;
+      fields.push(u8.subarray(p + 2, p + 2 + l));
+      p += 2 + l;
+    }
+    if (p !== raw.byteLength || !fields.length) return undefined;
+
+    const spoof = _midResolve();
+
+    if (spoof == null) {
+      // toggle off (or account not resolved) — record the genuine id, send untouched
+      for (let j = 0; j < idxs.length; j++) {
+        const fj = fields[idxs[j]];
+        if (fj && fj.length) {
+          const cur = _midTD.decode(fj);
+          if (cur && cur !== _midReal) {
+            _midReal = cur;
+            try { localStorage.setItem('ghl.midReal', _midReal); } catch (e) {}
+            if (window.__ghl_midRender) window.__ghl_midRender();
+          }
+          break;
+        }
+      }
+      return undefined;
+    }
+
+    let changed = false;
+    const sp = _midTE.encode(spoof);
+    const out = fields.map(function(f, i) {
+      if (idxs.indexOf(i) === -1) return f;
+      if (f.length === 0) return f; // leave blank slots blank (2490 string[0])
+      if (_midTD.decode(f) !== spoof) changed = true;
+      return sp;
+    });
+    if (!changed) return undefined;
+
+    const bodyLen = out.reduce(function(n, f) { return n + 2 + f.length; }, 0);
+    const nb = new ArrayBuffer(6 + bodyLen), ndv = new DataView(nb), nu8 = new Uint8Array(nb);
+    let q = 6;
+    ndv.setUint32(0, 2 + bodyLen); // length = header(2) + body
+    ndv.setUint16(4, header);
+    for (let k = 0; k < out.length; k++) { ndv.setUint16(q, out[k].length); nu8.set(out[k], q + 2); q += 2 + out[k].length; }
+    if (window.__ghl_midRender) window.__ghl_midRender();
+    return { buffer: nb };
+  }
+  if (Array.isArray(window._outgoingManipulators)) {
+    window._outgoingManipulators.push(function(raw) { try { return _midOnFrame(raw); } catch (e) { return undefined; } });
+  }
+
   function buildGhelooPanel() {
     const ICONS = {
       scripting: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6M12 19h8"/></svg>',
@@ -114,6 +275,11 @@
       .ghl-proxy-btn-success:hover { background:rgba(46,204,113,0.24); }
       .ghl-proxy-btn-row { display:flex; gap:6px; margin-top:10px; }
       .ghl-proxy-btn-row .ghl-proxy-btn { margin-top:0; flex:1; }
+      .ghl-mid-hdr { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+      .ghl-cb { position:relative; width:16px; height:16px; border-radius:4px; background:#0A0B10; border:1px solid #3a3c48; cursor:pointer; flex-shrink:0; transition:background .12s, border-color .12s; }
+      .ghl-cb:hover { border-color:#6C7CFF; }
+      .ghl-cb.on { background:#6C7CFF; border-color:#6C7CFF; }
+      .ghl-cb.on::after { content:''; position:absolute; left:50%; top:47%; width:3px; height:7px; border:solid #fff; border-width:0 2px 2px 0; transform:translate(-50%,-50%) rotate(45deg); }
       .ghl-overlay-row { position:fixed; top:12px; left:12px; z-index:2147483647; display:flex; gap:6px; }
       .ghl-fps-overlay { background:#0A0B10; color:#A6B0FF; font:700 11px monospace; padding:4px 10px; border-radius:8px; border:1px solid #23252f; display:none; cursor:pointer; }
       .ghl-fps-overlay.show { display:block; }
@@ -577,6 +743,13 @@
         '</div>' +
       '</div>' +
       '<div class="ghl-me-card ghl-proxy-card" style="margin-top:10px">' +
+        '<div class="ghl-mid-hdr">' +
+          '<span class="ghl-proxy-url-lbl">Machine ID Spoofer</span>' +
+          '<span class="ghl-cb" id="ghl-mid-toggle" role="checkbox" title="Send a fixed machine id derived from this account"></span>' +
+        '</div>' +
+        '<div class="ghl-proxy-url" id="ghl-mid-value">—</div>' +
+      '</div>' +
+      '<div class="ghl-me-card ghl-proxy-card" style="margin-top:10px">' +
         '<div class="ghl-proxy-url-lbl">Catalogus Scan</div>' +
         '<div class="ghl-proxy-url" id="ghl-proxy-catalog">—</div>' +
         '<div id="ghl-proxy-scan-area" style="align-self:stretch"></div>' +
@@ -600,6 +773,23 @@
     proxyContent.querySelector('#ghl-proxy-hub-btn').addEventListener('click', function() {
       window.open('https://hub.databin.uk/', '_blank');
     });
+
+    function _renderMid() {
+      const v = proxyContent.querySelector('#ghl-mid-value');
+      const t = proxyContent.querySelector('#ghl-mid-toggle');
+      if (!v) return;
+      v.textContent = _midOn
+        ? (_midAcct ? _midAccountId(_midAcct) : 'account not detected — passthrough')
+        : (_midReal || '—');
+      t.classList.toggle('on', _midOn);
+      t.setAttribute('aria-checked', _midOn ? 'true' : 'false');
+    }
+    window.__ghl_midRender = _renderMid;
+    proxyContent.querySelector('#ghl-mid-toggle').addEventListener('click', function() {
+      _midSetOn(!_midOn);
+      _renderMid();
+    });
+    _renderMid();
 
     // IP is a spoiler: masked to the first 3 characters by default, click to reveal, click
     // again to re-mask. Country code shows plainly next to it — only the IP itself is sensitive.
