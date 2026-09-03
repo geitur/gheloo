@@ -29,10 +29,15 @@
   const DB_HEADERS = { apikey: DB_KEY, Authorization: 'Bearer ' + DB_KEY, 'Content-Type': 'application/json' };
 
   const LIVE_SCAN_STORAGE_KEY = '__ghk_mplivescan_settings';
-  let _liveScanOn = false;
+  // On by default — no saved settings means never explicitly toggled, not "off". A user
+  // who doesn't want their client feeding the shared scan has to turn this off themselves.
+  let _liveScanOn = true;
   try {
-    const saved = JSON.parse(localStorage.getItem(LIVE_SCAN_STORAGE_KEY) || '{}');
-    if (saved.on) _liveScanOn = true;
+    const _liveScanRaw = localStorage.getItem(LIVE_SCAN_STORAGE_KEY);
+    if (_liveScanRaw !== null) {
+      const saved = JSON.parse(_liveScanRaw);
+      if (typeof saved.on === 'boolean') _liveScanOn = saved.on;
+    }
   } catch(_) {}
 
   function _saveLiveScan() {
@@ -46,14 +51,19 @@
   // have found it. Discount tier/color match the site's own (marktplaats-site/app.js
   // discountColor) so a bubble's tint means the same thing there and here.
   const SERVER_ALERT_STORAGE_KEY = '__ghk_mpsrv_settings';
-  let _serverAlertsOn = false;
+  // On by default — no saved settings means never explicitly toggled, not "off". A user
+  // who doesn't want the alert bubbles has to turn this off themselves.
+  let _serverAlertsOn = true;
   let _serverMinDiscount = 0; // 0 = alert on every new offer, regardless of discount
   let _serverOpenDetailOnClick = true; // click a bubble -> also open the item's stats panel
   try {
-    const saved = JSON.parse(localStorage.getItem(SERVER_ALERT_STORAGE_KEY) || '{}');
-    if (saved.on) _serverAlertsOn = true;
-    if (typeof saved.minDiscount === 'number') _serverMinDiscount = saved.minDiscount;
-    if (typeof saved.openDetail === 'boolean') _serverOpenDetailOnClick = saved.openDetail;
+    const _serverRaw = localStorage.getItem(SERVER_ALERT_STORAGE_KEY);
+    if (_serverRaw !== null) {
+      const saved = JSON.parse(_serverRaw);
+      if (typeof saved.on === 'boolean') _serverAlertsOn = saved.on;
+      if (typeof saved.minDiscount === 'number') _serverMinDiscount = saved.minDiscount;
+      if (typeof saved.openDetail === 'boolean') _serverOpenDetailOnClick = saved.openDetail;
+    }
   } catch(_) {}
   function _saveServerAlerts() {
     try { localStorage.setItem(SERVER_ALERT_STORAGE_KEY, JSON.stringify({ on: _serverAlertsOn, minDiscount: _serverMinDiscount, openDetail: _serverOpenDetailOnClick })); } catch(_) {}

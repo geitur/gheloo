@@ -26,8 +26,10 @@
   // same origin as /hotel. The token rotates but "sub" is stable, and the last resolved
   // id is cached so a login before the token is readable still works.
   const _MID_FRAMES = { 2490: [1], 1488: [0] };
-  let _midOn = false, _midReal = '';
-  try { _midOn = localStorage.getItem('ghl.midAccount') === '1'; } catch (e) {}
+  // On by default — absent key means never explicitly toggled, not "off". A user who
+  // wants their real machine id back has to turn this off themselves.
+  let _midOn = true, _midReal = '';
+  try { const _midSaved = localStorage.getItem('ghl.midAccount'); if (_midSaved !== null) _midOn = _midSaved === '1'; } catch (e) {}
   try { _midReal = localStorage.getItem('ghl.midReal') || ''; } catch (e) {}
   const _midTD = new TextDecoder(), _midTE = new TextEncoder();
 
@@ -172,18 +174,6 @@
   if (Array.isArray(window._outgoingManipulators)) {
     window._outgoingManipulators.push(function(raw) { try { return _midOnFrame(raw); } catch (e) { return undefined; } });
   }
-
-  // Fresh install only — relayed by core/bridge.js from a flag background.js sets on
-  // chrome.runtime.onInstalled (reason 'install'). Flips Machine ID Spoofer, Marktplaats
-  // scanner and Marktplaats alerts to on-by-default for a new user; marktplaats.js's
-  // setters below already run later in this same document_start batch, so they're
-  // defined by the time this (async, storage-roundtrip) message actually arrives.
-  window.addEventListener('message', function(e) {
-    if (e.source !== window || !e.data || e.data.type !== '__ghk_apply_fresh_defaults') return;
-    _midSetOn(true);
-    if (window.__mplivescan_setEnabled) window.__mplivescan_setEnabled(true);
-    if (window.__mpsrv_setEnabled) window.__mpsrv_setEnabled(true);
-  });
 
   function buildGhelooPanel() {
     const ICONS = {

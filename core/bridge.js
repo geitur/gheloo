@@ -28,16 +28,6 @@
     });
   });
 
-  // Fresh install only (background.js sets this once via chrome.runtime.onInstalled,
-  // reason 'install') — relay it so content.js can flip Machine ID Spoofer, Marktplaats
-  // scanner and Marktplaats alerts on by default for a new user instead of leaving them
-  // at their historical off default. Cleared right away so this only ever fires once.
-  chrome.storage.local.get('ghlApplyFreshDefaults', function(r) {
-    if (!r.ghlApplyFreshDefaults) return;
-    chrome.storage.local.set({ ghlApplyFreshDefaults: false });
-    window.postMessage({ type: '__ghk_apply_fresh_defaults' }, '*');
-  });
-
   // Marktplaats Scanner (extensions/fun/marktplaats.js) runs in the MAIN world and has no
   // chrome.tabs access — relays open/close through background.js the same way as every
   // other MAIN-world -> extension-API call in this file.
