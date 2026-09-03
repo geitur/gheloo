@@ -94,13 +94,77 @@
       const rows = await sbGet('/bot_accounts?select=*&order=username.asc');
       _all = new Map(rows.map((r) => [r.username, r]));
       render();
+      // Re-check a miss after a day, not every single page load — the player may just not
+      // have existed in userdatabase yet on the first pass (see sql/bot_accounts.sql).
+      const GAMEID_RETRY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      resolveGameIds(rows.filter((r) => r.game_id == null
+        && (!r.game_id_checked_at || now - new Date(r.game_id_checked_at).getTime() > GAMEID_RETRY_COOLDOWN_MS)
+      ).map((r) => r.username));
     } catch (e) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="10">Fout bij laden: ' + esc(e.message) + '</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="11">Fout bij laden: ' + esc(e.message) + '</td></tr>';
     }
     try {
       const notes = await sbGet('/category_notes?select=*');
       _catNotes = new Map(notes.map((n) => [n.category, n.note]));
     } catch (e) { /* table may not exist yet */ }
+  }
+
+  // ── Game id resolution ──────────────────────────────────────────────────────
+  // bot_accounts.game_id already existed in the schema (sql/bot_accounts.sql) but nothing
+  // ever filled it in. userlogger.databin.uk's `users` table (fed by the extension's own
+  // background player-scanning) already has every account it has ever seen, keyed by a
+  // pre-lowercased `name_lower` column — matching against that instead of `name` makes the
+  // lookup case-insensitive for free, no separate ilike-fallback pass needed (unlike
+  // user-database.js's _bcResolveNames, which has to fall back to ilike since it only has
+  // `name` to work with).
+  const USERDB_URL = 'https://userlogger.databin.uk/rest/v1';
+  const GAMEID_CHUNK = 250;
+  const GAMEID_CHUNK_GAP_MS = 1000; // ~250 accounts/sec, paced so a 9000+ account backfill
+  // doesn't fire one giant burst of requests at page load and doesn't block the UI thread.
+  function _sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+  // Called both right after a fresh import (just the newly-touched usernames, so new
+  // accounts get their id immediately) and once per page load for every existing account
+  // still eligible for a (re)check (self-heals as userdatabase picks up more players over
+  // time — see the cooldown gate in loadAll()).
+  async function resolveGameIds(usernames) {
+    const pending = usernames.slice();
+    while (pending.length) {
+      const chunk = pending.splice(0, GAMEID_CHUNK);
+      const inList = encodeURIComponent(chunk.map((u) => '"' + u.toLowerCase().replace(/"/g, '\\"') + '"').join(','));
+      let found = [];
+      try {
+        found = await fetch(USERDB_URL + '/users?select=id,name_lower&name_lower=in.(' + inList + ')', { headers: HEADERS }).then((r) => r.json());
+      } catch (e) { found = []; }
+      const idByLower = new Map(found.map((row) => [row.name_lower, row.id]));
+      const nowIso = new Date().toISOString();
+      // password is NOT NULL with no default — PostgREST validates that on the attempted
+      // INSERT even for an on_conflict DO UPDATE, so a sparse patch omitting it 400s even
+      // though the row already exists and the update would never have touched that column.
+      // Every row in the chunk gets written back (hit or miss) so a miss's checked_at is
+      // actually stamped, which is what lets the cooldown gate below skip it next time
+      // instead of re-querying a name that plainly isn't in userdatabase yet.
+      const patchRows = chunk.map((username) => {
+        const existing = _all.get(username);
+        return {
+          username: username,
+          password: existing ? existing.password : '',
+          game_id: idByLower.get(username.toLowerCase()) || null,
+          game_id_checked: true,
+          game_id_checked_at: nowIso,
+        };
+      });
+      try {
+        const updated = await sbUpsert('/bot_accounts?on_conflict=username', patchRows);
+        updated.forEach((u) => {
+          const existing = _all.get(u.username);
+          if (existing) Object.assign(existing, u);
+        });
+        render();
+      } catch (e) { /* this chunk gets retried once its cooldown lapses (or next reload if never stamped) */ }
+      if (pending.length) await _sleep(GAMEID_CHUNK_GAP_MS);
+    }
   }
 
   // ── Live category sync ──────────────────────────────────────────────────────
@@ -219,6 +283,7 @@
       logEvent('import', rows.length + ' accounts');
       document.getElementById('import-text').value = '';
       render();
+      resolveGameIds(rows.map((r) => r.username));
     } catch (e) {
       statusEl.textContent = 'Fout: ' + e.message;
     }
@@ -496,12 +561,13 @@
 
     const tbody = document.getElementById('tbl-body');
     if (!filtered.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="10">' + (rows.length ? 'Geen resultaten.' : 'Nog geen accounts geïmporteerd.') + '</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="11">' + (rows.length ? 'Geen resultaten.' : 'Nog geen accounts geïmporteerd.') + '</td></tr>';
       return;
     }
     tbody.innerHTML = pageRows.map((r) => (
       '<tr>'
       + '<td class="plain-cell">' + markBtn(r) + '</td>'
+      + '<td class="plain-cell">' + (r.game_id != null ? copyText(String(r.game_id), '') : '—') + '</td>'
       + '<td>' + copyText(r.username, _query) + '</td>'
       + '<td>' + copyText(r.password, _query) + '</td>'
       + '<td class="plain-cell">' + (r.account != null ? r.account.toLocaleString() : '—') + '</td>'
