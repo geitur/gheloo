@@ -3193,7 +3193,13 @@ function openClearDbModal() {
 /* — Mutations ——————————————————————————————————— */
 async function doCreateAsset(itemName, holder, notes, acquiredVia, hackedFrom, bc) {
   const id=await generateAssetId()
-  await sbPost('/ss_items',{id,item_name:itemName,current_holder:holder,current_status:'active',count_in_inventory:true,is_duped:acquiredVia==='duped',acquired_via:acquiredVia||null,notes:notes||null})
+  // Same reasoning as doCreatePullbackAsset: an item created straight onto an already-
+  // banned holder should never start out looking Active/trackable — there's no realistic
+  // path to it, so it starts Lost instead of quietly sitting there until someone notices.
+  const bannedRows = await sbGet('/banned_holders?select=holder').catch(()=>null) || []
+  const bannedSet = new Set(bannedRows.map(r=>(r.holder||'').toLowerCase()))
+  const status = isBanned(bannedSet, holder) ? 'lost' : 'active'
+  await sbPost('/ss_items',{id,item_name:itemName,current_holder:holder,current_status:status,count_in_inventory:status==='active',is_duped:acquiredVia==='duped',acquired_via:acquiredVia||null,notes:notes||null})
   await sbPost('/ss_item_events',{item_id:id,event_type:'manual_update',reason:'CREATED',to_holder:holder,notes:notes||null})
   const bcCounted = bc>0
   await sbPost('/ss_item_events',{item_id:id,event_type:'marketplace_sale',from_holder:acquiredVia==='hacked'?(hackedFrom||null):null,items_received:itemName,bc_amount:bc||null,bc_counted:bcCounted,scam_type:acquiredVia==='hacked'?'hacked':'earned',notes:notes||null})
@@ -3228,7 +3234,13 @@ async function doCreatePullbackAsset(assetId, itemName, pullbackHolder, itemHold
 async function doChangeHolder(assetId, newHolder, notes) {
   const res=await sbGet(`/ss_items?id=eq.${encodeURIComponent(assetId)}&select=current_holder`)
   const prev=res?.[0]?.current_holder
-  await sbPatch(`/ss_items?id=eq.${encodeURIComponent(assetId)}`,{current_holder:newHolder})
+  const bannedRows = await sbGet('/banned_holders?select=holder').catch(()=>null) || []
+  const bannedSet = new Set(bannedRows.map(r=>(r.holder||'').toLowerCase()))
+  const patch = {current_holder:newHolder}
+  // Retargeting onto an already-banned holder is the same situation doBanHolder itself
+  // handles for existing items — this item just wasn't tracked yet when the ban happened.
+  if (isBanned(bannedSet, newHolder)) { patch.current_status='lost'; patch.count_in_inventory=false }
+  await sbPatch(`/ss_items?id=eq.${encodeURIComponent(assetId)}`,patch)
   // Logged as EDITED, not a "Moved"/trade-flavored event — Change Holder is a manual
   // correction tool (typos, admin fixes), not how a real transfer between two accounts
   // should be recorded (that's Friendly Transfer, which properly logs a trade). Calling
@@ -3413,11 +3425,14 @@ async function doRestore(assetId, notes, status) {
 async function materializeReceivedItems(holder, items, sourceTradeCode, acquiredVia) {
   const tag = acquiredVia==='bought' ? 'Bought from Marketplace' : (sourceTradeCode ? `Received from trade #${sourceTradeCode}` : 'Received from scam')
   const createdIds = []
+  const bannedRows = await sbGet('/banned_holders?select=holder').catch(()=>null) || []
+  const bannedSet = new Set(bannedRows.map(r=>(r.holder||'').toLowerCase()))
+  const status = isBanned(bannedSet, holder) ? 'lost' : 'active'
   for (const name of (items||[])) {
     if (!SS_ITEM_NAMES.includes(name)) continue
     const id = await generateAssetId()
     const extra = acquiredVia ? {acquired_via:acquiredVia} : {}
-    await sbPost('/ss_items',{id,item_name:name,current_holder:holder,current_status:'active',count_in_inventory:true,is_duped:false,notes:tag,...extra})
+    await sbPost('/ss_items',{id,item_name:name,current_holder:holder,current_status:status,count_in_inventory:status==='active',is_duped:false,notes:tag,...extra})
     await sbPost('/ss_item_events',{item_id:id,event_type:'manual_update',reason:'CREATED',to_holder:holder,notes:tag})
     createdIds.push(id)
   }
@@ -3451,13 +3466,24 @@ async function doBulkScam(assetIds, victim, bc, notes, itemsReceived, scamType, 
   const givenMap = new Map(givenRes.map(a=>[a.id,a]))
   const isResoldBought = assetIds.some(id => givenMap.get(id)?.acquired_via==='bought')
   const tradeCode = (isBought || isResoldBought) ? null : await generateTradeCode()
+  // A Friendly Transfer hands the given item straight to victim's current_holder — if
+  // victim is already banned that's the same "no realistic path to it" case doBanHolder
+  // and doCreatePullbackAsset both already handle, so it starts Lost instead of Active.
+  let victimBanned = false
+  if (isFriendly) {
+    const bannedRows = await sbGet('/banned_holders?select=holder').catch(()=>null) || []
+    victimBanned = isBanned(new Set(bannedRows.map(r=>(r.holder||'').toLowerCase())), victim)
+  }
 
   let primaryEventId = null
   for(let i=0;i<assetIds.length;i++){
     const assetId=assetIds[i]
     const prev=givenMap.get(assetId)||{}
     if (!fromHolder) fromHolder = prev.current_holder
-    await sbPatch(`/ss_items?id=eq.${encodeURIComponent(assetId)}`, isFriendly ? {current_holder:victim} : {current_status:'traded'})
+    const givenPatch = isFriendly
+      ? (victimBanned ? {current_holder:victim,current_status:'lost',count_in_inventory:false} : {current_holder:victim})
+      : {current_status:'traded'}
+    await sbPatch(`/ss_items?id=eq.${encodeURIComponent(assetId)}`, givenPatch)
     const createdEv = await sbPost('/ss_item_events',{item_id:assetId,event_type:'marketplace_sale',reason:batchId,trade_code:tradeCode,from_holder:acct||prev.current_holder||null,to_holder:isFriendly?victim:null,scammed_user:isFriendly?null:victim,bc_amount:i===0?bc:null,bc_given:i===0?bcGiven:null,notes:notes||null,items_given:prev.item_name||null,items_received:i===0?recvStr:null,scam_type:scamType||'traded'})
     if (i===0) primaryEventId = createdEv?.[0]?.id
   }
