@@ -189,6 +189,7 @@
       colorparty: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C8 6 5 10 5 13a7 7 0 0014 0c0-3-3-7-7-11z"/></svg>',
       guitarhero: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="9" width="18" height="4" rx="1"/><circle cx="6" cy="17" r="2"/><circle cx="12" cy="17" r="2"/><circle cx="18" cy="17" r="2"/></svg>',
       bingo: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="8" cy="16" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="16" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>',
+      stoelendans: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h12v9H4z"/><path d="M6 15v3M14 15v3M16 6l4-2v11"/><circle cx="10" cy="3" r="1.3" fill="currentColor" stroke="none"/></svg>',
       rooms: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10l9-7 9 7"/><path d="M5 9v11h14V9"/><path d="M9 20v-6h6v6"/></svg>',
       furnihider: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11V8a2 2 0 012-2h12a2 2 0 012 2v3"/><path d="M3 11h18v4a1 1 0 01-1 1H4a1 1 0 01-1-1v-4z"/><path d="M4 16v3M20 16v3"/></svg>',
       roomclone: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="13" height="13" rx="2"/><path d="M8 16v3a2 2 0 002 2h9a2 2 0 002-2v-9a2 2 0 00-2-2h-3"/></svg>',
@@ -197,6 +198,7 @@
       roomdeleter: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a1 1 0 01-1 1H7a1 1 0 01-1-1L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
       photolibrary: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 4h-5L7 7H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="4"/></svg>',
       userdatabase: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>',
+      itemtags: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.6 12.6L12.7 20.5a2 2 0 01-2.8 0l-6.4-6.4a2 2 0 010-2.8l7.9-7.9A2 2 0 0113 3h5.6A2.4 2.4 0 0121 5.4V11a2 2 0 01-.4 1.6z"/><circle cx="16" cy="8" r="1.5" fill="currentColor" stroke="none"/></svg>',
       outfitrandomizer: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="8" cy="16" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="16" r="1.2" fill="currentColor" stroke="none"/><circle cx="8" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>',
       fun: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 13.5c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2"/><circle cx="9" cy="9.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1" fill="currentColor" stroke="none"/></svg>',
       friendadder: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>',
@@ -427,6 +429,7 @@
             { id: 'colorparty', title: 'Color Party', subtitle: 'Auto-play Color Party', icon: ICONS.colorparty, close: false, onClick: showPanelById('__rc') },
             { id: 'guitarhero', title: 'Guitar Hero', subtitle: 'Auto-play Guitar Hero', icon: ICONS.guitarhero, close: false, onClick: showPanelById('__gh') },
             { id: 'bingo', title: 'Bingo', subtitle: 'Auto-roll to match the host dice', icon: ICONS.bingo, close: false, onClick: showPanelById('__bg') },
+            { id: 'stoelendans', title: 'Stoelendans', subtitle: 'Auto-walk hokje', icon: ICONS.stoelendans, close: false, onClick: showPanelById('__sd') },
           ]},
         ],
       },
@@ -460,6 +463,10 @@
             { id: 'mimic', title: 'Mimic', subtitle: 'Copy a user\'s actions', icon: ICONS.mimic, close: false, onClick: showPanelById('__mimic') },
             { id: 'friendadder', title: 'Friend Adder', subtitle: 'Auto-add users in your room', icon: ICONS.friendadder, close: false, onClick: showPanelById('__fb') },
             { id: 'walksync', title: 'Walk Sync', subtitle: 'Follow another tab, offset by a fixed tile', icon: ICONS.walksync, close: false, onClick: showPanelById('__ws_panel') },
+            { id: 'itemtags', title: 'Item Tags', subtitle: 'Label identical inventory items to tell them apart', icon: ICONS.itemtags, close: false, onClick: function() {
+              showPanelById('__itg')();
+              if (window.__itg_render) window.__itg_render();
+            } },
           ]},
         ],
       },
