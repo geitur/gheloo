@@ -13,6 +13,11 @@
 
   const LINE_RE = /^(?<user>[^:]+):(?<pass>[^|]+?)\s*\|\s*Credits:\s*(?<account>\d+)\s*\|\s*BelCredits:\s*(?<vrienden>\d+)\s*\|\s*Rank:\s*(?<rank>\d+)(?:\s*\|\s*Diamonds:\s*(?<diamonds>\d+))?(?:\s*\|\s*Duckets:\s*(?<duckets>\d+))?/i;
 
+  // Which row to highlight after a username/password copy — a visual "this is the account I
+  // just grabbed to log in with" marker, since copying one of those two fields only ever
+  // means about to paste it into the login screen. Cleared on a click anywhere outside the
+  // table body, or superseded by copying a different row's username/password.
+  let _lastCopiedUsername = null;
   let _all = new Map();   // username -> row
   let _catNotes = new Map(); // category key -> note text
   // Empty set = "Alle" (everything). Otherwise a union of every checked category —
@@ -568,7 +573,7 @@
       return;
     }
     tbody.innerHTML = pageRows.map((r) => (
-      '<tr>'
+      '<tr data-username="' + esc(r.username) + '"' + (r.username === _lastCopiedUsername ? ' class="copied-row"' : '') + '>'
       + '<td class="plain-cell">' + markBtn(r) + '</td>'
       + '<td class="plain-cell">' + (r.game_id != null ? r.game_id : '—') + '</td>'
       + '<td>' + copyText(r.username, _query) + '</td>'
@@ -712,7 +717,24 @@
       const markEl = e.target.closest('[data-action="mark"]');
       if (markEl) { setCategory(markEl.dataset.username, markEl.dataset.cat); return; }
       const copyEl = e.target.closest('[data-action="copy"]');
-      if (copyEl) { copyToClipboard(copyEl.dataset.copy, copyEl); return; }
+      if (copyEl) {
+        copyToClipboard(copyEl.dataset.copy, copyEl);
+        const tr = copyEl.closest('tr');
+        if (tr) {
+          document.querySelectorAll('#tbl-body tr.copied-row').forEach((el) => el.classList.remove('copied-row'));
+          tr.classList.add('copied-row');
+          _lastCopiedUsername = tr.dataset.username;
+        }
+        return;
+      }
+    });
+    // Only username/password copies mark a row — clicking anywhere else in the table
+    // (mark buttons, note input, sort headers, ...) shouldn't clear the highlight, so this
+    // only reacts to a click that lands OUTSIDE any row entirely.
+    document.addEventListener('click', (e) => {
+      if (!_lastCopiedUsername || e.target.closest('#tbl-body tr')) return;
+      document.querySelectorAll('#tbl-body tr.copied-row').forEach((el) => el.classList.remove('copied-row'));
+      _lastCopiedUsername = null;
     });
 
     // 'blur' doesn't bubble — 'focusout' does, so delegation still works after re-render.
