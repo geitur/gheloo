@@ -128,6 +128,7 @@
     ? parseInt(localStorage.getItem(INV_PAGE_SIZE_KEY), 10) : 50;
   let _invPage = 0;
   let _userQuery = '';
+  let _usersSortDir = 'desc'; // 'desc' = meeste items eerst, 'asc' = minste items eerst
 
   // Same category set as the Ruilwaarde scan checkboxes in Settings, matched against each
   // row's `tag` field (as captured by Room Deleter's rare-item scan — "LTD", "Rare", "SS",
@@ -146,6 +147,25 @@
   let _usersPage = 0;
   const USERS_PAGE_SIZE = 50;
 
+  // Dashboard's fixed categorical order/colors — reuses the same 8 tags INV_FILTER_MATCH
+  // already recognizes (Rare/Rares, casing, etc.), so a chart segment and a filter chip
+  // always mean the same bucket. Colors pull straight from design.css's existing token
+  // set (already shared site-wide), assigned in a fixed order rather than cycled.
+  const DASH_CATEGORIES = [
+    { key: 'CC', label: 'Club Cadeau', color: 'var(--gold)' },
+    { key: 'LTD', label: 'LTD', color: 'var(--primary)' },
+    { key: 'RARE', label: 'Rares', color: 'var(--teal)' },
+    { key: 'SS', label: 'SS', color: 'var(--purple)' },
+    { key: 'BC', label: 'BC Shop', color: 'var(--green)' },
+    { key: 'CURRENCY', label: 'Currency', color: 'var(--orange)' },
+    { key: 'POKEMON', label: 'Pokémon', color: 'var(--pink)' },
+    { key: 'ECOTRON', label: 'Ecotron', color: 'var(--zinc)' },
+  ];
+  function dashCategoryFor(tag) {
+    for (const c of DASH_CATEGORIES) { if (INV_FILTER_MATCH[c.key](tag)) return c; }
+    return null;
+  }
+
   // Bel-Credits/Diamanten furni names always start with the stack's face value
   // ("25 Bel-Credits Staaf (BC)", "750 Diamanten Schedel") — read it straight off the name.
   function parseCurrencyValue(name) {
@@ -159,10 +179,11 @@
 
   async function loadInventory() {
     try {
-      _inv = await fetchAll('/inventory_items?select=item_id,room_id,room_name,owner_username,type_id,item_name,tag,edition_number,is_wall,last_seen');
+      _inv = await fetchAll('/inventory_items?select=item_id,room_id,room_name,owner_username,type_id,item_name,tag,edition_number,is_wall,last_seen,first_seen');
     } catch (e) { _inv = []; }
     renderInventory();
     renderUsers();
+    renderDashboard();
   }
 
   function groupByType(rows) {
@@ -407,7 +428,7 @@
     let users = Array.from(byOwner.entries()).map(([user, count]) => ({ user: user, count: count }));
     const q = _userQuery.trim().toLowerCase();
     if (q) users = users.filter((u) => u.user.toLowerCase().includes(q));
-    users.sort((a, b) => b.count - a.count);
+    users.sort((a, b) => (_usersSortDir === 'asc' ? a.count - b.count : b.count - a.count));
 
     const totalPages = Math.max(1, Math.ceil(users.length / USERS_PAGE_SIZE));
     if (_usersPage >= totalPages) _usersPage = totalPages - 1;
@@ -427,6 +448,154 @@
       '<button class="btn btn-outline" id="users-prev"' + (atStart ? ' disabled' : '') + '>&laquo; Vorige</button>'
       + '<span class="page-info">Pagina ' + (_usersPage + 1) + ' / ' + totalPages + '</span>'
       + '<button class="btn btn-outline" id="users-next"' + (atEnd ? ' disabled' : '') + '>Volgende &raquo;</button>';
+  }
+
+  // ── Dashboard ────────────────────────────────────────────────────────────────
+  function renderDashboard() {
+    const statsEl = document.getElementById('dash-stats');
+    if (!statsEl) return; // page not built yet on first paint
+    const subEl = document.getElementById('dash-sub');
+    const currencyEl = document.getElementById('dash-currency-summary');
+
+    const totalItems = _inv.length;
+    const distinctUsers = new Set(_inv.map((r) => r.owner_username)).size;
+    const distinctTypeIds = new Set(_inv.map((r) => r.type_id).filter((t) => t != null)).size;
+    subEl.textContent = totalItems.toLocaleString('nl-BE') + ' item(s) over ' + distinctUsers.toLocaleString('nl-BE') + ' gebruiker(s), ' + distinctTypeIds.toLocaleString('nl-BE') + ' verschillende Type IDs.';
+
+    const categoryCounts = new Map();
+    let otherCount = 0;
+    _inv.forEach((r) => {
+      const c = dashCategoryFor(r.tag);
+      if (c) categoryCounts.set(c.label, (categoryCounts.get(c.label) || 0) + 1);
+      else otherCount++;
+    });
+
+    const statTiles = [
+      { label: 'Totaal items', value: totalItems },
+      { label: 'Gebruikers', value: distinctUsers },
+      { label: 'Type IDs', value: distinctTypeIds },
+    ].concat(DASH_CATEGORIES.map((c) => ({ label: c.label, value: categoryCounts.get(c.label) || 0, color: c.color })));
+    if (otherCount) statTiles.push({ label: 'Overig', value: otherCount });
+
+    statsEl.innerHTML = statTiles.map((t) =>
+      '<div class="stat-card"><div class="dash-stat-value"' + (t.color ? ' style="color:' + t.color + '"' : '') + '>' + t.value.toLocaleString('nl-BE') + '</div><div class="dash-stat-label">' + esc(t.label) + '</div></div>'
+    ).join('');
+
+    let totalBC = 0, totalDiamond = 0;
+    _inv.forEach((r) => {
+      const v = parseCurrencyValue(r.item_name);
+      if (v) { if (v.type === 'bc') totalBC += v.value; else totalDiamond += v.value; }
+    });
+    currencyEl.innerHTML =
+      '<div class="currency-stat bc"><span class="currency-stat-label">Totaal Bel-Credits</span><span class="currency-stat-value">' + totalBC.toLocaleString('nl-BE') + '</span></div>'
+      + '<div class="currency-stat diamond"><span class="currency-stat-label">Totaal Diamanten</span><span class="currency-stat-value">' + totalDiamond.toLocaleString('nl-BE') + '</span></div>';
+
+    renderDashChart();
+  }
+
+  // Stacked bars, one per day, segments colored per DASH_CATEGORIES — same hand-rolled
+  // inline-SVG + hover-tooltip pattern as marktplaats-site's price chart, no charting
+  // library. Bucketed on first_seen (added alongside this Dashboard — see
+  // sql/inventory_items_first_seen.sql), so a fresh install only shows real day-over-day
+  // growth from here on; everything that already existed lands on day one as a single
+  // spike, called out explicitly in the sub-label instead of silently looking like 84k
+  // items got added in one day.
+  const DASH_CHART_DAYS = 30;
+  function renderDashChart() {
+    const wrap = document.getElementById('dash-chart-wrap');
+    const subEl = document.getElementById('dash-chart-sub');
+    const legendEl = document.getElementById('dash-chart-legend');
+
+    const days = [];
+    const today = new Date();
+    for (let i = DASH_CHART_DAYS - 1; i >= 0; i--) {
+      const d = new Date(today);
+      d.setUTCDate(d.getUTCDate() - i);
+      days.push(d.toISOString().slice(0, 10));
+    }
+    const dayIndex = new Map(days.map((d, i) => [d, i]));
+    const grid = days.map(() => new Map()); // per day: label -> count
+    let inRangeTotal = 0;
+    _inv.forEach((r) => {
+      if (!r.first_seen) return;
+      const idx = dayIndex.get(r.first_seen.slice(0, 10));
+      if (idx == null) return;
+      const c = dashCategoryFor(r.tag);
+      const label = c ? c.label : 'Overig';
+      grid[idx].set(label, (grid[idx].get(label) || 0) + 1);
+      inRangeTotal++;
+    });
+    subEl.textContent = 'Laatste ' + DASH_CHART_DAYS + ' dagen — ' + inRangeTotal.toLocaleString('nl-BE') + ' item(s). "Eerst gezien" is net toegevoegd, dus bestaande items tellen allemaal mee op de eerste dag — echte dagelijkse groei wordt pas vanaf nu zichtbaar.';
+
+    const maxTotal = Math.max(1, ...grid.map((m) => Array.from(m.values()).reduce((s, v) => s + v, 0)));
+    const W = 760, H = 220, PAD_L = 40, PAD_B = 22, PAD_T = 10;
+    const barW = (W - PAD_L - 8) / DASH_CHART_DAYS;
+    const y = (v) => PAD_T + (H - PAD_T - PAD_B) * (1 - v / maxTotal);
+
+    const gridLines = [];
+    for (let i = 0; i <= 3; i++) {
+      const v = Math.round((maxTotal * i) / 3);
+      const gy = y(v);
+      gridLines.push('<line x1="' + PAD_L + '" y1="' + gy.toFixed(1) + '" x2="' + W + '" y2="' + gy.toFixed(1) + '" stroke="var(--border)" stroke-width="1"/>');
+      gridLines.push('<text x="' + (PAD_L - 6) + '" y="' + (gy + 3).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--muted)">' + v + '</text>');
+    }
+
+    const bars = [];
+    const hoverAreas = [];
+    days.forEach((dayStr, i) => {
+      const m = grid[i];
+      let cum = 0;
+      const x = PAD_L + i * barW + 1;
+      const w = Math.max(1, barW - 2);
+      DASH_CATEGORIES.forEach((c) => {
+        const v = m.get(c.label) || 0;
+        if (!v) return;
+        const y0 = y(cum), y1 = y(cum + v);
+        bars.push('<rect x="' + x.toFixed(1) + '" y="' + y1.toFixed(1) + '" width="' + w.toFixed(1) + '" height="' + (y0 - y1).toFixed(1) + '" fill="' + c.color + '"/>');
+        cum += v;
+      });
+      const otherV = m.get('Overig') || 0;
+      if (otherV) {
+        const y0 = y(cum), y1 = y(cum + otherV);
+        bars.push('<rect x="' + x.toFixed(1) + '" y="' + y1.toFixed(1) + '" width="' + w.toFixed(1) + '" height="' + (y0 - y1).toFixed(1) + '" fill="var(--muted)"/>');
+        cum += otherV;
+      }
+      if (i % 5 === 0 || i === days.length - 1) {
+        bars.push('<text x="' + (x + w / 2).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="middle" font-size="9" fill="var(--muted)">' + dayStr.slice(5) + '</text>');
+      }
+      hoverAreas.push('<rect class="dash-bar-hover" data-i="' + i + '" x="' + x.toFixed(1) + '" y="' + PAD_T + '" width="' + w.toFixed(1) + '" height="' + (H - PAD_T - PAD_B) + '" fill="transparent"/>');
+    });
+
+    wrap.innerHTML =
+      '<div style="position:relative">'
+      + '<svg id="dash-chart-svg" viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block">'
+      + gridLines.join('') + bars.join('') + hoverAreas.join('')
+      + '</svg>'
+      + '<div class="dash-bar-tooltip" id="dash-chart-tooltip"></div>'
+      + '</div>';
+
+    legendEl.innerHTML = DASH_CATEGORIES.map((c) =>
+      '<span class="dash-legend-item"><span class="dash-legend-dot" style="background:' + c.color + '"></span>' + esc(c.label) + '</span>'
+    ).join('') + '<span class="dash-legend-item"><span class="dash-legend-dot" style="background:var(--muted)"></span>Overig</span>';
+
+    const svg = document.getElementById('dash-chart-svg');
+    const tooltip = document.getElementById('dash-chart-tooltip');
+    svg.querySelectorAll('.dash-bar-hover').forEach((rect) => {
+      rect.addEventListener('mouseenter', () => {
+        const i = parseInt(rect.dataset.i, 10);
+        const m = grid[i];
+        const total = Array.from(m.values()).reduce((s, v) => s + v, 0);
+        const lines = DASH_CATEGORIES.map((c) => (m.get(c.label) ? c.label + ': ' + m.get(c.label) : null)).filter(Boolean);
+        if (m.get('Overig')) lines.push('Overig: ' + m.get('Overig'));
+        tooltip.innerHTML = '<strong>' + days[i] + '</strong><br>Totaal: ' + total + (lines.length ? '<br>' + lines.join('<br>') : '');
+        tooltip.style.opacity = '1';
+        const rectBox = rect.getBoundingClientRect();
+        const wrapBox = svg.parentElement.getBoundingClientRect();
+        tooltip.style.left = (rectBox.left - wrapBox.left + rectBox.width / 2) + 'px';
+        tooltip.style.top = (rectBox.top - wrapBox.top - 8) + 'px';
+      });
+      rect.addEventListener('mouseleave', () => { tooltip.style.opacity = '0'; });
+    });
   }
 
   function openModal(title, bodyHtml) {
@@ -513,6 +682,22 @@
       // actually present in this JSON are touched — everyone else's data is untouched.
       const owners = Array.from(new Set(rows.map((r) => r.owner_username)));
       if (owners.length) {
+        // Preserve each item's real first_seen across this replace — wiping and re-inserting
+        // every row on every re-import would otherwise reset first_seen to "now" for items
+        // that have been sitting in this inventory for months, making the growth chart on
+        // the Dashboard show every single scan as a burst of brand-new items.
+        statusEl.textContent = 'Eerder geziene items opzoeken…';
+        const existingFirstSeen = new Map();
+        for (let i = 0; i < owners.length; i += 25) {
+          const chunkOwners = owners.slice(i, i + 25);
+          const inList = encodeURIComponent(chunkOwners.map((o) => '"' + o.replace(/"/g, '\\"') + '"').join(','));
+          const existing = await fetch(SB_URL + '/inventory_items?owner_username=in.(' + inList + ')&select=item_id,first_seen', { headers: HEADERS })
+            .then((r) => r.json()).catch(() => []);
+          existing.forEach((r) => existingFirstSeen.set(r.item_id, r.first_seen));
+        }
+        const nowIso = new Date().toISOString();
+        rows.forEach((r) => { r.first_seen = existingFirstSeen.get(r.item_id) || nowIso; });
+
         statusEl.textContent = 'Oude items van ' + owners.length + ' account(s) vervangen…';
         for (let i = 0; i < owners.length; i++) {
           const res = await fetch(SB_URL + '/inventory_items?owner_username=eq.' + encodeURIComponent(owners[i]), {
@@ -1090,6 +1275,11 @@
     });
     document.getElementById('user-search').addEventListener('input', (e) => {
       _userQuery = e.target.value;
+      _usersPage = 0;
+      renderUsers();
+    });
+    document.getElementById('users-sort').addEventListener('change', (e) => {
+      _usersSortDir = e.target.value;
       _usersPage = 0;
       renderUsers();
     });

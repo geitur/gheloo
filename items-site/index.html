@@ -56,6 +56,14 @@ input[type=file]{font-size:12px;color:var(--muted)}
 .currency-stat.bc .currency-stat-value{color:var(--gold)}
 .currency-stat.diamond{background:color-mix(in oklch,oklch(0.75 0.13 210) 14%,transparent);border-color:color-mix(in oklch,oklch(0.75 0.13 210) 45%,transparent)}
 .currency-stat.diamond .currency-stat-value{color:oklch(0.75 0.13 210)}
+
+.dash-stat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:18px}
+.dash-stat-value{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.2}
+.dash-stat-label{font-size:10.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
+.dash-legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px}
+.dash-legend-item{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)}
+.dash-legend-dot{width:9px;height:9px;border-radius:2px;flex-shrink:0}
+.dash-bar-tooltip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:11px;line-height:1.5;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;transition:opacity .1s;white-space:nowrap;z-index:10}
 </style>
 </head>
 <body>
@@ -72,6 +80,7 @@ input[type=file]{font-size:12px;color:var(--muted)}
       <a class="hub-back" href="https://accounts.databin.uk/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>Terug naar Accounts</a>
     </div>
     <nav id="tabs">
+      <button class="tab" data-tab="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Dashboard<span class="nav-dot"></span></button>
       <button class="tab active" data-tab="inventory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>Inventory<span class="nav-dot"></span></button>
       <button class="tab" data-tab="users"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Users<span class="nav-dot"></span></button>
       <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings<span class="nav-dot"></span></button>
@@ -79,6 +88,22 @@ input[type=file]{font-size:12px;color:var(--muted)}
   </aside>
 
   <div id="main">
+    <div class="page" data-page="dashboard">
+      <div class="page-hdr">
+        <div>
+          <div class="page-title">Dashboard</div>
+          <div class="page-sub" id="dash-sub"></div>
+        </div>
+      </div>
+      <div class="dash-stat-grid" id="dash-stats"></div>
+      <div class="currency-summary" id="dash-currency-summary"></div>
+      <div class="card" style="padding:16px;margin-top:20px">
+        <div class="desc" style="margin:0 0 4px">Nieuwe items per dag, per categorie</div>
+        <div class="desc" id="dash-chart-sub" style="margin:0 0 10px;font-size:11px"></div>
+        <div id="dash-chart-wrap"></div>
+        <div id="dash-chart-legend" class="dash-legend"></div>
+      </div>
+    </div>
     <div class="page active" data-page="inventory">
       <div class="page-hdr">
         <div>
@@ -102,7 +127,13 @@ input[type=file]{font-size:12px;color:var(--muted)}
         <div class="page-title">Users</div>
         <div class="page-sub" id="users-sub"></div>
       </div>
-      <input class="search-input" id="user-search" placeholder="Zoek op gebruiker..." style="margin-bottom:8px">
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <input class="search-input" id="user-search" placeholder="Zoek op gebruiker..." style="flex:1">
+        <select class="page-size-select" id="users-sort">
+          <option value="desc">Meeste items eerst</option>
+          <option value="asc">Minste items eerst</option>
+        </select>
+      </div>
       <div class="tbl-wrap">
         <table>
           <thead><tr><th>Gebruiker</th><th style="text-align:right">Items</th></tr></thead>
@@ -204,6 +235,6 @@ input[type=file]{font-size:12px;color:var(--muted)}
   </div>
 </div>
 
-<script src="app.js?v=38"></script>
+<script src="app.js?v=39"></script>
 </body>
 </html>
