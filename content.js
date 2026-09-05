@@ -198,7 +198,6 @@
       roomdeleter: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a1 1 0 01-1 1H7a1 1 0 01-1-1L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
       photolibrary: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 4h-5L7 7H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="4"/></svg>',
       userdatabase: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>',
-      itemtags: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.6 12.6L12.7 20.5a2 2 0 01-2.8 0l-6.4-6.4a2 2 0 010-2.8l7.9-7.9A2 2 0 0113 3h5.6A2.4 2.4 0 0121 5.4V11a2 2 0 01-.4 1.6z"/><circle cx="16" cy="8" r="1.5" fill="currentColor" stroke="none"/></svg>',
       outfitrandomizer: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="8" cy="16" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="16" r="1.2" fill="currentColor" stroke="none"/><circle cx="8" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>',
       fun: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 13.5c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2"/><circle cx="9" cy="9.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1" fill="currentColor" stroke="none"/></svg>',
       friendadder: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>',
@@ -463,10 +462,6 @@
             { id: 'mimic', title: 'Mimic', subtitle: 'Copy a user\'s actions', icon: ICONS.mimic, close: false, onClick: showPanelById('__mimic') },
             { id: 'friendadder', title: 'Friend Adder', subtitle: 'Auto-add users in your room', icon: ICONS.friendadder, close: false, onClick: showPanelById('__fb') },
             { id: 'walksync', title: 'Walk Sync', subtitle: 'Follow another tab, offset by a fixed tile', icon: ICONS.walksync, close: false, onClick: showPanelById('__ws_panel') },
-            { id: 'itemtags', title: 'Item Tags', subtitle: 'Label identical inventory items to tell them apart', icon: ICONS.itemtags, close: false, onClick: function() {
-              showPanelById('__itg')();
-              if (window.__itg_render) window.__itg_render();
-            } },
           ]},
         ],
       },

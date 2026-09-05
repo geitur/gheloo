@@ -997,19 +997,6 @@
     try { return { itemId: r.int() }; } catch(e) { return null; }
   };
 
-  // ItemTagsMessageEvent (IN, custom — see extensions/fun/item-tags.js): sparse list of
-  // {itemId, tag} pairs, one entry per tagged inventory item. Not part of the vanilla
-  // protocol — sent by a matching custom SetItemTag/ItemTags pair on the server side.
-  window.PacketParsers.IN.ItemTags = raw => {
-    const r = window.makeReader(raw); if (!r) return null;
-    try {
-      const count = r.int();
-      const tags = [];
-      for (let i = 0; i < count; i++) tags.push({ itemId: r.int(), tag: r.str() });
-      return { tags };
-    } catch(e) { return null; }
-  };
-
   // CatalogPage (IN): uses GPacket + extended adapter for peekType/isEOF/seek
   window.PacketParsers.IN.CatalogPage = function(raw) {
     if (!raw || raw.byteLength <= 6) return null;
@@ -1078,15 +1065,6 @@
     delete window.Inventory.items[p.parsed.itemId];
   });
 
-  // Item tags: kept separate from window.Inventory.items so it doesn't matter which of
-  // FurniList/ItemTags arrives first — extensions/fun/item-tags.js reads both and merges.
-  window.ItemTags = {};
-
-  window.onPacket('ItemTags', p => {
-    if (!p.parsed) return;
-    window.ItemTags = {};
-    p.parsed.tags.forEach(t => { window.ItemTags[t.itemId] = t.tag; });
-  });
 
   // --- Friends ---
 
