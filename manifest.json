@@ -47,7 +47,6 @@
         "extensions/fun/marktplaats.js",
         "extensions/exploits/marktplaats.js",
         "extensions/exploits/photo-library.js",
-        "extensions/exploits/furni-relay.js",
         "extensions/settings/room-history.js",
         "extensions/settings/marktplaats-notes.js"],
       "run_at": "document_start",
