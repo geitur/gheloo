@@ -80,20 +80,59 @@
     }
   }
 
-  function avatarHead(figure) {
-    return 'https://www.leet.city/leet-imaging/avatarimage'
-      + '?figure=' + encodeURIComponent(figure || '')
-      + '&direction=2&head_direction=3&size=m&gesture=sml&headonly=1&action=wav&img_format=png';
+  // Avatar thumbnails render locally through core/avatar-img.js (Gheloo's headless Nitro
+  // engine) rather than the leet-imaging HTTP service, which is unmaintained and usually
+  // fails to load. _avImg() emits a bare <img> tagged with the figure; the hydrator set
+  // up in init() fills in the data URL once the row scrolls into view.
+  function _avImg(figure, gender, opts) {
+    opts = opts || {};
+    if (!figure) return '<span class="__udb_row_no_av">👤</span>';
+    return '<img class="__udb_av' + (opts.cls ? ' ' + opts.cls : '') + '"'
+      + ' data-fig="' + _esc(figure) + '"'
+      + ' data-gh-g="' + _esc(gender || 'M') + '"'
+      + ' data-gh-head="' + (opts.headOnly ? '1' : '0') + '"'
+      + (opts.title ? ' title="' + _esc(opts.title) + '"' : '')
+      + ' loading="lazy" alt="">';
   }
-  function avatarLarge(figure) {
-    return 'https://www.leet.city/leet-imaging/avatarimage'
-      + '?figure=' + encodeURIComponent(figure || '')
-      + '&direction=3&head_direction=3&size=l&gesture=std&img_format=png';
+
+  var _avIO = ('IntersectionObserver' in window) ? new IntersectionObserver(function(entries) {
+    entries.forEach(function(e) {
+      if (!e.isIntersecting) return;
+      var img = e.target;
+      _avIO.unobserve(img);
+      _avRender(img);
+    });
+  }, { rootMargin: '250px' }) : null;
+
+  function _avRender(img) {
+    if (img.getAttribute('data-gh-av')) return;
+    img.setAttribute('data-gh-av', '1');
+    if (typeof window.__gh_bindAvatarImg === 'function') {
+      window.__gh_bindAvatarImg(img, img.getAttribute('data-fig'), {
+        gender: img.getAttribute('data-gh-g'),
+        direction: 3,
+        headOnly: img.getAttribute('data-gh-head') === '1',
+        failOpacity: '.2'
+      });
+    } else {
+      img.style.opacity = '.2';
+    }
   }
-  function avatarMini(figure) {
-    return 'https://www.leet.city/leet-imaging/avatarimage'
-      + '?figure=' + encodeURIComponent(figure || '')
-      + '&direction=3&head_direction=3&size=l&gesture=std&img_format=png';
+
+  var _avScan = null;
+  function _startAvatarHydration() {
+    function scan() {
+      var imgs = document.querySelectorAll('img.__udb_av[data-fig]:not([data-gh-av])');
+      for (var i = 0; i < imgs.length; i++) {
+        if (_avIO) _avIO.observe(imgs[i]);
+        else _avRender(imgs[i]);
+      }
+    }
+    new MutationObserver(function() {
+      if (_avScan) return;
+      _avScan = requestAnimationFrame(function() { _avScan = null; scan(); });
+    }).observe(document.body, { childList: true, subtree: true });
+    scan();
   }
 
   function ts(s) {
@@ -815,7 +854,7 @@
       return '<div class="__udb_row' + selCls + '" data-uid="' + u.id + '">'
         + '<div class="__udb_row_avatar">'
         + (hasAv
-          ? '<img src="' + _esc(avatarHead(u.figure)) + '" loading="lazy" onerror="this.style.opacity=\'.2\'">'
+          ? _avImg(u.figure, u.gender, { headOnly: true })
           : '<span class="__udb_row_no_av">👤</span>')
         + '</div>'
         + '<div class="__udb_row_info">'
@@ -847,7 +886,7 @@
       return '<div class="__udb_ncrow" data-uid="' + u.id + '">'
         + '<div class="__udb_row_avatar">'
         + (hasAv
-          ? '<img src="' + _esc(avatarHead(u.figure)) + '" loading="lazy" onerror="this.style.opacity=\'.2\'">'
+          ? _avImg(u.figure, u.gender, { headOnly: true })
           : '<span class="__udb_row_no_av">👤</span>')
         + '</div>'
         + '<div class="__udb_ncrow_info">'
@@ -927,7 +966,7 @@
       + '<div class="__udb_dc_avatar' + (hasAv ? ' __udb_outfit_clickable' : '') + '" id="__udb_dc_avatar">'
       + (hasAv
         ? '<svg class="__udb_wear_ring" viewBox="0 0 24 24"><circle class="__udb_wear_ring_circle" cx="12" cy="12" r="9"/></svg>'
-          + '<img src="' + _esc(avatarLarge(u.figure)) + '" onerror="this.style.opacity=\'.1\'" title="Click to wear this outfit">'
+          + _avImg(u.figure, u.gender, { title: 'Click to wear this outfit' })
         : '<span class="__udb_dc_no_av">👤</span>')
       + '</div>'
       + '<div class="__udb_dc_title">'
@@ -974,7 +1013,7 @@
     container.innerHTML = figs.map(function(fig) {
       return '<div class="__udb_outfit_wrap">'
         + '<svg class="__udb_wear_ring" viewBox="0 0 24 24"><circle class="__udb_wear_ring_circle" cx="12" cy="12" r="9"/></svg>'
-        + '<img src="' + _esc(avatarMini(fig)) + '" data-fig="' + _esc(fig) + '" title="Click to wear this outfit" class="__udb_outfit_clickable" loading="lazy" onerror="this.style.opacity=\'.1\'">'
+        + _avImg(fig, (u && u.gender), { cls: '__udb_outfit_clickable', title: 'Click to wear this outfit' })
         + '<button class="__udb_outfit_ac_btn" data-fig="' + _esc(fig) + '" title="Avatar Check — who else wore this outfit">' + _ICON_SEARCH + '</button>'
         + '</div>';
     }).join('');
@@ -1053,7 +1092,7 @@
     listEl.innerHTML = rows.map(function(u) {
       return '<div class="__udb_ncrow __udb_ac_row" data-uid="' + u.id + '">'
         + '<div class="__udb_row_avatar">'
-        + '<img src="' + _esc(avatarHead(figure)) + '" loading="lazy" onerror="this.style.opacity=\'.2\'">'
+        + _avImg(figure, null, { headOnly: true })
         + '</div>'
         + '<div class="__udb_ncrow_info">'
         + '<div class="__udb_ncrow_name">' + _esc(u.name) + '</div>'
@@ -2102,6 +2141,7 @@
     buildScanRangePanel();
     buildBlackholesPanel();
     buildBanCheckPanel();
+    _startAvatarHydration();
   }
 
   if (document.readyState === 'loading') {

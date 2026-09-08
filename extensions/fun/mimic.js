@@ -75,7 +75,8 @@
       this.Shout = true;
       this.Whisper = true;
       this.ButtonText = 'Start';
-      this.TargetAvatarUrl = null;
+      this.TargetAvatarFigure = null;
+      this.TargetAvatarGender = null;
       this._onUpdate = null;
       extension.interceptAll(i => this.processPacket(i));
     }
@@ -180,10 +181,8 @@
       const figure = (live && live.figure) || this.idToFigure.get(clicked) || '';
       const gender = (live && live.gender) || this.idToGender.get(clicked);
       const motto  = (live && live.motto)  || this.idToMotto.get(clicked);
-      this.TargetAvatarUrl =
-        'https://www.leet.city/leet-imaging/avatarimage' +
-        '?figure=' + encodeURIComponent(figure) +
-        '&direction=2&head_direction=3&size=m&gesture=sml&img_format=png';
+      this.TargetAvatarFigure = figure;
+      this.TargetAvatarGender = gender;
       if (wasSelecting) {
         if (this.Figure && gender) this.extension.sendPacket('UpdateFigureData', gender, figure);
         if (this.Motto && motto != null) this.extension.sendPacket('ChangeMotto', motto);
@@ -265,10 +264,8 @@
       if (index === this.targetIndex) {
         if (this.Figure) {
           this.extension.sendPacket('UpdateFigureData', gender, figure);
-          this.TargetAvatarUrl =
-            'https://www.leet.city/leet-imaging/avatarimage' +
-            '?figure=' + encodeURIComponent(figure) +
-            '&direction=2&head_direction=3&size=m&gesture=sml&img_format=png';
+          this.TargetAvatarFigure = figure;
+          this.TargetAvatarGender = gender;
         }
         if (this.Motto) this.extension.sendPacket('ChangeMotto', motto);
         this._notify();
@@ -278,11 +275,22 @@
 
   // ---- UI ----
   const DEFAULT_FIGURE = 'ch-210-66.lg-270-1338.sh-290-1408.hr-100-39.hd-180-1';
-  const DEFAULT_AVATAR_URL =
-    'https://www.leet.city/leet-imaging/avatarimage' +
-    '?figure=' + encodeURIComponent(DEFAULT_FIGURE) +
-    '&direction=2&head_direction=3&size=m&gesture=sml&img_format=png';
-  const DEFAULT_AV_IMG = '<img src="' + DEFAULT_AVATAR_URL + '" style="width:100px;height:165px;object-fit:contain">';
+  const AV_STYLE = 'width:100px;height:165px;object-fit:contain';
+
+  // Avatars render locally through core/avatar-img.js (headless Nitro) — the leet-imaging
+  // HTTP service is unmaintained and usually fails. _avHtml() emits a bare tagged <img>;
+  // _hydrateAv() fills its src after the markup is in the DOM.
+  function _avHtml(figure, gender) {
+    return '<img class="__mimic_av" data-fig="' + String(figure || DEFAULT_FIGURE).replace(/"/g, '&quot;') + '"'
+      + ' data-g="' + (gender || 'M') + '" style="' + AV_STYLE + '" alt="">';
+  }
+  function _hydrateAv(wrap) {
+    const img = wrap && wrap.querySelector('img.__mimic_av');
+    if (!img || img.dataset.ghDone) return;
+    img.dataset.ghDone = '1';
+    if (window.__gh_bindAvatarImg) window.__gh_bindAvatarImg(img, img.dataset.fig, { gender: img.dataset.g, direction: 2 });
+  }
+  const DEFAULT_AV_IMG = _avHtml(null, null);
 
   function buildMimicUI() {
     const TOGGLES = ['Figure','Motto','Action','Dance','Sign','Sit','Follow','Typing','Talk','Shout','Whisper'];
@@ -447,18 +455,19 @@
 
       if (mgr.state === 'active') {
         tname.textContent = mgr.targetName || '';
-        avwrap.innerHTML  = mgr.TargetAvatarUrl
-          ? '<img src="' + mgr.TargetAvatarUrl + '" style="width:100px;height:165px;object-fit:contain">'
+        avwrap.innerHTML  = mgr.TargetAvatarFigure
+          ? _avHtml(mgr.TargetAvatarFigure, mgr.TargetAvatarGender)
           : DEFAULT_AV_IMG;
       } else if (mgr.state === 'selecting') {
         tname.textContent = '';
         avwrap.innerHTML  = DEFAULT_AV_IMG;
       } else {
         tname.textContent = mgr.targetId !== -1 ? (mgr.targetName || '') : '';
-        avwrap.innerHTML  = mgr.targetId !== -1 && mgr.TargetAvatarUrl
-          ? '<img src="' + mgr.TargetAvatarUrl + '" style="width:100px;height:165px;object-fit:contain">'
+        avwrap.innerHTML  = mgr.targetId !== -1 && mgr.TargetAvatarFigure
+          ? _avHtml(mgr.TargetAvatarFigure, mgr.TargetAvatarGender)
           : DEFAULT_AV_IMG;
       }
+      _hydrateAv(avwrap);
     }
 
     mgr._onUpdate = _updateUI;

@@ -271,6 +271,7 @@ ui-loading.js
 pkt.js       → window.PKT (packet id ↔ name tables)
 ws.js        → onPacket, sendPacket, makeReader, _blockIncomingFilters/_blockOutgoingFilters
 parsers.js   → window.Room, window.FurniData, registers most IN/OUT parsers
+avatar-img.js → __gh_avatarImg, __gh_bindAvatarImg (local avatar rendering)
 ...
 content.js   → the hub itself: CATEGORIES, ICONS, showPanelById, window.Gheloo
 extensions/*.js  → your file goes at the end of this list
@@ -513,6 +514,8 @@ wrap.innerHTML =
 | `window.makeReader(raw)` | Cursor reader over a packet's payload: `.int() .short() .bool() .byte() .str() .long() .skip(n) .remaining()` |
 | `window.__ghk_ready(fn)` | Runs `fn` once the client is ready — wrap your `init()` in this |
 | `window.__ghk_bringToFront(el)` | Raises a panel above other game/extension panels on click |
+| `window.__gh_avatarImg(figure, opts)` | `Promise<dataURL>` — renders a figure locally via the headless Nitro engine (no `leet-imaging` HTTP). `opts: { gender, direction (default 3), headOnly }`. Cached + queued. First call boots the renderer (~10s). |
+| `window.__gh_bindAvatarImg(imgEl, figure, opts)` | Fire-and-forget: sets `imgEl.src` when the render lands, dims it (`opts.failOpacity`, default `.2`) on failure |
 | `window._blockIncomingFilters[id]` | Set to `true` to always block that IN packet, or to `function(raw){}` returning true/false to block conditionally |
 | `window._blockOutgoingFilters[id]` | Same, for OUT packets — `delete` the key to stop blocking |
 

@@ -666,9 +666,10 @@
     function renderMe(u) {
       if (!u) return;
       meSelfId = u.id;
-      meContent.querySelector('#ghl-me-img').src = 'https://www.leet.city/leet-imaging/avatarimage'
-        + '?figure=' + encodeURIComponent(u.figure || '')
-        + '&direction=3&head_direction=3&size=l&gesture=std&img_format=png';
+      // Rendered locally via core/avatar-img.js — the leet-imaging service is unreliable.
+      if (u.figure && window.__gh_bindAvatarImg) {
+        window.__gh_bindAvatarImg(meContent.querySelector('#ghl-me-img'), u.figure, { gender: u.gender, direction: 3 });
+      }
       meContent.querySelector('#ghl-me-name').textContent = u.name || '—';
       meContent.querySelector('#ghl-me-id').textContent = u.id != null ? u.id : '—';
     }
