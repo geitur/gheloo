@@ -22,7 +22,7 @@ There's no Chrome Web Store auto-update since this isn't published there. Instea
 - **Rooms** — Furni Hider, Room Clone, Area Mover
 - **Fun** — User Database, Mimic, Friend Adder
 - **Exploits** — Marktplaats, Photo Library
-- **Settings** — FPS overlay, appearance toggles, Room History, Marktplaats Alerts
+- **Settings** — FPS overlay, appearance toggles, Room History
 - **Extensions** — paste your own JS, runs alongside everything else, no rebuild needed
 
 ## Layout

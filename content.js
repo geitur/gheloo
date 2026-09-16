@@ -219,7 +219,6 @@
       marktplaats: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l1.5-5h15L21 9"/><path d="M4 9h16v10a1 1 0 01-1 1H5a1 1 0 01-1-1V9z"/><path d="M9 13a3 3 0 006 0"/></svg>',
       deurwaarder: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 12l-8.5 8.5a1.5 1.5 0 01-2-2L12 10"/><path d="M17.5 8.5L22 4"/><path d="M2 22h10"/><path d="M13.5 4.5l6 6"/><path d="M10.5 7.5l6 6"/></svg>',
       roomhistory: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/><path d="M3 12a9 9 0 011.5-5" opacity="0.35"/></svg>',
-      marktplaatsnotes: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3v4a1 1 0 001 1h4"/><path d="M17 21H7a2 2 0 01-2-2V5a2 2 0 012-2h7l5 5v11a2 2 0 01-2 2z"/><path d="M9 13h6M9 17h4"/></svg>',
       avatarcompass: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>',
       ping: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h4l2-7 4 14 2-7h8"/></svg>',
     };
@@ -510,10 +509,6 @@
             { id: 'defaultdesign', title: 'Default Leet Design', subtitle: 'Back to standaard Leet layout', icon: ICONS.design, close: false, onClick: function() { toggleDefaultDesign(); } },
             { id: 'darkmode', title: 'Custom Mode', subtitle: 'Custom layout colors', icon: ICONS.darkmode, close: false, onClick: function() { toggleDarkMode(); } },
             { id: 'roomhistoryicon', title: 'Room History', subtitle: 'Turn on/off Room History', icon: ICONS.roomhistory, close: false, onClick: function() { toggleRoomHistoryIcon(); } },
-          ]},
-          { label: 'Marktplaats', rows: [
-            { id: 'marktplaatsscannersettings', title: 'Marktplaats', subtitle: 'Ruilwaarde scanner & price alerts', icon: ICONS.marktplaats, close: false, onClick: showPanelById('__mpa_panel') },
-            { id: 'marktplaatsnotes', title: 'Marktplaats Notes', subtitle: 'Turn on/off notes on your own listings', icon: ICONS.marktplaatsnotes, close: false, onClick: function() { toggleMarktplaatsNotes(); } },
           ]},
           { label: 'Browser', rows: [
             { id: 'rightclick', title: 'Block Right Click', subtitle: 'Block right click inspect', icon: ICONS.rightclick, close: false, onClick: function() { toggleRightClick(); } },
@@ -1398,30 +1393,6 @@
     window.Gheloo.setActive('roomhistoryicon', _roomHistoryIconOn);
     _updateRoomHistoryIconSubtitle(_roomHistoryIconOn);
 
-    // Same on/off pattern as Room History above — extensions/settings/marktplaats-notes.js
-    // owns the actual enabled state (localStorage key '__ghk_mbn_enabled'), this row just
-    // calls into it, so there's one source of truth instead of two copies drifting apart.
-    const MARKTPLAATSNOTES_STORAGE_KEY = '__ghk_mbn_enabled';
-    let _marktplaatsNotesOn = true;
-    try {
-      const _savedMbn = localStorage.getItem(MARKTPLAATSNOTES_STORAGE_KEY);
-      if (_savedMbn !== null) _marktplaatsNotesOn = _savedMbn === 'true';
-    } catch(_) {}
-
-    function _updateMarktplaatsNotesSubtitle(on) {
-      const row = rowEls['marktplaatsnotes'];
-      if (row) row.row.querySelector('.ghl-row-subtitle').textContent = on ? 'Turn off notes on your own listings' : 'Turn on notes on your own listings';
-    }
-    function toggleMarktplaatsNotes() {
-      _marktplaatsNotesOn = !_marktplaatsNotesOn;
-      window.Gheloo.setActive('marktplaatsnotes', _marktplaatsNotesOn);
-      _updateMarktplaatsNotesSubtitle(_marktplaatsNotesOn);
-      if (window.__mbn_setEnabled) window.__mbn_setEnabled(_marktplaatsNotesOn);
-      else { try { localStorage.setItem(MARKTPLAATSNOTES_STORAGE_KEY, String(_marktplaatsNotesOn)); } catch(_) {} }
-    }
-    window.Gheloo.setActive('marktplaatsnotes', _marktplaatsNotesOn);
-    _updateMarktplaatsNotesSubtitle(_marktplaatsNotesOn);
-
     function toggleStealCommand() {
       _stealOn = !_stealOn;
       window.Gheloo.setActive('steal', _stealOn);
@@ -1600,7 +1571,7 @@
 
   // Bring-to-front on click: clicking any panel raises it above the others.
   (function() {
-    var _IDS = ['__hbl','__snd','__mac','__rc','__fb','__mb','__mpa_panel','__mimic','__tst','__ext','__fh_panel','__rclone','__photolib','__ins_panel','__am_panel','__userdb','__udb_nc','__udb_ac','__udb_range','__udb_bc','__udb_bh','__rv_panel','__wc_panel','__bg','__pm_panel','__ws_panel','__rd_panel','__or_panel'];
+    var _IDS = ['__hbl','__snd','__mac','__rc','__fb','__mb','__mimic','__tst','__ext','__fh_panel','__rclone','__photolib','__ins_panel','__am_panel','__userdb','__udb_nc','__udb_ac','__udb_range','__udb_bc','__udb_bh','__rv_panel','__wc_panel','__bg','__pm_panel','__ws_panel','__rd_panel','__or_panel'];
     var _gameStack = []; // back = bottom, front = top
 
     // Find the stacking host for a game panel.
