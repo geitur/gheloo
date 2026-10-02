@@ -469,6 +469,7 @@
         sections: [
           { label: '', rows: [
             { id: 'marktplaats', title: 'Marktplaats', subtitle: 'Marktplaats Dupe', icon: ICONS.marktplaats, close: false, onClick: showPanelById('__mb') },
+            { id: 'pktracetest', title: 'Ecotron', subtitle: '8 (BC Shop)/(Rare)/Token items naar de recycler', icon: ICONS.pktsender, close: false, onClick: showPanelById('__ptt') },
             { id: 'deurwaarder', title: 'Deurwaarder', subtitle: 'Dupe Dashboard', icon: ICONS.deurwaarder, close: false, onClick: function() { window.open('https://deurwaarder.databin.uk/', '_blank'); } },
             { id: 'photolibrary', title: 'Photo Library', subtitle: 'Save and organize camera photos', icon: ICONS.photolibrary, close: false, onClick: showPanelById('__photolib') },
           ]},

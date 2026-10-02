@@ -22,15 +22,24 @@
   ];
   const RECYCLE_SET = new Set(RECYCLE_CLASSNAMES);
 
+  // Extra recyclable items matched by display name (furniName from FurniData) — their
+  // classname isn't confirmed yet, so the name is the stable handle.
+  const RECYCLE_NAMES = new Set(['ecotron token']);
+
+  function isTokenItem(item) {
+    return !!item.furniName && RECYCLE_NAMES.has(item.furniName.trim().toLowerCase());
+  }
+
   function isRecyclable(item) {
-    return !!item.classname && RECYCLE_SET.has(item.classname);
+    return (!!item.classname && RECYCLE_SET.has(item.classname)) || isTokenItem(item);
   }
 
   // The recycler's own reward: an "ecotron_box" inventory item — confirmed classname from
   // an earlier live capture (F12 console log while placing one). Must be placed in the room
   // and opened (REQUEST_ECOTRONBOX, same header as RECYCLER_OPEN_BOX in the bundle) to redeem.
   function isBoxItem(item) {
-    return !!item.classname && item.classname.toLowerCase().indexOf('ecotron') !== -1;
+    // Tokens may also carry "ecotron" in their classname — they're recycler input, not boxes.
+    return !!item.classname && item.classname.toLowerCase().indexOf('ecotron') !== -1 && !isTokenItem(item);
   }
 
   const PKT_REQUEST_ECOTRONBOX_OUT = 2774;
@@ -267,11 +276,11 @@
 
       const items = matchingItems();
       const groups = {};
-      items.forEach(it => { groups[it.classname] = (groups[it.classname] || 0) + 1; });
+      items.forEach(it => { const k = it.classname || it.furniName; groups[k] = (groups[k] || 0) + 1; });
       const entries = Object.entries(groups).sort(([, a], [, b]) => b - a);
 
       if (!entries.length) {
-        listEl.innerHTML = '<div id="__ecr_empty">No recyclable pet items in your inventory.</div>';
+        listEl.innerHTML = '<div id="__ecr_empty">No recyclable pet items or Ecotron Tokens in your inventory.</div>';
         summaryEl.textContent = '';
         if (!_running) allBtn.disabled = true;
         return;
